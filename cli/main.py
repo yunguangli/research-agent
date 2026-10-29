@@ -1,3 +1,4 @@
+import os
 import sys
 from enum import StrEnum
 from typing import Annotated
@@ -68,6 +69,11 @@ def analyze(
         None, "--html/--no-html",
         help="Save the report as one HTML page too, complete_report.html, without asking (default: yes)",
     ),
+    price: float = typer.Option(
+        None, "--price",
+        help="Share price for the fundamental valuation, overriding the latest close on the "
+        "analysis date. Use when the run date has no market data or you want your own price.",
+    ),
 ):
     """Run an analysis. This is what a bare `tradingagents` does.
 
@@ -87,6 +93,12 @@ def analyze(
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1) from None
+
+    # The valuation price: the latest close on the analysis date, unless the
+    # caller names a price here. It is passed through the environment so the
+    # graph's config — and therefore its checkpoint signature — stays unchanged.
+    if price is not None:
+        os.environ["TRADINGAGENTS_MODEL_PRICE"] = f"{price:g}"
 
     try:
         flags = {"ticker": ticker, "date": date, "analysts": analysts, "save": save, "show": show, "html": html}

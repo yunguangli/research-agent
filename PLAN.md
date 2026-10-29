@@ -6,6 +6,18 @@
 **Audience:** product owners, portfolio managers, analysts, and engineers  
 **Guiding rule:** the original TradingAgents behavior must remain available and unchanged in **vanilla mode**
 
+**Implementation status (2026-10-28).** Built and tested:
+research corpus vendor with point-in-time filtering and licences; filing parser for
+Japanese quarterly releases; LLM-built model with deterministic validation and one
+repair round; research package injected into the analyst and both managers; consensus
+comparison; number audit; case-based debate with capped deltas; per-category vendor
+env overrides; Bloomberg vendor seam (no backend yet); market-price resolution;
+multilingual language detection.
+
+Not built: Bloomberg/B-PIPE backend, EDINET or other non-JP filing parsers, automated
+peer sets, semantic (cross-language) search, screenshot ingestion, next-year quarterly
+model, risk analysts receiving the case table, argument-length caps.
+
 > **Plain-language summary for PMs**
 >
 > We will keep the original TradingAgents analysis team exactly as it is, and build a new operating layer around it:

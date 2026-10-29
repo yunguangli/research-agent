@@ -13,6 +13,10 @@ from tradingagents.agents.rating import run_rating
 from tradingagents.dataflows.config import run_config, run_config_context, set_config
 from tradingagents.dataflows.date_window import get_current_date, is_historical
 from tradingagents.dataflows.symbols import safe_ticker_component
+from tradingagents.dataflows.vendors.research_corpus import (
+    research_dir_from_env,
+    resolve_corpus_root,
+)
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_tier_client, tier_provider
 from tradingagents.memory import TradingMemoryLog, settlement
@@ -25,6 +29,10 @@ from .propagation import Propagator
 from .setup import GraphSetup
 
 logger = logging.getLogger(__name__)
+
+
+class _ModelUnavailable(RuntimeError):
+    """The research model cannot be used for this run; the text is the reason."""
 
 
 def _validate_trade_date(trade_date) -> str:
@@ -149,7 +157,7 @@ class TradingAgentsGraph:
         """
         settings = {k: v for k, v in self.config.items() if k not in _NOT_IN_SIGNATURE}
         digest = hashlib.sha256(json.dumps(settings, sort_keys=True, default=str).encode()).hexdigest()[:12]
-        return "|".join([
+        parts = [
             "analysts=" + ",".join(self.selected_analysts),
             f"debate={self.config['max_debate_rounds']}",
             f"risk={self.config['max_risk_discuss_rounds']}",
@@ -162,7 +170,14 @@ class TradingAgentsGraph:
             "analysts=parallel",
             "memory=parallel",
             f"settings={digest}",
-        ])
+        ]
+        # A different corpus is different evidence: resuming across one would mix
+        # reports built from documents the run never saw. Vanilla adds nothing,
+        # so its signature (and any existing checkpoint) is unchanged.
+        research_root = research_dir_from_env()
+        if research_root is not None:
+            parts.append(f"research={research_root}")
+        return "|".join(parts)
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
         """Run the trading agents graph for a company on a specific date.
@@ -280,10 +295,52 @@ class TradingAgentsGraph:
         Programmatic callers get the same on-disk reports the CLI produces. Pass
         an explicit ``save_path`` or let it default under ``results_dir``; the
         report is also written as one HTML page unless ``html`` is False.
+
+        When a research model was used, the prose is audited against it first and
+        the findings are written as a section: a figure an agent restated wrongly
+        or took from a conflicting vendor snapshot is named rather than inherited.
         """
         if save_path is None:
             save_path = self.default_report_path(ticker)
+        if research_dir_from_env() is not None and not final_state.get("report_audit"):
+            audit = self.report_audit(final_state, ticker)
+            if audit:
+                final_state["report_audit"] = audit
+        if final_state.get("debate_cases") and not final_state.get("case_table"):
+            try:
+                model, valuation, _spec = self._research_model(
+                    ticker,
+                    final_state.get("trade_date"),
+                    final_state.get("research_price") or None,
+                    allow_build=False,
+                    spec_hint=final_state.get("research_model_path") or None,
+                )
+                from tradingagents.research import cases as case_module
+
+                final_state["case_table"] = case_module.render_results(
+                    model, valuation, json.loads(final_state["debate_cases"])
+                )
+            except Exception as exc:  # noqa: BLE001 - a report must still be written
+                logger.warning("Case comparison could not be computed: %s", exc)
         return write_report_tree(final_state, ticker, save_path, settings=self.run_settings(), html=html)
+
+    def report_audit(self, final_state, company_name) -> str:
+        """Compare the figures in the prose with the model's figures."""
+        try:
+            model, valuation, _spec = self._research_model(
+                company_name,
+                final_state.get("trade_date"),
+                final_state.get("research_price") or None,
+                allow_build=False,
+                spec_hint=final_state.get("research_model_path") or None,
+            )
+        except _ModelUnavailable:
+            return ""
+        from tradingagents.research import audit
+
+        stats: dict = {}
+        findings = audit.audit_state(final_state, model, valuation, stats=stats)
+        return audit.render(findings, stats=stats)
 
     def default_report_path(self, ticker) -> Path:
         """Where a run's reports go unless told otherwise: under results_dir, stamped now."""
@@ -297,13 +354,242 @@ class TradingAgentsGraph:
         memory log's lessons are not here: the graph's Memory Log step settles
         and loads them alongside the analysts (see ``_memory_step``).
         """
-        return self.propagator.create_initial_state(
+        state = self.propagator.create_initial_state(
             company_name,
             trade_date,
             asset_type=asset_type,
             instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
         )
+        # Empty unless a corpus is configured, so vanilla runs keep the same state.
+        package, price, spec_path = self._research_package(company_name, trade_date)
+        state["research_package"] = package
+        state["research_price"] = price or 0.0
+        state["research_model_path"] = spec_path
+        return state
+
+    def research_package(self, company_name: str, trade_date: str | None = None,
+                         price: float | None = None) -> str:
+        """The verified fundamental model for this ticker, or a note saying why not.
+
+        Opt-in: returns "" unless ``TRADINGAGENTS_RESEARCH_DIR`` names a corpus. A
+        spec that fails its arithmetic checks becomes a labelled gap, never a set
+        of numbers the analyst might treat as correct.
+        """
+        return self._research_package(company_name, trade_date, price)[0]
+
+    def _research_package(self, company_name: str, trade_date: str | None = None,
+                          price: float | None = None) -> tuple[str, float, str]:
+        """The package text, the share price used, and the spec path behind them."""
+        root = research_dir_from_env()
+        if root is None:
+            return "", 0.0, ""
+
+        try:
+            model, valuation, spec_path = self._research_model(company_name, trade_date, price)
+        except _ModelUnavailable as exc:
+            return str(exc), 0.0, ""
+
+        from tradingagents.research import report as research_report
+
+        return research_report.compact_summary(model, valuation), valuation.price, str(spec_path)
+
+    def _research_model(self, company_name: str, trade_date: str | None = None,
+                        price: float | None = None, allow_build: bool = True,
+                        spec_hint: str | None = None):
+        """The validated model and its valuation, or ``_ModelUnavailable``."""
+        root = research_dir_from_env()
+        if root is None:
+            raise _ModelUnavailable("No research corpus is configured for this run.")
+
+        configured = os.environ.get("TRADINGAGENTS_RESEARCH_MODEL", "").strip()
+        corpus = resolve_corpus_root(root, company_name)
+        candidates = [Path(spec_hint)] if spec_hint else []
+        candidates += [Path(configured)] if configured else []
+        candidates.extend([corpus / "model.json", corpus / f"{safe_ticker_component(company_name)}.json"])
+        cached = self._models_dir() / f"{safe_ticker_component(company_name)}.json"
+        candidates.append(cached)
+        spec_path = next((path for path in candidates if path.is_file()), None)
+        rebuild = allow_build and os.environ.get("TRADINGAGENTS_REBUILD_MODEL", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if spec_path is None and not allow_build:
+            raise _ModelUnavailable("No model spec is available to audit against.")
+        if spec_path is None or rebuild:
+            from tradingagents.research.schemas import ModelError
+
+            try:
+                spec_path = self._build_spec_from_corpus(company_name, corpus, trade_date)
+            except ModelError as exc:
+                raise _ModelUnavailable(
+                    f"MODEL UNAVAILABLE: {exc} Report the model as unavailable; "
+                    "do not estimate its numbers."
+                ) from exc
+
+        from tradingagents.research import kernel, report as research_report, valuation
+        from tradingagents.research.schemas import ModelError
+
+        try:
+            spec = research_report.load_spec(spec_path)
+            resolved, note = self._resolve_price(spec, company_name, trade_date, price)
+            if resolved:
+                spec.valuation.price = resolved
+            if note:
+                spec.warnings.append(note)
+            model = kernel.run(spec)
+            return model, valuation.value(model), spec_path
+        except (ModelError, OSError, KeyError, ValueError) as exc:
+            logger.warning("Research model at %s could not be used: %s", spec_path, exc)
+            raise _ModelUnavailable(
+                f"MODEL UNAVAILABLE: the model spec at {spec_path.name} failed its checks "
+                f"({exc}). Report the model as unavailable; do not estimate its numbers."
+            ) from exc
+
+    def _build_spec_from_corpus(self, company_name: str, corpus: Path, trade_date: str | None) -> Path:
+        """Have the model build the forecast from the corpus, then cache it.
+
+        Only possible with a model available; without one the run reports the
+        model as unavailable rather than inventing figures. The deep model is
+        preferred: this is the highest-stakes text the system asks for, and a
+        small quick model fails the schema more often than it saves time.
+        """
+        llm = getattr(self, "deep_thinking_llm", None) or getattr(self, "quick_thinking_llm", None)
+        if llm is None:
+            raise _ModelUnavailable(
+                "MODEL UNAVAILABLE: no model spec exists and no LLM is available to build one. "
+                "Add model.json to the corpus, or run inside the graph."
+            )
+
+        from tradingagents.dataflows.vendors.research_corpus import CorpusStore
+        from tradingagents.research import builder, extract as extract_module
+
+        try:
+            extraction = extract_module.extract_filing(str(corpus), company_name, trade_date or "")
+            facts_text = extract_module.describe(extraction)
+            skip = {extraction.document_id}
+        except Exception as exc:  # noqa: BLE001 - not every market has a parsable filing
+            # Only Japanese quarterly releases have a deterministic parser. Elsewhere
+            # the model reads the filing itself; the arithmetic checks still apply.
+            logger.info("No machine-parsed filing for %s (%s); building from the documents", company_name, exc)
+            extraction = None
+            facts_text = ""
+            skip = set()
+
+        store = CorpusStore(corpus, company_name)
+
+        # The vendor holds every reported annual figure; the corpus usually does
+        # not. Without this, a model asked for a historical year derives it.
+        from tradingagents.research import vendor_facts
+
+        reported: dict = {}
+        try:
+            reported = vendor_facts.fetch_annual(company_name, unit="JPY_bn")
+        except vendor_facts.VendorFactsError as exc:
+            logger.info("No vendor annual statement for %s: %s", company_name, exc)
+        reported_text = vendor_facts.describe(reported, str(trade_date or ""))
+        if reported_text:
+            facts_text = f"{facts_text}\n\n{reported_text}" if facts_text else reported_text
+
+        price = None
+        if trade_date:
+            from tradingagents.dataflows.prices import last_close
+
+            price = last_close(company_name, str(trade_date))
+
+        def overlay(spec) -> None:
+            """The filing's disclosed numbers trump the model's restatement of them."""
+            if extraction is not None:
+                extract_module.merge(spec, extraction)
+            # An actual year is a reported figure: the vendor statement is that
+            # report, so it corrects a net profit the model derived.
+            vendor_facts.merge_reported_actuals(spec, reported, str(trade_date or ""))
+            # A supplied consensus for a past period is the same fact; it wins too.
+            extract_module.merge_consensus_actuals(spec, spec.consensus)
+
+        consensus = None
+        configured = os.environ.get("TRADINGAGENTS_RESEARCH_MODEL", "").strip()
+        if configured and Path(configured).is_file():
+            try:
+                from tradingagents.research import report as research_report
+
+                consensus = research_report.load_spec(configured).consensus
+            except Exception:  # noqa: BLE001 - a benchmark must never block a build
+                consensus = None
+
+        spec, attempts = builder.build_spec(
+            llm,
+            ticker=company_name,
+            company=company_name,
+            as_of=str(trade_date or ""),
+            store=store,
+            facts_text=facts_text,
+            price=price,
+            skip_documents=skip,
+            dump_path=self._models_dir() / f"{safe_ticker_component(company_name)}.failed.json",
+            overlay=overlay,
+            consensus=consensus,
+        )
+        logger.info(
+            "Built a research model for %s from the corpus%s",
+            company_name,
+            f" after {len(attempts)} correction(s)" if attempts else "",
+        )
+
+        path = self._models_dir() / f"{safe_ticker_component(company_name)}.json"
+        import json as _json
+
+        path.write_text(_json.dumps(spec.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def _models_dir(self) -> Path:
+        """Where LLM-built model specs (and failed attempts) are kept."""
+        config = getattr(self, "config", None) or {}
+        base = Path(
+            config.get("data_cache_dir") or (Path.home() / ".tradingagents" / "cache")
+        ).expanduser()
+        path = base / "models"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _resolve_price(spec, company_name: str, trade_date: str | None,
+                       price: float | None) -> tuple[float | None, str]:
+        """Pick the share price the valuation should use, and say where it came from.
+
+        A model spec's price goes stale the moment the market moves; a valuation
+        built on it is wrong in a way no arithmetic check can see. The run date's
+        close wins, the spec is the fallback, and either way the report says which.
+        """
+        configured = os.environ.get("TRADINGAGENTS_MODEL_PRICE", "").strip()
+        if configured:
+            try:
+                return float(configured.replace(",", "")), (
+                    f"Share price from TRADINGAGENTS_MODEL_PRICE: {configured}."
+                )
+            except ValueError:
+                logger.warning("Ignoring invalid TRADINGAGENTS_MODEL_PRICE=%r", configured)
+        if price is not None:
+            return float(price), ""
+        spec_price = spec.valuation.price
+        if trade_date:
+            from tradingagents.dataflows.prices import last_close
+
+            market = last_close(spec.ticker or company_name, str(trade_date))
+            if market:
+                note = ""
+                if spec_price and abs(market - spec_price) / spec_price > 0.005:
+                    note = (
+                        f"Share price updated to the {trade_date} close ({market:,.0f} "
+                        f"{spec.currency}) from the spec's {spec_price:,.0f}."
+                    )
+                return market, note
+            if spec_price:
+                return spec_price, (
+                    f"MODEL WARNING: no market price was available for {trade_date}; the "
+                    f"valuation uses the spec price of {spec_price:,.0f} {spec.currency}, "
+                    "which may be stale."
+                )
+        return spec_price, ""
 
     def _memory_step(self, state):
         """The graph's Memory Log step, alongside the analysts (#1428): settle every

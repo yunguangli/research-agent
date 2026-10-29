@@ -7,11 +7,11 @@
 
 > **One-paragraph summary for PMs**
 >
-> The four analysts are not four fixed formulas. They are four specialist AI workers with different tools and data sources. The **Market/Technical Analyst** reads daily prices and technical indicators. The **Fundamentals Analyst** reads company profiles, financial statements, and insider transactions. The **News Analyst** reads company news, global/macro news, macro data, and prediction markets. The **Sentiment Analyst** reads news, StockTwits, and Reddit, then produces a structured sentiment score.
+> The four analysts are not four fixed formulas. They are four specialist AI workers with different tools and data sources. The **Market/Technical Analyst** reads daily prices and technical indicators. The **Fundamentals Analyst** reads company profiles, financial statements, and insider transactions — and, when a research corpus is configured, builds the forecast and valuation from the company's own documents, with Python checking every identity. The **News Analyst** reads company news, global/macro news, macro data, and prediction markets. The **Sentiment Analyst** reads news, StockTwits, and Reddit, then produces a structured sentiment score.
 >
-> Their reports feed a **Bull Researcher** and a **Bear Researcher**, who debate the case. A **Research Manager** turns that debate into an investment plan and a five-tier recommendation. A **Trader** turns the plan into a Buy/Hold/Sell proposal with optional entry, stop, and sizing guidance. Then a risk debate and the Portfolio Manager produce the final decision.
+> Their reports feed a **Bull Researcher** and a **Bear Researcher**, who debate the case — and each argues a bounded case on the model (revenue and operating-profit deltas, a multiple, a probability) rather than a rival forecast. A **Research Manager** turns that debate into an investment plan and a five-tier recommendation, with the verified model and the case table in front of it. A **Trader** turns the plan into a Buy/Hold/Sell proposal with optional entry, stop, and sizing guidance. Then a risk debate and the Portfolio Manager produce the final decision.
 >
-> The data retrieval is largely deterministic. The interpretation, debate, and report writing are done by LLMs. Only the Sentiment Analyst produces a structured numeric score; the other agents produce written reports or structured decision records. None of them places an order.
+> Data retrieval and arithmetic are deterministic. Interpretation, debate, and report writing are done by LLMs. The Sentiment Analyst produces a structured score; the Fundamentals Analyst produces a validated model (forecasts, bridges, valuation, scenarios) when a corpus is available. Neither places an order.
 
 **How to read this document**
 
@@ -250,7 +250,8 @@ There is **no fixed rule** such as “RSI below 30 means buy.” The LLM interpr
 
 Code name: `fundamentals_analyst`  
 Report field: `fundamentals_report`  
-Tools: `get_fundamentals`, `get_balance_sheet`, `get_cashflow`, `get_income_statement`, `get_insider_transactions`
+Vendor tools: `get_fundamentals`, `get_balance_sheet`, `get_cashflow`, `get_income_statement`, `get_insider_transactions`  
+Corpus tools (opt-in): `list_research_documents`, `read_research_document`, `search_research_documents`
 
 ### 3.1 What it is trying to do
 
@@ -264,7 +265,13 @@ The analyst is asked to write a comprehensive fundamental report covering:
 - insider buying and selling,
 - specific, actionable insights with a summary table.
 
+When a research corpus is configured it also does the modelling work: it reads the
+company's documents, builds a forecast (quarters and annual periods) and a
+valuation, and writes the report around numbers that Python has checked.
+
 ### 3.2 Workflow
+
+Vendor-only (no corpus configured):
 
 ```text
 Run date + resolved company identity
@@ -287,9 +294,59 @@ Tool results return company overview and/or statements
 Model writes narrative + table
 ```
 
-The model is not forced to call every tool. It decides what it needs. In practice, a thorough run often calls most of them.
+With a research corpus (`TRADINGAGENTS_RESEARCH_DIR`):
+
+```text
+Corpus of filings, calls, decks, broker notes, internal notes
+        │
+        ▼
+Filing parser (where one exists) → disclosed facts + page citations
+        │
+        ▼
+Model builds the forecast from the documents; Python validates every identity
+(bridges sum, margins recompute, EPS divides, segments tie, citations exist)
+        │
+        ├─ fails once → the exact error goes back, the model corrects
+        └─ fails twice → MODEL UNAVAILABLE, no numbers rendered
+        │
+        ▼
+research_package (annual + quarterly + bridges + valuation + scenarios)
+        │
+        ▼
+Fundamentals Analyst writes the report around those numbers, citing documents
+```
+
+The model is not forced to call every vendor tool. It decides what it needs; the
+corpus tools are listed first in its prompt because the documents are the primary
+evidence.
 
 ### 3.3 Tools and data sources
+
+#### Research corpus (opt-in)
+
+Enabled by `TRADINGAGENTS_RESEARCH_DIR`, which points at one company's folder or at
+a root holding one subfolder per ticker.
+
+- `list_research_documents` — what exists on or before the run date, with type,
+  publication date, pages and licence. Documents published later — and documents
+  whose publication date is unknown, which fail closed — are *withheld*, each under
+  the reason the tool gives; a report written about the company is *excluded* as
+  evidence and cannot be read.
+- `read_research_document` — full text with page markers and a citation header,
+  including the document's detected language (`en`, `ja`, `ko`, `zh-Hans`, `zh-Hant`).
+- `search_research_documents` — keyword search returning citation-ready snippets.
+  Search is lexical: query in the document's own language, not English keywords
+  against Japanese text.
+- Licences are enforced: a document labelled `licensed_no_llm` can be listed but
+  not read into a model.
+- The folder's `_corpus_manifest.json` records detected metadata and any overrides
+  (publication date, licence, exclusion). Detected values are never frozen as
+  overrides. It is written atomically and only when its content changes; an
+  interrupted write that leaves a partial copy appended is recovered from the
+  intact part, and the unreadable remainder is kept beside it as
+  `_corpus_manifest.json.torn`.
+
+#### Vendor tools
 
 #### `get_fundamentals`
 
@@ -314,14 +371,36 @@ The model is not forced to call every tool. It decides what it needs. In practic
 
 ### 3.4 How the fundamental “algorithm” works
 
-The fundamental analyst is more qualitative than the technical analyst:
+Two layers, and the split matters:
 
-1. **Retrieve** company overview and financial statements.
-2. **Read** the data, including units and currencies.
-3. **Interpret** growth, margins, leverage, cash generation, and insider activity.
-4. **Write** a narrative and summary table.
+1. **Deterministic** — the filing parser reads a Japanese quarterly release into
+   disclosed facts (actuals, H1/FY guidance, issued shares, treasury shares) with
+   page citations. Every model the system publishes is validated here: bridges must
+   sum, segments must sum to the group, margins recompute, EPS divides by the share
+   count, the fair-value range matches its declared multiple, and every citation
+   must name a document that exists in the corpus.
+2. **LLM** — with a corpus, the model writes the forecast: periods, bridge lines,
+   segment estimates, cash flow, valuation multiples and scenarios. It must label
+   each line `disclosed`, `guidance`, `derived`, `assumption` or `internal_note`, and
+   give a formula for every `derived` line. It may not invent a number that fails
+   validation; the error is handed back once for correction.
+3. **Narrative** — the analyst then writes the report around the validated numbers.
+   It is told not to recompute them, not to value the company on a vendor multiple,
+   and to cite a document for every figure the model does not contain.
 
-There is no built-in ratio engine, scoring model, or fixed checklist. The LLM does the comparison and interpretation. The deterministic layer retrieves and formats the data; the LLM decides what it means.
+Without a corpus the analyst is descriptive: it retrieves vendor statements and
+writes an interpretation. There is no forecast.
+
+### 3.4a Units, fiscal calendars, languages
+
+- Statements are quoted in the model's unit (`JPY_bn`, `USD_m`, …). Japanese filings
+  quote 億円 (100 million yen): 403億円 is JPY40.3bn, not 403bn. A capex figure near
+  or above 20% of revenue triggers a unit warning.
+- Periods follow the issuer's fiscal calendar: a March year-end company uses
+  `FY3/27`, a December year-end `FY12/27`. Periods are never converted between
+  companies.
+- Documents may be in English, Japanese, Simplified or Traditional Chinese, or
+  Korean. Each is read in its own language.
 
 ### 3.5 Units and currencies
 
@@ -344,17 +423,25 @@ The model is expected to preserve these distinctions.
 
 ### 3.7 Limitations and misconceptions
 
-- **No Bloomberg, Finnhub, or Reuters fundamentals.**
-- **No consensus estimates or revisions.**
-- **No industry/competitor dataset.** Porter’s Five Forces is not implemented.
-- **No deterministic valuation model.** The LLM interprets the numbers.
-- **Company overview is live-only.** Historical overview is withheld.
-- **Yahoo failure can leave a partial report.** Statements may still work via SEC EDGAR.
+- **No Bloomberg feed yet.** The `bloomberg` vendor seam exists and is selectable,
+  but no backend is implemented; selecting it fails with a typed error until a
+  terminal/B-PIPE adapter is written.
+- **Consensus is supplied, not fetched.** The model compares against a `consensus`
+  block in its spec. Nothing pulls Bloomberg consensus; a screenshot is not read.
+- **Peer sets are not automatic.** A multiple is peer-anchored only if the spec
+  supplies the peers; otherwise it is the analyst's judgement.
+- **Next-year quarters are not modelled.** Declared periods exist for FY+1, but the
+  quarterly build covers the current fiscal year only.
+- **Screenshots (PNG/JPG) are not ingested.** PDFs, DOCX, Markdown, text and HTML are.
+- **Search is lexical.** English keywords do not match Japanese text; the analyst is
+  told to search in the document's language.
+- **Company overview is live-only** in vendor-only mode; historical overview is withheld.
 - **Insider data is not as-filed.** It is withheld for historical dates.
-- **No automatic detection of accounting quality.** The model may discuss it, but there is no dedicated forensic model.
-- **Data can be very long.** Quarterly histories can produce long tool outputs and large prompts.
+- **A model can tie and still be wrong.** Validation catches arithmetic and invented
+  citations, not judgement. The consensus comparison and the number audit are the
+  counterweights, not proof.
 
-> This is exactly what happened in the prior NVDA run: `get_fundamentals` and `get_insider_transactions` returned `DATA_UNAVAILABLE` from Yahoo, while the three SEC EDGAR statements succeeded. The analyst still wrote a substantial report.
+> This is exactly what happened in the prior NVDA run: `get_fundamentals` and `get_insider_transactions` returned `DATA_UNAVAILABLE` from Yahoo, while the three SEC EDGAR statements succeeded. The analyst still wrote a substantial report. With a corpus configured, that run would have fallen back to the documents instead.
 
 ---
 
@@ -674,8 +761,37 @@ Missing reports are replaced with an explicit “no report in this run” marker
 
 - They have **no tools**. They only read the reports already in state.
 - They use the **quick-thinking model**.
-- They produce free-text arguments; there is no structured bull/bear score.
+- Each turn produces prose **and** one structured case on the verified model.
 - They do not call the Portfolio Manager or the Trader.
+
+#### Cases: the debate argues deltas, not rival forecasts
+
+After its argument, each researcher appends one JSON object describing the case
+it is arguing for:
+
+```json
+{"stance": "aggressive", "probability": 0.34, "revenue_pct": 2.0,
+ "operating_profit_pct": 3.0, "multiple": 30.0,
+ "momentum": "…", "sentiment": "…", "evidence": ["doc-id"]}
+```
+
+Bounds are enforced in code, not by the prompt:
+
+| Lever | Cap | Rationale |
+|---|---|---|
+| Revenue | ±5% vs the base case | beyond this it is a different company |
+| Operating profit | ±5% | same |
+| Multiple | ±20% vs the base multiple | a re-rating, not a new valuation framework |
+| Probability | 0–1, normalised across cases | the cases together sum to 100% |
+
+Python recomputes each case from the base model (revenue, OP, net profit, EPS,
+multiple, target). A proposal beyond a cap is clamped and the clamp is printed in
+the case's notes; it is never silently accepted. The Base case is the model
+itself, so it needs no advocate.
+
+The recomputed table is written to `1d_cases/cases.md` and passed to the Research
+Manager and Portfolio Manager, who choose among Base, Aggressive and Bearish —
+they do not average them.
 
 #### Debate state
 
@@ -728,15 +844,16 @@ There is no separate judge during the debate. The Research Manager evaluates the
 - The debate has a hard turn limit.
 - The researchers have no tools and cannot fetch new data.
 - Missing reports are explicitly marked as absent.
-- The debate is not a numeric scoring model; it is free text.
+- The prose is not a scoring model; the numeric part is the bounded case, not a vote.
 - The final recommendation is not made by the researchers.
+- Argument length is not capped, so Deep (5 rounds) produces a very long transcript for little extra insight.
 
 ### 6.4 Research Manager
 
 The Research Manager is the bridge from debate to action.
 
 - Uses the **deep-thinking model**.
-- Receives the debate history and instrument context.
+- Receives the debate history, the **verified model**, the **case table**, and instrument context.
 - Produces a structured `ResearchPlan`:
   - `recommendation`: Buy / Overweight / Hold / Underweight / Sell
   - `rationale`: which arguments won
@@ -830,8 +947,8 @@ The risk team and PM are decision layers, not data-gathering layers.
 
 | Image claim | Code reality |
 |---|---|
-| “Bull evaluates the investment potential.” | Yes, but as free-text argument, not a score. |
-| “Bear assesses the risks.” | Yes, but as free-text argument, not a score. |
+| “Bull evaluates the investment potential.” | Yes: prose plus a bounded case (revenue/OP deltas, multiple, probability) recomputed on the model. |
+| “Bear assesses the risks.” | Yes: prose plus the same bounded case structure, in the opposite direction. |
 | “Through structured debates, they balance gains against risks.” | The debate has a fixed turn order and round limit; the Research Manager judges afterward. |
 | “Trader composes reports from analysts and researchers.” | Partially: it receives the Research Manager's plan, the market report, and portfolio context — not all raw reports. |
 | “Determines the timing and magnitude of trades.” | Partially: it proposes entry, stop, and sizing; there is no execution or intraday timing engine. |
@@ -844,10 +961,10 @@ The risk team and PM are decision layers, not data-gathering layers.
 Raw analyst reports
         │
         ▼
-Bull / Bear debate
+Bull / Bear debate (prose + one bounded case each)
         │
         ▼
-Debate history
+Debate history + cases table + verified model
         │
         ▼
 Research Manager → investment plan
@@ -864,17 +981,21 @@ Portfolio Manager → final rating
 
 The funnel is the most important harness fact for future improvement:
 
-- The Research Manager sees the **debate transcript**, not the raw analyst reports.
-- The Trader sees the **research plan**, the **market report**, and the **portfolio**, not the raw sentiment/news/fundamentals reports.
-- The Portfolio Manager sees the **risk debate**, the plan, the trader proposal, portfolio context, and memory lessons.
+- The Research Manager sees the **debate transcript**, the **verified model** and
+  the **case table** — not the raw analyst reports. The model and cases were added
+  precisely because a mislabelled multiple otherwise travelled through unchecked.
+- The Trader sees the **research plan**, the **market report**, and the **portfolio**,
+  not the raw sentiment/news/fundamentals reports.
+- The Portfolio Manager sees the **risk debate**, the plan, the trader proposal,
+  portfolio context, memory lessons, and (with a corpus) the model and cases.
 
 If the firm wants richer decisions, the highest-leverage improvements are:
 
-1. Pass structured analyst summaries into the Research Manager and Trader, not only prose.
-2. Add a synthesis layer that preserves citations and key numbers.
-3. Add deterministic signal scores alongside the prose.
-4. Add a fact/evidence ledger so details do not disappear between stages.
-5. Evaluate each stage separately, not only the final rating.
+1. Let the risk analysts see the case table too; today they judge the trader's plan from prose.
+2. Give the Trader the fair-value range and the model's key assumptions, not only the plan.
+3. Add a fact/evidence ledger so details do not disappear between stages.
+4. Evaluate each stage separately, not only the final rating.
+5. Cap argument length; Deep currently produces long transcripts for little extra insight.
 
 ---
 
@@ -882,12 +1003,12 @@ If the firm wants richer decisions, the highest-leverage improvements are:
 
 | Misconception | Reality |
 |---|---|
-| “The diagram shows Bloomberg, so Bloomberg works.” | No Bloomberg adapter exists. |
+| “The diagram shows Bloomberg, so Bloomberg works.” | A `bloomberg` vendor is registered but has no backend; selecting it fails with a typed error. |
 | “The diagram shows X/Twitter, so X is used.” | Only StockTwits and Reddit are used. |
 | “The diagram shows CoinGecko.” | No CoinGecko client exists. |
 | “The diagram shows Finnhub/Reuters.” | Neither is implemented. |
 | “Execution is automated.” | No broker/OMS integration; only a decision. |
-| “Analysts produce buy/sell ratings.” | Only the sentiment analyst has a numeric score; the others write reports. |
+| “Analysts produce buy/sell ratings.” | No analyst rates. Sentiment gives a score; Fundamentals gives a validated model; the managers rate. |
 | “The technical analyst has a fixed algorithm.” | It is an LLM interpreting deterministic indicators. |
 | “Fundamentals are always available.” | Yahoo overview can fail; SEC statements may still work. |
 | “News means all news on the internet.” | It means configured vendor news and Yahoo search, not general web search. |
@@ -922,9 +1043,18 @@ pytest -q tests/test_tool_date_enforcement.py tests/test_undated_tools_as_of.py
 
 # Language instruction coverage
 pytest -q tests/test_i18n_coverage.py
+
+# Research model, corpus, cases and audit (offline)
+pytest -q tests/test_research_corpus.py tests/test_research_kernel.py
+pytest -q tests/test_research_builder.py tests/test_research_audit.py
+pytest -q tests/test_research_cases.py tests/test_research_graph.py
 ```
 
 `tests/test_graph_end_to_end.py` is the best single test: it runs the full graph with a scripted model, calls every analyst tool through the vendor router, and verifies reports, memory, concurrency, and checkpoints.
+
+The `test_research_*` files cover the firm extension: corpus dating and licences, model
+validation and repair, the number audit, the debate cases, and the graph wiring. The
+golden test against a real report skips unless `RESEARCH_GOLDEN_DIR` is set.
 
 For a real data test without Yahoo:
 
@@ -1107,17 +1237,51 @@ This is why a weak or local model can still run, but its output may be less cons
 | Date clamping / point-in-time filtering | Yes | No |
 | Technical indicator calculation | Yes | No |
 | Verified market snapshot | Yes | No |
+| Filing parsing (actuals, guidance, shares) | Yes | No |
+| Building the forecast (periods, bridges, segments) | No | Yes |
+| Validating the model (sums, margins, EPS, citations) | Yes | No |
+| Applying a debate case's capped deltas | Yes | No |
 | Choose which tools to call | No | Yes |
 | Interpret the evidence | No | Yes |
 | Write the report | No | Yes |
 | Assign sentiment band/score | No | Yes, within schema |
 | Final trade rating | No | Yes, in manager/PM nodes |
 
+### 9.10a The model harness
+
+When a corpus is configured, four stages sit around the Fundamentals Analyst:
+
+1. **Build** — `research/builder.py` asks the model for one JSON model, given the
+   filing facts, the document index, bounded excerpts and any consensus block.
+   Reported actuals come from the vendor's annual income statement
+   (`research/vendor_facts.py`): a fiscal year that ended at least 90 days before
+   the run date is public, and its figures are given to the model and overlaid
+   afterwards, so an actual year is never a derivation. The filing parser and a
+   supplied consensus still win where they disagree.
+2. **Validate** — `research/kernel.py` recomputes every identity. One failure goes
+   back to the model with the exact error; two failures mean `MODEL UNAVAILABLE`
+   and no numbers are rendered.
+3. **Audit** — the agents mark every figure they take from the model as `[[229.5]]`;
+   `research/audit.py` compares the marked figures with the model and writes
+   `1c_audit/numbers.md`. Unmarked numbers are not checked: a computed ratio, a
+   trade level, or a vendor or broker figure belongs to someone else, and deciding
+   that from the prose produced more false findings than real ones. Two mark shapes
+   are read as citations rather than figures — a bare single digit (`[[6]]`) and a
+   mark holding an id (`[[doc-…]]`) — and are counted in the audit file as not
+   checked, because a run that cites documents must not report them as wrong
+   numbers; anything with a second digit, a decimal or a unit (`[[80]]`, `[[12.0]]`)
+   is still checked. Citations themselves use single brackets (`[doc-id p.3]`);
+   `reporting.py` strips the figure brackets before the report is written, unwrapping
+   a fused `[[1][2]]` to `1, 2`. A section with no marked figures verified nothing,
+   and the audit file says so.
+4. **Cases** — `research/cases.py` turns each debate pitch into capped deltas on the
+   model and recomputes the case, so the managers compare numbers rather than essays.
+
 ### 9.11 What the Analyst Team image says vs. the code
 
 | Image statement | Code reality |
 |---|---|
-| “Fundamentals evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.” | It retrieves overview/statements/insider data and writes a narrative. There is no DCF or intrinsic-value engine. |
+| “Fundamentals evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.” | With a corpus it builds a validated forecast, bridges, valuation and scenarios; the valuation is a multiple range plus sensitivity, not a DCF. Without a corpus it is descriptive only. |
 | “Sentiment aggregates news headlines, StockTwits, and Reddit chatter into a single sentiment read.” | Yes. It adds a structured band, 0–10 score, and confidence. No X/Twitter. |
 | “News monitors global news and macroeconomic indicators, interpreting the impact of events.” | Yes, via Yahoo/Alpha Vantage news, FRED macro, and Polymarket. No Bloomberg/Reuters/Finnhub. |
 | “Technical uses technical indicators such as MACD and RSI to detect patterns and forecast price movements.” | It calculates indicators and asks the LLM to interpret them. There is no separate forecasting model. |
@@ -1149,6 +1313,9 @@ For an engineer trying to improve the analysts:
 5. `tradingagents/agents/state.py` — what the agents share.
 6. `tradingagents/agents/analysts/*.py` — the role prompts and tool sets.
 7. `tradingagents/agents/structured.py` — structured-output fallback.
+8. `tradingagents/research/builder.py` — how the model is authored from the corpus.
+9. `tradingagents/research/kernel.py` — the identities every model must satisfy.
+10. `tradingagents/research/cases.py` — the caps and the case arithmetic.
 
 ### 9.14 What this means for improving the system later
 
@@ -1185,6 +1352,16 @@ For an engineer trying to improve the analysts:
 | Jev screening | `tradingagents/agents/post_screen.py` |
 | Sentiment schema | `tradingagents/agents/schemas.py` |
 | Structured-output fallback | `tradingagents/agents/structured.py` |
+| Research corpus vendor | `tradingagents/dataflows/vendors/research_corpus/` |
+| Model schema | `tradingagents/research/schemas.py` |
+| Model build (LLM) | `tradingagents/research/builder.py` |
+| Model validation | `tradingagents/research/kernel.py` |
+| Valuation | `tradingagents/research/valuation.py` |
+| Report/package render | `tradingagents/research/report.py`, `render.py` |
+| Number audit | `tradingagents/research/audit.py` |
+| Debate cases | `tradingagents/research/cases.py` |
+| Filing parser (JP) | `tradingagents/research/filing.py` |
+| Bloomberg seam | `tradingagents/dataflows/vendors/bloomberg/` |
 
 ### 10.2 Default limits
 
@@ -1199,6 +1376,11 @@ For an engineer trying to improve the analysts:
 | StockTwits sample | up to 30 messages |
 | Reddit subreddits | `wallstreetbets`, `stocks`, `investing` |
 | Crypto subreddits | `CryptoCurrency`, `CryptoMarkets`, plus coin-specific |
+| Forecast horizon | current FY + next two FYs (annual); quarters for the current FY |
+| Case cap, revenue / operating profit | ±5% of the base case |
+| Case cap, multiple | ±20% of the base multiple |
+| Model build attempts | 2 (one correction round) |
+| Audit scope | P/E, fair value/target/market cap, EPS |
 
 ### 10.3 Default vendor chains relevant to analysts
 
@@ -1209,9 +1391,21 @@ fundamental_data       sec_edgar,yfinance
 news_data              yfinance
 macro_data             fred
 prediction_markets     polymarket
+research_documents     corpus (only when TRADINGAGENTS_RESEARCH_DIR is set)
 ```
 
-Remember: for `get_fundamentals`, only Yahoo and Alpha Vantage are registered. SEC EDGAR is used for statements, not the company overview.
+Chains are overridable per category without code changes:
+
+```powershell
+$env:TRADINGAGENTS_DATA_VENDORS = '{"core_stock_apis":"alpha_vantage","technical_indicators":"alpha_vantage","fundamental_data":"sec_edgar","news_data":"yfinance"}'
+$env:TRADINGAGENTS_TOOL_VENDORS = '{"get_news":"alpha_vantage"}'
+```
+
+`bloomberg` is registered for prices and statements but has no backend yet; selecting
+it fails with a typed error until one is written.
+
+Remember: for `get_fundamentals`, only Yahoo, Alpha Vantage and (once implemented)
+Bloomberg are registered. SEC EDGAR is used for statements, not the company overview.
 
 ### 10.4 Where each report goes
 
@@ -1221,8 +1415,29 @@ Remember: for `get_fundamentals`, only Yahoo and Alpha Vantage are registered. S
 | Sentiment | `sentiment_report` | Bull/bear debate |
 | News | `news_report` | Bull/bear debate |
 | Fundamentals | `fundamentals_report` | Bull/bear debate |
+| Verified model | `research_package` | Fundamentals prompt, Research Manager, Portfolio Manager, report section |
+| Cases | `debate_cases` | Research Manager, Portfolio Manager, `1d_cases` table |
+| Number audit | `report_audit` | `1c_audit` report section |
 
 The final Portfolio Manager decision is stored in `final_trade_decision`; the parsed rating is in `final_rating`.
+
+### 10.5 Report tree
+
+```text
+reports/<TICKER>_<stamp>/
+  complete_report.md / .html
+  1_analysts/fundamentals.md      the analyst's prose
+  1b_research/research_package.md the model (computed, no prose)
+  1c_audit/numbers.md             figures in prose that the model does not support
+  1d_cases/cases.md               base + each debate case, recomputed
+  2_research/{bull,bear,manager}.md
+  3_trading/trader.md
+  4_risk/{aggressive,conservative,neutral}.md
+  5_portfolio/decision.md
+```
+
+`complete_report.md` is the whole run including the debate; it is written at the end
+and is never an input to any agent.
 
 ### 10.5 What “algorithm” means in this document
 

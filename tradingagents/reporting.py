@@ -54,6 +54,15 @@ _SECTIONS = (
         ("News Analyst", "news.md", ("news_report",)),
         ("Fundamentals Analyst", "fundamentals.md", ("fundamentals_report",)),
     )),
+    ("Fundamental Research Package", "1b_research", (
+        ("Fundamental Research", "research_package.md", ("research_package",)),
+    )),
+    ("Number Audit", "1c_audit", (
+        ("Figures Not In The Model", "numbers.md", ("report_audit",)),
+    )),
+    ("Case Comparison", "1d_cases", (
+        ("Cases Recomputed On The Model", "cases.md", ("case_table",)),
+    )),
     ("II. Research Team Decision", "2_research", (
         ("Bull Researcher", "bull.md", ("investment_debate_state", "bull_history")),
         ("Bear Researcher", "bear.md", ("investment_debate_state", "bear_history")),
@@ -74,7 +83,14 @@ _SECTIONS = (
 
 
 def _report_parts(final_state: dict) -> list[tuple[str, str, list[tuple[str, str, str]]]]:
-    """The sections with something to say: (heading, folder, [(agent, file, text)])."""
+    """The sections with something to say: (heading, folder, [(agent, file, text)]).
+
+    The agents mark the figures they take from the model as ``[[229.5]]`` so the
+    audit can check them; a reader should never see the brackets, so they are
+    removed here, once, for both the Markdown and the HTML.
+    """
+    from tradingagents.research.audit import strip_marks
+
     parts = []
     for heading, folder, agents in _SECTIONS:
         written = []
@@ -83,7 +99,7 @@ def _report_parts(final_state: dict) -> list[tuple[str, str, list[tuple[str, str
             for key in path:
                 value = (value or {}).get(key)
             if value:
-                written.append((agent, filename, value))
+                written.append((agent, filename, strip_marks(str(value))))
         if written:
             parts.append((heading, folder, written))
     return parts

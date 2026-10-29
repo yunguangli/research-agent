@@ -22,6 +22,8 @@ from tradingagents.agents import (
 )
 from tradingagents.agents.analysts.turn import WRAP_UP
 from tradingagents.agents.state import AgentState
+from tradingagents.agents.tools import CORPUS_TOOLS
+from tradingagents.dataflows.vendors.research_corpus import research_dir_from_env
 
 from .analyst_execution import build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
@@ -50,7 +52,7 @@ def _tools_or_done(state) -> str:
     return "tools" if state["messages"][-1].tool_calls else END
 
 
-def _analyst_graph(spec, agent, max_tool_rounds: int):
+def _analyst_graph(spec, agent, max_tool_rounds: int, tools=None):
     """One analyst as a graph of its own: the model and its tools, on a private message history.
 
     It returns only its report, so analysts running side by side never write the
@@ -58,12 +60,16 @@ def _analyst_graph(spec, agent, max_tool_rounds: int):
     ``max_tool_rounds`` rounds of tool calls it is told to write its report, and
     that turn ends it whatever it answers, so a model that keeps calling tools
     cannot run the graph into its recursion limit (#1420).
+
+    ``tools`` overrides the analyst's default set, which is how the optional
+    research-corpus tools are added to the fundamentals analyst alone.
     """
+    tool_list = list(tools if tools is not None else spec.tools)
     output = TypedDict(f"{spec.key.capitalize()}Report", {spec.report_key: str})
     graph = StateGraph(AgentState, output_schema=output)
     graph.add_node("agent", agent)
     graph.add_edge(START, "agent")
-    if not spec.tools:
+    if not tool_list:
         graph.add_edge("agent", END)
         return graph.compile()
 
@@ -82,7 +88,7 @@ def _analyst_graph(spec, agent, max_tool_rounds: int):
                        spec.agent_node, max_tool_rounds, repeated)
         return agent({**state, "messages": [*state["messages"], HumanMessage(WRAP_UP)]})
 
-    graph.add_node("tools", ToolNode(list(spec.tools)))
+    graph.add_node("tools", ToolNode(tool_list))
     graph.add_node("wrap_up", wrap_up)
     graph.add_conditional_edges("agent", _tools_or_done, ["tools", END])
     graph.add_conditional_edges("tools", more_or_wrap_up, ["agent", "wrap_up"])
@@ -122,11 +128,18 @@ class GraphSetup:
         """
         plan = build_analyst_execution_plan(selected_analysts)
 
+        # The research corpus is opt-in: with no directory configured the
+        # fundamentals analyst gets exactly the tools it had before.
+        research_root = research_dir_from_env()
+        corpus_tools = list(CORPUS_TOOLS) if research_root is not None else []
+
         analyst_factories = {
             "market": lambda: create_market_analyst(self.quick_thinking_llm),
             "social": lambda: create_sentiment_analyst(self.quick_thinking_llm),
             "news": lambda: create_news_analyst(self.quick_thinking_llm),
-            "fundamentals": lambda: create_fundamentals_analyst(self.quick_thinking_llm),
+            "fundamentals": lambda tools=None: create_fundamentals_analyst(
+                self.quick_thinking_llm, tools=tools
+            ),
         }
 
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
@@ -142,8 +155,13 @@ class GraphSetup:
         workflow = StateGraph(AgentState)
 
         for spec in plan.specs:
-            workflow.add_node(spec.agent_node,
-                              _analyst_graph(spec, analyst_factories[spec.key](), self.max_tool_rounds))
+            extra = corpus_tools if spec.key == "fundamentals" else []
+            tools = [*spec.tools, *extra]
+            if spec.key == "fundamentals":
+                agent = analyst_factories[spec.key](tools=tools)
+            else:
+                agent = analyst_factories[spec.key]()
+            workflow.add_node(spec.agent_node, _analyst_graph(spec, agent, self.max_tool_rounds, tools))
 
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)

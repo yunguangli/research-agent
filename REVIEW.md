@@ -6,6 +6,7 @@
 **Review date:** 2026-10-25  
 **Audience:** product owners, portfolio managers, analysts, and engineers  
 **Status:** assessment only — no application code was changed
+**Updated:** 2026-10-28 — the firm extension described below now exists in part; current behaviour is documented in `ANALYST_WORKFLOWS.md` §3, §6 and §9, and artifacts in `docs/WHERE_THINGS_ARE.md`.
 
 > **One-paragraph summary for PMs**
 >

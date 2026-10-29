@@ -1,6 +1,7 @@
 """Prompt context shared by the agents: instrument identity, output language and portfolio."""
 
 import functools
+import json
 import logging
 from collections.abc import Mapping
 from typing import Any
@@ -184,6 +185,56 @@ def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
     return build_instrument_context(
         str(state["company_of_interest"]),
         state.get("asset_type", "stock"),
+    )
+
+
+FIGURE_MARKER_RULE = (
+    "\n\nMark the model's figures: when you quote a number that comes from the verified "
+    "model above, wrap it in double square brackets, as [[229.5]] or [[JPY 4,111]]. Mark "
+    "only figures you took from that model, and never a citation, a source number or a "
+    "list number: [[6]] is read as the figure 6. A number you computed yourself (a PEG, a "
+    "growth rate, a margin of safety, a position size, a stop or entry level) or took from "
+    "a vendor, broker, filing or consensus stays unmarked. The brackets are removed before "
+    "the report is shown; they let the system check your arithmetic against the model.\n"
+)
+
+
+def research_package_block(state: Mapping[str, Any], max_chars: int = 4000) -> str:
+    """The verified model, for the agents that decide rather than gather.
+
+    The Research Manager and Portfolio Manager otherwise see only prose, so a
+    multiple the analyst mislabelled propagates into the rating. Bounded: it is a
+    summary, not the full report.
+    """
+    package = str(state.get("research_package") or "").strip()
+    if not package:
+        return ""
+    return (
+        "\n\nVERIFIED MODEL (computed from the filings; use these numbers exactly, and do "
+        "not substitute a vendor multiple for them):\n"
+        + package[:max_chars]
+        + "\n"
+        + FIGURE_MARKER_RULE
+    )
+
+
+def case_block(state: Mapping[str, Any], max_chars: int = 3000) -> str:
+    """The cases each debater argued for, as deltas against the model."""
+    raw = str(state.get("debate_cases") or "").strip()
+    if not raw:
+        return ""
+    try:
+        cases = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    from tradingagents.research.cases import render_proposals
+
+    table = render_proposals(cases)
+    if not table:
+        return ""
+    return (
+        "\n\nCASES ARGUED (deltas against the verified model; the base case is the model "
+        "itself, so do not average these):\n" + table[:max_chars] + "\n"
     )
 
 

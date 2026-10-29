@@ -17,9 +17,22 @@ from tradingagents.dataflows.vendors.alpha_vantage import (
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
 )
+from tradingagents.dataflows.vendors.bloomberg import (
+    get_balance_sheet as get_bloomberg_balance_sheet,
+    get_cashflow as get_bloomberg_cashflow,
+    get_fundamentals as get_bloomberg_fundamentals,
+    get_income_statement as get_bloomberg_income_statement,
+    get_stock_data as get_bloomberg_stock,
+    get_stock_indicators as get_bloomberg_indicators,
+)
 from tradingagents.dataflows.vendors.fred import get_macro_data as get_fred_macro_data
 from tradingagents.dataflows.vendors.polymarket import (
     get_prediction_markets as get_polymarket_prediction_markets,
+)
+from tradingagents.dataflows.vendors.research_corpus import (
+    list_research_documents as corpus_list_research_documents,
+    read_research_document as corpus_read_research_document,
+    search_research_documents as corpus_search_research_documents,
 )
 from tradingagents.dataflows.vendors.sec_edgar import (
     get_balance_sheet as get_sec_edgar_balance_sheet,
@@ -83,6 +96,15 @@ TOOLS_CATEGORIES = {
         "tools": [
             "get_prediction_markets",
         ]
+    },
+    "research_documents": {
+        "description": "Local research corpus: filings, transcripts, presentations, "
+                       "sell-side notes, and internal notes, filtered by publication date",
+        "tools": [
+            "list_research_documents",
+            "read_research_document",
+            "search_research_documents",
+        ]
     }
 }
 
@@ -98,30 +120,36 @@ VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
+        "bloomberg": get_bloomberg_stock,
         "yfinance": get_YFin_data_online,
     },
     # technical_indicators
     "get_indicators": {
         "alpha_vantage": get_alpha_vantage_indicator,
+        "bloomberg": get_bloomberg_indicators,
         "yfinance": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
         "alpha_vantage": get_alpha_vantage_fundamentals,
+        "bloomberg": get_bloomberg_fundamentals,
         "yfinance": get_yfinance_fundamentals,
     },
     "get_balance_sheet": {
         "alpha_vantage": get_alpha_vantage_balance_sheet,
+        "bloomberg": get_bloomberg_balance_sheet,
         "sec_edgar": get_sec_edgar_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
     },
     "get_cashflow": {
         "alpha_vantage": get_alpha_vantage_cashflow,
+        "bloomberg": get_bloomberg_cashflow,
         "sec_edgar": get_sec_edgar_cashflow,
         "yfinance": get_yfinance_cashflow,
     },
     "get_income_statement": {
         "alpha_vantage": get_alpha_vantage_income_statement,
+        "bloomberg": get_bloomberg_income_statement,
         "sec_edgar": get_sec_edgar_income_statement,
         "yfinance": get_yfinance_income_statement,
     },
@@ -145,6 +173,16 @@ VENDOR_METHODS = {
     # prediction_markets
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
+    },
+    # research_documents (local corpus; opt-in, no network)
+    "list_research_documents": {
+        "corpus": corpus_list_research_documents,
+    },
+    "read_research_document": {
+        "corpus": corpus_read_research_document,
+    },
+    "search_research_documents": {
+        "corpus": corpus_search_research_documents,
     },
 }
 

@@ -1,3 +1,4 @@
+import json
 import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
@@ -74,13 +75,46 @@ def _apply_env_overrides(config: dict) -> dict:
     return config
 
 
+def _json_mapping(env_var: str) -> dict[str, str] | None:
+    """A vendor-chain override from a JSON object, e.g. {"news_data": "yfinance"}."""
+    raw = os.environ.get(env_var, "").strip()
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid value for {env_var}: not valid JSON ({exc})") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"Invalid value for {env_var}: expected a JSON object, got {type(value).__name__}")
+    return {str(key): str(chain) for key, chain in value.items()}
+
+
+def _apply_vendor_env(config: dict) -> dict:
+    """Merge TRADINGAGENTS_DATA_VENDORS / _TOOL_VENDORS into the vendor maps.
+
+    Per-category selection is what lets a deployment drop a vendor for prices or
+    fundamentals while keeping it for news, without editing code.
+    """
+    for env_var, key in (
+        ("TRADINGAGENTS_DATA_VENDORS", "data_vendors"),
+        ("TRADINGAGENTS_TOOL_VENDORS", "tool_vendors"),
+    ):
+        override = _json_mapping(env_var)
+        if override is None:
+            continue
+        merged = dict(config.get(key) or {})
+        merged.update(override)
+        config[key] = merged
+    return config
+
+
 def build_default_config() -> dict:
     """The built-in defaults with the TRADINGAGENTS_* environment folded in.
 
     Read when the package is imported, as DEFAULT_CONFIG; call it again to see
     the environment as it is now.
     """
-    return _apply_env_overrides({
+    return _apply_vendor_env(_apply_env_overrides({
         "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR") or os.path.join(_TRADINGAGENTS_HOME, "logs"),
         "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR") or os.path.join(_TRADINGAGENTS_HOME, "cache"),
         "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH") or os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md"),
@@ -203,7 +237,7 @@ def build_default_config() -> dict:
             "":     "SPY",         # default for US-listed tickers (no suffix)
         },
 
-    })
+    }))
 
 
 DEFAULT_CONFIG = build_default_config()

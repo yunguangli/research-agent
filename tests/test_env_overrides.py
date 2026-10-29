@@ -137,3 +137,38 @@ def test_unknown_env_var_is_ignored(monkeypatch):
         TRADINGAGENTS_NONEXISTENT_KEY="oops",
     )
     assert "nonexistent_key" not in config
+
+
+def test_vendor_chains_can_be_overridden_per_category(monkeypatch):
+    """Dropping Yahoo for prices and fundamentals while keeping it for news."""
+    config = _config_with_env(
+        monkeypatch,
+        TRADINGAGENTS_DATA_VENDORS=(
+            '{"core_stock_apis": "alpha_vantage", "technical_indicators": "alpha_vantage",'
+            ' "fundamental_data": "sec_edgar", "news_data": "yfinance"}'
+        ),
+    )
+    assert config["data_vendors"]["core_stock_apis"] == "alpha_vantage"
+    assert config["data_vendors"]["technical_indicators"] == "alpha_vantage"
+    assert config["data_vendors"]["fundamental_data"] == "sec_edgar"
+    assert config["data_vendors"]["news_data"] == "yfinance"
+    assert config["data_vendors"]["prediction_markets"] == "polymarket"   # untouched
+
+
+def test_a_single_method_can_override_its_category(monkeypatch):
+    config = _config_with_env(
+        monkeypatch, TRADINGAGENTS_TOOL_VENDORS='{"get_news": "alpha_vantage"}'
+    )
+    assert config["tool_vendors"]["get_news"] == "alpha_vantage"
+
+
+def test_invalid_vendor_json_fails_loudly(monkeypatch):
+    monkeypatch.setenv("TRADINGAGENTS_DATA_VENDORS", "{not json")
+    with pytest.raises(ValueError, match="TRADINGAGENTS_DATA_VENDORS"):
+        default_config_module.build_default_config()
+
+
+def test_vendor_env_is_ignored_when_unset(monkeypatch):
+    config = _config_with_env(monkeypatch)
+    assert config["data_vendors"]["core_stock_apis"] == "yfinance"
+    assert config["tool_vendors"] == {}

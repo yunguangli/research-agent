@@ -11,9 +11,11 @@ free-text generation and the rating is read from that text.
 from __future__ import annotations
 
 from tradingagents.agents.context import (
+    case_block,
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    research_package_block,
 )
 from tradingagents.agents.rating import parse_rating
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
@@ -26,6 +28,8 @@ def create_portfolio_manager(llm):
     def portfolio_manager_node(state) -> dict:
         instrument_context = get_instrument_context_from_state(state)
         portfolio_context = get_portfolio_context_from_state(state)
+        model_block = research_package_block(state)
+        case_line = case_block(state)
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
@@ -44,6 +48,7 @@ def create_portfolio_manager(llm):
 {instrument_context}
 
 {portfolio_context}
+{model_block}{case_line}
 
 ---
 

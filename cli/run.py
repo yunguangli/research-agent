@@ -389,10 +389,6 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
                    save=flags.get("save"), show=flags.get("show"), html=flags.get("html"))
 
 
-def _yes(question: str) -> bool:
-    return typer.prompt(question, default="Y").strip().upper() in ("Y", "YES", "")
-
-
 def _graphical_browser():
     """A browser that opens a page in its own window on this machine, or None.
 
@@ -432,16 +428,15 @@ def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None):
     """
     asked = save is None
     if asked:
-        save = typer.prompt("Save report?", default="Y").strip().upper() in ("Y", "YES", "")
+        save = (_ask("Save report?") or "").strip().upper() in ("Y", "YES", "")
     if save:
         # Under results_dir, not the working directory: in Docker the working
         # directory is inside the container and the report goes with it, while
         # results_dir is the mounted volume the rest of the run already writes to.
         save_path = graph.default_report_path(ticker)
         if asked:   # someone at the prompt may pick another folder
-            save_path = Path(typer.prompt(
-                "Save path (press Enter for default)", default=str(save_path)
-            ).strip())
+            chosen = _ask("Save path (press Enter for default)", default=str(save_path))
+            save_path = Path(chosen.strip() or save_path) if chosen is not None else save_path
         if html is None:
             html = _yes("Also save it as an HTML page?") if asked else True
         saved = False
@@ -459,6 +454,30 @@ def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None):
                 _open_page(page)
 
     if show is None:
-        show = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper() in ("Y", "YES", "")
+        show = (_ask("\nDisplay full report on screen?") or "").strip().upper() in ("Y", "YES", "")
     if show:
         display_complete_report(final_state)
+    console.print("[green]Run finished.[/green]")
+
+
+def _ask(question: str, default: str = "Y") -> str | None:
+    """Prompt, but never hang.
+
+    A closed stdin (piped input, a torn-down terminal, some IDE consoles) raises
+    through ``typer.prompt`` and ends the process with a traceback after the
+    analysis is already finished. ``None`` means "nobody answered", which callers
+    treat as "no" so nothing is written without consent. An empty string still
+    means the user pressed Enter, which accepts the default.
+    """
+    try:
+        return typer.prompt(question, default=default)
+    except (EOFError, KeyboardInterrupt, typer.Abort):
+        console.print("\n[dim]No interactive input; skipping the remaining questions.[/dim]")
+        return None
+
+
+def _yes(question: str) -> bool:
+    answer = _ask(question)
+    if answer is None:
+        return False
+    return answer.strip().upper() in ("Y", "YES", "")

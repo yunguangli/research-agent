@@ -71,3 +71,7 @@ class AgentState(MessagesState):
     past_context: Annotated[str, "Memory log context for the Portfolio Manager (same-ticker decisions + cross-ticker lessons), written by the Memory Log step"]
     memory_note: Annotated[str, "What the Memory Log step could not settle or read this run, for the report; empty when all went well"]
     portfolio_context: Annotated[str, "Caller-supplied holdings and cash, rendered at run start; empty when not provided"]
+    research_package: Annotated[str, "Deterministic fundamental model (forecasts, bridges, valuation) for this run; empty unless a research corpus and model spec are configured"]
+    research_price: Annotated[float, "The share price the model's valuation used; 0 when no model was used"]
+    research_model_path: Annotated[str, "The model spec file this run used, so the audit checks the same numbers"]
+    debate_cases: Annotated[str, "Cases argued in the debate as JSON: stance, capped deltas, multiple, probability"]

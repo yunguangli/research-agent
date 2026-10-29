@@ -41,6 +41,12 @@ dev = [
 bedrock = [
     "langchain-aws>=1.7.9",
 ]
+# Research-corpus ingestion (PDF/DOCX text extraction). Optional: the corpus
+# vendor imports these lazily and reports the extra as missing when absent.
+docs = [
+    "pypdf>=5.0",
+    "python-docx>=1.1",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"

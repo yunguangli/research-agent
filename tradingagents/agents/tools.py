@@ -12,6 +12,14 @@ from langgraph.prebuilt import InjectedState
 from tradingagents.dataflows.date_window import as_of, as_of_window
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.router import no_data_available, route_to_vendor, vendor_unavailable
+from tradingagents.dataflows.vendors.research_corpus import (
+    CorpusError,
+    list_research_documents as corpus_list_documents,
+    read_research_document as corpus_read_document,
+    research_dir_from_env,
+    resolve_corpus_root,
+    search_research_documents as corpus_search_documents,
+)
 from tradingagents.dataflows.vendors.yahoo.snapshot import build_verified_market_snapshot
 
 
@@ -230,6 +238,90 @@ def get_insider_transactions(
 
 
 @tool
+def list_research_documents(
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+    types: Annotated[
+        str,
+        "Comma-separated document types: filing, transcript, presentation, sell_side, "
+        "internal_note. Leave empty for every type.",
+    ] = "",
+) -> str:
+    """List this company's research documents that were public on the analysis date.
+
+    Returns one line per document with its id, type, publication date, page count,
+    and licence. Documents published after the analysis date are withheld and
+    listed separately: that is not the same as the company having no document.
+    Call this before reading anything, because document ids come from here.
+    """
+    root = research_dir_from_env()
+    if root is None:
+        return "DATA_UNAVAILABLE: no research corpus is configured for this run."
+    try:
+        return corpus_list_documents(
+            ticker=ticker, as_of=trade_date, types=types, root=str(resolve_corpus_root(root, ticker))
+        )
+    except (CorpusError, OSError) as exc:
+        return f"DATA_UNAVAILABLE: {exc}"
+
+
+@tool
+def read_research_document(
+    document_id: Annotated[str, "A document_id returned by list_research_documents"],
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    max_chars: Annotated[int, "Maximum characters of text to return; keep this modest"] = 20000,
+) -> str:
+    """Read one research document in full, with a citation header.
+
+    Returns the publication date, type, licence, and page markers, so you can cite
+    the page a statement came from. A document the licence forbids sending to a
+    model returns DATA_UNAVAILABLE: report the gap, do not guess its content.
+    """
+    root = research_dir_from_env()
+    if root is None:
+        return "DATA_UNAVAILABLE: no research corpus is configured for this run."
+    try:
+        return corpus_read_document(
+            document_id=document_id,
+            max_chars=max_chars,
+            root=str(resolve_corpus_root(root, ticker)),
+        )
+    except (CorpusError, OSError) as exc:
+        return f"DATA_UNAVAILABLE: {exc}"
+
+
+@tool
+def search_research_documents(
+    query: Annotated[str, "Words to look for, e.g. 'component capacity' or 'price increase'"],
+    ticker: Annotated[str, InjectedState("company_of_interest")],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+    limit: Annotated[int, "Maximum number of snippets to return"] = 8,
+) -> str:
+    """Search the corpus and return citation-ready snippets with document ids.
+
+    Use this instead of reading long transcripts end to end. An empty result means
+    no visible document mentions the term; it does not prove the topic is absent
+    from the company.
+    """
+    root = research_dir_from_env()
+    if root is None:
+        return "DATA_UNAVAILABLE: no research corpus is configured for this run."
+    try:
+        return corpus_search_documents(
+            query=query,
+            ticker=ticker,
+            as_of=trade_date,
+            limit=limit,
+            root=str(resolve_corpus_root(root, ticker)),
+        )
+    except (CorpusError, OSError) as exc:
+        return f"DATA_UNAVAILABLE: {exc}"
+
+
+CORPUS_TOOLS = (list_research_documents, read_research_document, search_research_documents)
+
+
+@tool
 def get_macro_indicators(
     indicator: Annotated[
         str,
@@ -289,3 +381,4 @@ def get_prediction_markets(
         str: A formatted markdown report of matching prediction markets
     """
     return route_to_vendor("get_prediction_markets", topic, limit, trade_date or None)
+

@@ -47,6 +47,35 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
 - Add a new env override only to `_ENV_OVERRIDES` in `tradingagents/default_config.py`.
   OpenAI-compatible providers register in `OPENAI_COMPATIBLE_PROVIDERS`
   (`llm_clients/openai_client.py`); picker model lists live in `llm_clients/model_catalog.py`.
+- Where run artifacts live — report folders, model specs, corpus manifest, cache, memory
+  log — is mapped in `docs/WHERE_THINGS_ARE.md`. `python -m tradingagents.research paths
+  --ticker <T>` prints the same paths for the current machine.
+
+## Fundamental research model
+
+- Opt-in: `TRADINGAGENTS_RESEARCH_DIR` enables the corpus and the model. Unset, vanilla
+  behaviour is unchanged (no corpus tools, no model, no extra report sections).
+- Pipeline: corpus → filing facts (Japanese parser, optional) → the LLM builds the spec →
+  `research/kernel.py` validates every identity → `1b_research/research_package.md` →
+  the analyst prompt and the report.
+- `TRADINGAGENTS_REBUILD_MODEL=1` builds a new spec from the corpus;
+  `TRADINGAGENTS_RESEARCH_MODEL` points at a spec; `TRADINGAGENTS_MODEL_PRICE` overrides
+  the valuation price. A failed build writes `<TICKER>.failed.json` beside the spec.
+- Debate cases: Bull/Bear append capped deltas (`research/cases.py`); the managers get
+  the model and the case table. Caps are ±5% on revenue/operating profit, ±20% on the
+  multiple.
+- Reported actuals come from the vendor's annual statement (`research/vendor_facts.py`),
+  not from the model: a fiscal year is used only when it ended at least 90 days before
+  the run date, and a >25% disagreement is treated as a scale/currency error and refused.
+  Filing facts and a supplied consensus still win over the vendor.
+- The number audit (`1c_audit`) checks only figures an agent marked as the model's
+  (`[[229.5]]`); `reporting.py` strips the marks. Do not reintroduce inference over
+  unmarked prose: it cannot tell the model's figures from a vendor's or a computed
+  ratio, and the false findings outnumbered the real ones.
+- Vendor chains are per-category env overrides: `TRADINGAGENTS_DATA_VENDORS` and
+  `TRADINGAGENTS_TOOL_VENDORS` (JSON). `bloomberg` is registered with no backend yet.
+- Workflow detail: `ANALYST_WORKFLOWS.md` §3, §6, §9. File locations:
+  `docs/WHERE_THINGS_ARE.md`.
 
 ## Point-in-time contract
 
