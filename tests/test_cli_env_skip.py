@@ -42,6 +42,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
             "TRADINGAGENTS_QUICK_THINK_LLM": "deepseek-v4-pro",
             "TRADINGAGENTS_LLM_BACKEND_URL": "https://opencode.ai/zen/go/v1",
             "TRADINGAGENTS_OUTPUT_LANGUAGE": "Japanese",
+            "TRADINGAGENTS_DECISION_HORIZON": "intraday",
         }
         fake_cfg = dict(cli_selections.DEFAULT_CONFIG)
         fake_cfg.update({
@@ -63,7 +64,8 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
              mock.patch.object(cli_selections, "select_llm_provider") as prompt_provider, \
              mock.patch.object(cli_selections, "ask_output_language") as prompt_lang, \
              mock.patch.object(cli_selections, "select_shallow_thinking_agent") as prompt_quick, \
-             mock.patch.object(cli_selections, "select_deep_thinking_agent") as prompt_deep:
+             mock.patch.object(cli_selections, "select_deep_thinking_agent") as prompt_deep, \
+             mock.patch.object(cli_selections, "ask_decision_horizon") as prompt_horizon:
             sel = cli_selections.get_user_selections()
 
         # None of the LLM selection prompts should have been shown.
@@ -71,6 +73,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
         prompt_lang.assert_not_called()
         prompt_quick.assert_not_called()
         prompt_deep.assert_not_called()
+        prompt_horizon.assert_not_called()
         # API key is still verified for the env-configured provider.
         ensure_key.assert_called_once()
 
@@ -80,6 +83,7 @@ class TestCliSkipsPromptsFromEnv(unittest.TestCase):
         self.assertEqual(sel["quick_think_llm"], "deepseek-v4-pro")
         self.assertEqual(sel["deep_think_llm"], "kimi-k2.5")
         self.assertEqual(sel["output_language"], "Japanese")
+        self.assertEqual(sel["decision_horizon"], "intraday")
 
 
 @pytest.mark.unit
@@ -105,7 +109,8 @@ class TestResearchDepthSkippedFromEnv(unittest.TestCase):
              mock.patch.object(cli_selections, "ask_output_language", return_value="English"), \
              mock.patch.object(cli_selections, "select_shallow_thinking_agent", return_value="gpt-5.4-mini"), \
              mock.patch.object(cli_selections, "select_deep_thinking_agent", return_value="gpt-5.5"), \
-             mock.patch.object(cli_selections, "ask_openai_reasoning_effort", return_value=None):
+             mock.patch.object(cli_selections, "ask_openai_reasoning_effort", return_value=None), \
+             mock.patch.object(cli_selections, "ask_decision_horizon", return_value="3-6 months"):
             sel = cli_selections.get_user_selections()
 
         # The research-depth prompt is skipped; the value comes from the env config.
@@ -133,7 +138,8 @@ class TestReasoningEffortSkippedFromEnv(unittest.TestCase):
              mock.patch.object(cli_selections, "ask_output_language", return_value="English"), \
              mock.patch.object(cli_selections, "select_shallow_thinking_agent", return_value="gpt-5.4-mini"), \
              mock.patch.object(cli_selections, "select_deep_thinking_agent", return_value="gpt-5.5"), \
-             mock.patch.object(cli_selections, "ask_openai_reasoning_effort") as prompt_effort:
+             mock.patch.object(cli_selections, "ask_openai_reasoning_effort") as prompt_effort, \
+             mock.patch.object(cli_selections, "ask_decision_horizon", return_value="3-6 months"):
             sel = cli_selections.get_user_selections()
 
         # The reasoning-effort prompt is skipped; the value comes from env config.

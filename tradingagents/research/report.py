@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import kernel, render, valuation as valuation_module
-from .schemas import ModelSpec
+from .schemas import ModelError, ModelSpec
 
 NARRATIVE_MARKER = "<!-- NARRATIVE PENDING: {section} -->"
 
@@ -172,6 +172,46 @@ def compact_summary(model: kernel.ModelResult, valuation: valuation_module.Valua
             f"operating profit {render.fmt(row.operating_profit)}, "
             f"margin {render.fmt_pct(row.operating_margin)}, net profit {render.fmt(row.net_profit)}"
             + (f", {eps_text}" if eps_text else "")
+        )
+
+    # Guidance is kept as a reference: the model forecasts independently, and
+    # the reader (and the debate) must see both numbers with the gap between.
+    if spec.guidance:
+        lines.append("")
+        lines.append(
+            "Management guidance versus the model (guidance is management's number, kept "
+            "for reference — the model forecasts independently):"
+        )
+        lines.append("  Period | Metric | Guidance | Model | Variance")
+        for label, guided in spec.guidance.items():
+            try:
+                row = model.row(label)
+            except ModelError:
+                continue
+            model_values = {
+                "Revenue": row.revenue,
+                "Operating profit": row.operating_profit,
+                "Net profit": row.net_profit,
+            }
+            for metric, guided_value in (
+                ("Revenue", guided.get("revenue")),
+                ("Operating profit", guided.get("operating_profit")),
+                ("Net profit", guided.get("net_profit")),
+            ):
+                if guided_value is None:
+                    continue
+                model_value = model_values[metric]
+                if model_value is None or not guided_value:
+                    variance = "n/a"
+                else:
+                    variance = f"{(model_value - guided_value) / guided_value:+.1%}"
+                lines.append(
+                    f"  {label} | {metric} | {render.fmt(guided_value)} | "
+                    f"{render.fmt(model_value)} | {variance}"
+                )
+        lines.append(
+            "Say in one sentence why the model differs from guidance where it does; "
+            "do not copy guidance into the forecast to make the rows agree."
         )
 
     if spec.quarterly:

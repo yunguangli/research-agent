@@ -44,6 +44,15 @@ def test_string_overrides(monkeypatch):
     assert config["output_language"] == "Chinese"
 
 
+def test_decision_horizon_defaults_and_overrides(monkeypatch):
+    """Optional question with a default: unset keeps 3-6 months, the env var
+    answers it for automation (and skips the CLI's Step 9)."""
+    config = _config_with_env(monkeypatch)
+    assert config["decision_horizon"] == "3-6 months"
+    config = _config_with_env(monkeypatch, TRADINGAGENTS_DECISION_HORIZON="intraday")
+    assert config["decision_horizon"] == "intraday"
+
+
 def test_int_coercion(monkeypatch):
     config = _config_with_env(
         monkeypatch,
@@ -170,5 +179,5 @@ def test_invalid_vendor_json_fails_loudly(monkeypatch):
 
 def test_vendor_env_is_ignored_when_unset(monkeypatch):
     config = _config_with_env(monkeypatch)
-    assert config["data_vendors"]["core_stock_apis"] == "yfinance"
+    assert config["data_vendors"]["core_stock_apis"] == "bloomberg,yfinance"
     assert config["tool_vendors"] == {}

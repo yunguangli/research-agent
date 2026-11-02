@@ -20,7 +20,9 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
 - CLI: `tradingagents` (installed) or `python -m cli.main` (source). A bare run is
   interactive; automation must pass `--ticker`, `--date`, `--analysts`, save/show flags,
   and set provider/model via `TRADINGAGENTS_*` variables. A no-TTY run exits naming the
-  missing inputs instead of prompting.
+  missing inputs instead of prompting. The decision horizon question is optional:
+  default `3-6 months`, `TRADINGAGENTS_DECISION_HORIZON` answers it, and a run with
+  no terminal takes the default rather than being blocked.
 - Minimal Python example: `python main.py`.
 - CI also runs a clean-install smoke: `pip install .` then `import tradingagents, cli.main`.
   Any new runtime import must be declared in `pyproject.toml`, not only in the dev extra.
@@ -61,9 +63,9 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
 - `TRADINGAGENTS_REBUILD_MODEL=1` builds a new spec from the corpus;
   `TRADINGAGENTS_RESEARCH_MODEL` points at a spec; `TRADINGAGENTS_MODEL_PRICE` overrides
   the valuation price. A failed build writes `<TICKER>.failed.json` beside the spec.
-- Debate cases: Bull/Bear append capped deltas (`research/cases.py`); the managers get
-  the model and the case table. Caps are ±5% on revenue/operating profit, ±20% on the
-  multiple.
+- Debate cases: the Adversarial Reviewer appends both capped deltas
+  (aggressive + bearish, `research/cases.py`); the managers get the model and the
+  case table. Caps are ±5% on revenue/operating profit, ±20% on the multiple.
 - Reported actuals come from the vendor's annual statement (`research/vendor_facts.py`),
   not from the model: a fiscal year is used only when it ended at least 90 days before
   the run date, and a >25% disagreement is treated as a scale/currency error and refused.
@@ -71,9 +73,26 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
 - The number audit (`1c_audit`) checks only figures an agent marked as the model's
   (`[[229.5]]`); `reporting.py` strips the marks. Do not reintroduce inference over
   unmarked prose: it cannot tell the model's figures from a vendor's or a computed
-  ratio, and the false findings outnumbered the real ones.
+  ratio, and the false findings outnumbered the real ones. The relational claim check
+  is deliberately different, and allowed: it verifies a comparative claim only against
+  the operands the same sentence prints, or an explicit model period label plus a
+  stated metric — never a number's provenance. A contradicted claim ("38.6 already
+  exceeds 63.7") enters one LLM repair pass before publication; the rewrite must pass
+  the same check or the original text and the finding stand.
+- Two more spec rules enter the repair round: a forecast that equals guidance on every
+  line needs a warnings entry naming the period that explains the coincidence, and a
+  quarterly plan whose company published no H1 guidance row is rebuilt from reported
+  Q1+Q2 (with a warning) instead of being dropped — labels that disagree about the
+  year still drop it.
 - Vendor chains are per-category env overrides: `TRADINGAGENTS_DATA_VENDORS` and
-  `TRADINGAGENTS_TOOL_VENDORS` (JSON). `bloomberg` is registered with no backend yet.
+  `TRADINGAGENTS_TOOL_VENDORS` (JSON); a comma inside a chain is the ordered fallback
+  (e.g. `"bloomberg,yfinance"`). `bloomberg` has a working `blpapi` desktop backend for
+  prices, indicators, the company overview and the income statement (quarterly plus
+  trailing-4 annual, filing-lag gated); balance/cashflow statements are not implemented
+  yet. Vendor statement figures are fallback evidence — a figure stated in a research
+  document wins (`vendor_facts`, and the fundamentals prompt says so).
+  The source policy — Bloomberg for numbers, the web for news, Yahoo as fallback — is
+  `docs/DATA_SOURCES.md`.
 - Workflow detail: `ANALYST_WORKFLOWS.md` §3, §6, §9. File locations:
   `docs/WHERE_THINGS_ARE.md`.
 

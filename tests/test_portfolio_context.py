@@ -154,9 +154,14 @@ def test_decision_agents_see_the_portfolio(module, factory, monkeypatch):
 def test_research_team_stays_blind_to_the_portfolio():
     import inspect
 
-    from tradingagents.agents.researchers import bear_researcher, bull_researcher
-    for mod in (bull_researcher, bear_researcher):
-        assert "portfolio_context" not in inspect.getsource(mod)
+    from tradingagents.agents.researchers import adversarial_reviewer
+
+
+    # The challenge sees the position its template asks for — but never the raw
+    # block: cash and other holdings stay out of the research debate.
+    source = inspect.getsource(adversarial_reviewer)
+    assert "position_fields" in source
+    assert "portfolio_block" not in source
 
 
 @pytest.mark.unit

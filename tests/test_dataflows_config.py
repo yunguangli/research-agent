@@ -20,7 +20,7 @@ class DataflowsConfigIsolationTests(unittest.TestCase):
         cfg["tool_vendors"]["get_stock_data"] = "alpha_vantage"
 
         fresh = get_config()
-        self.assertEqual(fresh["data_vendors"]["core_stock_apis"], "yfinance")
+        self.assertEqual(fresh["data_vendors"]["core_stock_apis"], "bloomberg,yfinance")
         self.assertNotIn("get_stock_data", fresh["tool_vendors"])
 
     def test_set_config_does_not_alias_caller_nested_dicts(self):
@@ -48,8 +48,8 @@ class DataflowsConfigIsolationTests(unittest.TestCase):
 
         fresh = get_config()
         self.assertEqual(fresh["data_vendors"]["core_stock_apis"], "alpha_vantage")
-        self.assertEqual(fresh["data_vendors"]["technical_indicators"], "yfinance")
-        self.assertEqual(fresh["data_vendors"]["fundamental_data"], "sec_edgar,yfinance")
+        self.assertEqual(fresh["data_vendors"]["technical_indicators"], "bloomberg,yfinance")
+        self.assertEqual(fresh["data_vendors"]["fundamental_data"], "bloomberg,sec_edgar,yfinance")
         self.assertEqual(fresh["data_vendors"]["news_data"], "yfinance")
 
     def test_nested_dict_updates_merge_one_level_deep(self):
@@ -95,7 +95,8 @@ def test_a_run_reads_its_own_graphs_vendors_not_the_last_graph_built():
     set_config(first)                                   # graph A is built
     second = _graph(copy.deepcopy(default_config.DEFAULT_CONFIG))
 
-    assert _vendors_seen_by_a_run(second) == ["sec_edgar,yfinance"]
+    # Without a tool override the second graph serves its own category default.
+    assert _vendors_seen_by_a_run(second) == ["bloomberg,sec_edgar,yfinance"]
 
 
 @pytest.mark.unit

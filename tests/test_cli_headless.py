@@ -15,6 +15,8 @@ UNATTENDED_ENV = {
     "TRADINGAGENTS_MAX_RISK_ROUNDS": "1",
     "TRADINGAGENTS_LLM_PROVIDER": "openai",
     "TRADINGAGENTS_QUICK_THINK_LLM": "gpt-6-luna",
+    # Optional step, answered by env like the rest: unattended runs never prompt.
+    "TRADINGAGENTS_DECISION_HORIZON": "3-6 months",
 }
 FLAGS = {"ticker": "NVDA", "date": "2026-09-23", "analysts": "market,news", "save": True, "show": False}
 
@@ -84,6 +86,40 @@ def test_nothing_is_missing_when_flags_and_environment_answer_every_step(monkeyp
     for name, value in UNATTENDED_ENV.items():
         monkeypatch.setenv(name, value)
     assert selections.unattended_gaps(FLAGS) == []
+
+
+@pytest.mark.unit
+def test_the_decision_horizon_question_is_optional(monkeypatch):
+    """Step 9 never blocks an unattended run: without a terminal the default
+    answers it, and TRADINGAGENTS_DECISION_HORIZON answers it everywhere."""
+    for name, value in UNATTENDED_ENV.items():
+        monkeypatch.setenv(name, value)
+    # this test studies the *unanswered* paths, so its own env var is removed
+    monkeypatch.delenv("TRADINGAGENTS_DECISION_HORIZON", raising=False)
+    monkeypatch.setattr(selections.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(selections.updates, "enabled", lambda: False)
+
+    def no_prompt(*a, **k):
+        raise AssertionError("prompted although the step is optional")
+
+    monkeypatch.setattr(selections, "ask_decision_horizon", no_prompt)
+
+    chosen = selections._prompt_selections({}, FLAGS)
+    assert chosen["decision_horizon"] == "3-6 months"
+
+    monkeypatch.setenv("TRADINGAGENTS_DECISION_HORIZON", "intraday")
+    chosen = selections._prompt_selections({}, FLAGS)
+    assert chosen["decision_horizon"] == "intraday"
+
+    # an interactive terminal asks, offering nothing remembered as the default
+    monkeypatch.delenv("TRADINGAGENTS_DECISION_HORIZON")
+    monkeypatch.setattr(selections.sys.stdin, "isatty", lambda: True)
+    asked = []
+    monkeypatch.setattr(selections, "ask_decision_horizon",
+                        lambda default: asked.append(default) or "12+ months")
+    chosen = selections._prompt_selections({}, FLAGS)
+    assert chosen["decision_horizon"] == "12+ months"
+    assert asked == [None]   # nothing remembered the first time
 
 
 class _Browser:

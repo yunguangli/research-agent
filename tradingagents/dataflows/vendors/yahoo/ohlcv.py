@@ -4,6 +4,16 @@ import os
 import pandas as pd
 import yfinance as yf
 
+from tradingagents.dataflows.bars import (  # re-exported: tests import them from here
+    MAX_OHLCV_STALE_DAYS,  # noqa: F401
+    _assert_ohlcv_not_stale,
+    _clean_dataframe,
+    _coerce_ohlcv_dates,  # noqa: F401
+    _ensure_date_column,
+    _fill_price_gaps,
+    _local_midnight,  # noqa: F401
+    _normalize_dates,  # noqa: F401
+)
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.errors import NoMarketDataError
 from tradingagents.dataflows.files import replace_file
@@ -12,135 +22,14 @@ from tradingagents.dataflows.vendors.yahoo.common import raise_for_empty, yf_ret
 
 logger = logging.getLogger(__name__)
 
-# A vendor's latest OHLCV row this many calendar days before the requested date
-# is treated as stale. Generous enough to span long holiday weekends, tight
-# enough to catch the year-old frames yfinance occasionally returns (#1021).
-MAX_OHLCV_STALE_DAYS = 10
+# The date/gap/staleness rules are vendor-neutral and live in dataflows.bars;
+# this module keeps only what is Yahoo's: the download and its per-symbol cache.
 
 # How long a same-day cache that does not yet reach the requested day may be
 # reused before it is refetched (#1150). Short enough that an intraday run picks
 # up today's close soon after it publishes, long enough that a day with no bar
 # at all (weekend, holiday) cannot trigger a download on every call.
 OHLCV_CACHE_TTL_SECONDS = 900
-
-
-def _ensure_date_column(data: pd.DataFrame) -> pd.DataFrame:
-    """Normalize the date column to ``Date``.
-
-    Some yfinance builds leave the index unnamed (so ``reset_index()`` yields
-    ``index``) or use ``Datetime`` for intraday data. Rename the first
-    date-like column so indicators don't silently drop when it isn't ``Date``.
-    """
-    if "Date" in data.columns:
-        return data
-    for candidate in ("index", "Datetime", "date"):
-        if candidate in data.columns:
-            return data.rename(columns={candidate: "Date"})
-    return data
-
-
-def _local_midnight(value) -> pd.Timestamp:
-    """A single timestamp as its naive, midnight-normalized local date (or NaT)."""
-    if pd.isna(value):
-        return pd.NaT
-    try:
-        ts = pd.Timestamp(value)
-    except (ValueError, TypeError):
-        return pd.NaT
-    if ts.tzinfo is not None:
-        ts = ts.tz_localize(None)  # drop tz, keep the local wall-clock date
-    return ts.normalize()
-
-
-def _normalize_dates(dates) -> pd.Series:
-    """Parse to naive, midnight-normalized dates so tz-aware or intraday
-    timestamps compare correctly against the naive ``as_of_date`` cutoff (#1201).
-
-    Normalized per element: 5 years of yfinance bars span daylight-saving
-    changes (and cache CSVs round-trip the offsets as strings), so the series can
-    carry mixed UTC offsets that ``pd.to_datetime`` cannot unify without
-    ``utc=True`` — which would shift non-US (positive-offset) markets to the
-    previous day. Keeping each bar's own local date avoids both.
-    """
-    return pd.to_datetime(pd.Series(dates).map(_local_midnight))
-
-
-def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
-    """Normalize a stock DataFrame for stockstats: parse/normalize dates and
-    coerce prices to numeric (NaN where invalid). Dropping incomplete rows and
-    filling gaps is left to ``_fill_price_gaps`` so the caller can first inspect
-    the latest in-range bar (#1201)."""
-    data = _ensure_date_column(data)
-    data["Date"] = _normalize_dates(data["Date"])
-    data = data.dropna(subset=["Date"]).copy()
-
-    price_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in data.columns]
-    data[price_cols] = data[price_cols].apply(pd.to_numeric, errors="coerce")
-    return data
-
-
-def _fill_price_gaps(data: pd.DataFrame) -> pd.DataFrame:
-    """Drop rows with no close and forward/back-fill remaining price gaps so
-    indicators compute on a continuous series."""
-    price_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in data.columns]
-    # copy() so a filtered (sliced) input is written to safely, not via a view.
-    data = data.dropna(subset=["Close"]).copy()
-    data[price_cols] = data[price_cols].ffill().bfill()
-    return data
-
-
-def _coerce_ohlcv_dates(data: pd.DataFrame) -> pd.Series:
-    """Return parsed dates from an OHLCV frame, whether Date is a column or the index."""
-    if "Date" in data.columns:
-        return pd.to_datetime(data["Date"], errors="coerce").dropna()
-    # yfinance keeps the dates in the index (a DatetimeIndex, sometimes unnamed).
-    if isinstance(data.index, pd.DatetimeIndex):
-        return pd.Series(pd.to_datetime(data.index, errors="coerce")).dropna()
-    # Fallback: expose the index and look for any date-like column.
-    df = data.reset_index()
-    for col in ("Date", "Datetime", "date", "index"):
-        if col in df.columns:
-            parsed = pd.to_datetime(df[col], errors="coerce").dropna()
-            if not parsed.empty:
-                return parsed
-    return pd.Series(dtype="datetime64[ns]")
-
-
-def _assert_ohlcv_not_stale(
-    data: pd.DataFrame,
-    as_of_date: str,
-    symbol: str,
-    canonical: str | None = None,
-    *,
-    max_stale_days: int = MAX_OHLCV_STALE_DAYS,
-) -> None:
-    """Reject OHLCV whose latest row is far older than as_of_date.
-
-    Raises NoMarketDataError (with a stale-specific detail) so the router treats
-    it like any other "no usable data from this vendor" — try the next vendor,
-    then emit one clear unavailable signal. Empty frames are left to the
-    caller's existing no-data handling; this guards only the dangerous case of
-    present-but-stale rows (a vendor returning a year-old frame that would
-    otherwise feed wrong prices to the agent, #1021).
-    """
-    if data is None or data.empty:
-        return
-    requested = pd.to_datetime(as_of_date, errors="coerce")
-    if pd.isna(requested):
-        return
-    requested = requested.normalize()
-    dates = _coerce_ohlcv_dates(data)
-    if dates.empty:
-        return
-    latest = dates.max().normalize()
-    stale_days = (requested - latest).days
-    if stale_days > max_stale_days:
-        raise NoMarketDataError(
-            symbol,
-            canonical,
-            f"latest row is {latest.date()}, {stale_days} days before the "
-            f"requested {requested.date()} (stale) — refusing to use it",
-        )
 
 
 def _cache_is_fresh(data_file, as_of_dt, now) -> bool:

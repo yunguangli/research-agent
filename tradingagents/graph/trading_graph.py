@@ -12,7 +12,7 @@ from tradingagents.agents.context import build_instrument_context, resolve_instr
 from tradingagents.agents.rating import run_rating
 from tradingagents.dataflows.config import run_config, run_config_context, set_config
 from tradingagents.dataflows.date_window import get_current_date, is_historical
-from tradingagents.dataflows.symbols import safe_ticker_component
+from tradingagents.dataflows.symbols import canonical_ticker, safe_ticker_component
 from tradingagents.dataflows.vendors.research_corpus import (
     research_dir_from_env,
     resolve_corpus_root,
@@ -33,6 +33,35 @@ logger = logging.getLogger(__name__)
 
 class _ModelUnavailable(RuntimeError):
     """The research model cannot be used for this run; the text is the reason."""
+
+
+def _configured_spec(company_name: str):
+    """The ``TRADINGAGENTS_RESEARCH_MODEL`` spec — only if it is this company's.
+
+    Returns ``(path, spec)`` or ``None``. Another company's spec is never a
+    model candidate and never a consensus source: its numbers belong to that
+    company, whatever the environment says, and a leftover pointer from an
+    earlier test must not colour the next run.
+    """
+    configured = os.environ.get("TRADINGAGENTS_RESEARCH_MODEL", "").strip()
+    if not configured:
+        return None
+    path = Path(configured)
+    if not path.is_file():
+        return None
+    from tradingagents.research import report as research_report
+
+    try:
+        spec = research_report.load_spec(path)
+    except Exception:  # noqa: BLE001 - an unreadable pointer is simply not used
+        return None
+    if canonical_ticker(str(spec.ticker or "")) != canonical_ticker(str(company_name)):
+        logger.info(
+            "Ignoring TRADINGAGENTS_RESEARCH_MODEL=%s: it is %r, not %r",
+            configured, spec.ticker, company_name,
+        )
+        return None
+    return path, spec
 
 
 def _validate_trade_date(trade_date) -> str:
@@ -195,6 +224,10 @@ class TradingAgentsGraph:
         ``tradingagents.agents.rating.is_review`` before mapping it to the
         PortfolioRating enum.
         """
+        # Accept a Bloomberg-style ticker (3711.TT) as readily as the system's
+        # own (3711.TW): identity, corpus, benchmark and memory all key on this
+        # one canonical spelling from here down.
+        company_name = canonical_ticker(company_name)
         trade_date = _validate_trade_date(trade_date)
 
         with run_config(self.config), \
@@ -215,6 +248,7 @@ class TradingAgentsGraph:
         lived only inside ``propagate`` and the CLI streamed the checkpointer-less
         graph, making the flag a no-op.
         """
+        company_name = canonical_ticker(company_name)
         self._resuming = False
         if not self.config.get("checkpoint_enabled"):
             return None
@@ -340,6 +374,21 @@ class TradingAgentsGraph:
 
         stats: dict = {}
         findings = audit.audit_state(final_state, model, valuation, stats=stats)
+        if any(finding.kind == "relation" for finding in findings):
+            # A claim its own figures contradict is caught before publication:
+            # one repair pass rewrites the sentence, and the same check must
+            # accept the rewrite or the original (and the finding) stand.
+            llm = getattr(self, "quick_thinking_llm", None)
+            if llm is not None:
+                def _ask(prompt: str) -> str:
+                    return str(llm.invoke(prompt).content)
+
+                if audit.repair_relations(final_state, findings, _ask, model=model):
+                    # audit_state mutates the stats dict it is handed: build the
+                    # fresh one first, then re-audit into IT (assigning {} on the
+                    # left of the call would discard the counts it just recorded).
+                    stats = {}
+                    findings = audit.audit_state(final_state, model, valuation, stats=stats)
         return audit.render(findings, stats=stats)
 
     def default_report_path(self, ticker) -> Path:
@@ -360,6 +409,9 @@ class TradingAgentsGraph:
             asset_type=asset_type,
             instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
+            # The run's horizon: the CLI question's answer rides on the config
+            # (TRADINGAGENTS_DECISION_HORIZON or the default when unattended).
+            decision_horizon=str(self.config.get("decision_horizon") or ""),
         )
         # Empty unless a corpus is configured, so vanilla runs keep the same state.
         package, price, spec_path = self._research_package(company_name, trade_date)
@@ -402,10 +454,11 @@ class TradingAgentsGraph:
         if root is None:
             raise _ModelUnavailable("No research corpus is configured for this run.")
 
-        configured = os.environ.get("TRADINGAGENTS_RESEARCH_MODEL", "").strip()
         corpus = resolve_corpus_root(root, company_name)
         candidates = [Path(spec_hint)] if spec_hint else []
-        candidates += [Path(configured)] if configured else []
+        shared = _configured_spec(company_name)
+        if shared is not None:
+            candidates.append(shared[0])
         candidates.extend([corpus / "model.json", corpus / f"{safe_ticker_component(company_name)}.json"])
         cached = self._models_dir() / f"{safe_ticker_component(company_name)}.json"
         candidates.append(cached)
@@ -434,7 +487,7 @@ class TradingAgentsGraph:
             resolved, note = self._resolve_price(spec, company_name, trade_date, price)
             if resolved:
                 spec.valuation.price = resolved
-            if note:
+            if note and note not in spec.warnings:   # a reload must not stack the note
                 spec.warnings.append(note)
             model = kernel.run(spec)
             return model, valuation.value(model), spec_path
@@ -477,18 +530,29 @@ class TradingAgentsGraph:
 
         store = CorpusStore(corpus, company_name)
 
-        # The vendor holds every reported annual figure; the corpus usually does
-        # not. Without this, a model asked for a historical year derives it.
+        # Corpus first, vendor second: the documents are the primary evidence and
+        # the vendor statement only supplies periods the corpus never states
+        # (merge_reported_actuals enforces the same order figure by figure).
         from tradingagents.research import vendor_facts
 
+        unit = vendor_facts.statement_unit(company_name)
         reported: dict = {}
+        quarters: dict = {}
         try:
-            reported = vendor_facts.fetch_annual(company_name, unit="JPY_bn")
+            reported = vendor_facts.fetch_annual(company_name, unit=unit)
         except vendor_facts.VendorFactsError as exc:
             logger.info("No vendor annual statement for %s: %s", company_name, exc)
-        reported_text = vendor_facts.describe(reported, str(trade_date or ""))
-        if reported_text:
-            facts_text = f"{facts_text}\n\n{reported_text}" if facts_text else reported_text
+        try:
+            quarters = vendor_facts.fetch_quarters(company_name, unit=unit)
+        except vendor_facts.VendorFactsError as exc:
+            logger.info("No vendor quarterly statement for %s: %s", company_name, exc)
+
+        for block in (
+            vendor_facts.describe(reported, str(trade_date or "")),
+            vendor_facts.describe_quarters(quarters, str(trade_date or "")),
+        ):
+            if block:
+                facts_text = f"{facts_text}\n\n{block}" if facts_text else block
 
         price = None
         if trade_date:
@@ -506,15 +570,10 @@ class TradingAgentsGraph:
             # A supplied consensus for a past period is the same fact; it wins too.
             extract_module.merge_consensus_actuals(spec, spec.consensus)
 
-        consensus = None
-        configured = os.environ.get("TRADINGAGENTS_RESEARCH_MODEL", "").strip()
-        if configured and Path(configured).is_file():
-            try:
-                from tradingagents.research import report as research_report
-
-                consensus = research_report.load_spec(configured).consensus
-            except Exception:  # noqa: BLE001 - a benchmark must never block a build
-                consensus = None
+        # The benchmark's consensus, but only when the pointer is this company's:
+        # another ticker's estimates are another company's opinion.
+        shared = _configured_spec(company_name)
+        consensus = shared[1].consensus if shared else None
 
         spec, attempts = builder.build_spec(
             llm,
@@ -732,6 +791,7 @@ class TradingAgentsGraph:
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],
+                "challenge_history": final_state["investment_debate_state"].get("challenge_history", ""),
                 "history": final_state["investment_debate_state"]["history"],
                 "current_response": final_state["investment_debate_state"][
                     "current_response"

@@ -25,26 +25,35 @@ METRICS = ("revenue", "operating_profit", "net_profit")
 
 @dataclass
 class QuarterlyPlan:
-    """How to split H2. Shares are fractions of the H2 total, and must sum to 1."""
+    """How to split H2. Shares are fractions of the H2 total, and must sum to 1.
+
+    ``h1_values`` is set when the company published no H1 guidance row: the
+    builder rebuilds the half-year total from the two reported quarters, and the
+    plan then uses those figures instead of looking H1 up in guidance.
+    """
 
     fy_label: str
     h1_label: str
     q1_label: str
     h2_split: dict[str, tuple[float, float]] = field(default_factory=dict)
     note: str = ""
+    h1_values: dict[str, float] | None = None
 
     def share(self, metric: str) -> tuple[float, float]:
         q3, _ = self.h2_split.get(metric, (0.5, 0.5))
         return q3, 1.0 - q3
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "fy_label": self.fy_label,
             "h1_label": self.h1_label,
             "q1_label": self.q1_label,
             "h2_split": {k: list(v) for k, v in self.h2_split.items()},
             "note": self.note,
         }
+        if self.h1_values is not None:
+            data["h1_values"] = dict(self.h1_values)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> QuarterlyPlan:
@@ -60,6 +69,7 @@ class QuarterlyPlan:
             q1_label=data["q1_label"],
             h2_split=split,
             note=data.get("note", ""),
+            h1_values=data.get("h1_values"),
         )
 
 
@@ -76,7 +86,10 @@ def build(spec: ModelSpec, plan: QuarterlyPlan) -> tuple[dict[str, Financials], 
     q1 = spec.quarterly.get(plan.q1_label)
     if q1 is None:
         raise ModelError(f"Quarterly plan has no actuals for {plan.q1_label}")
-    h1 = spec.guidance.get(plan.h1_label)
+    # No H1 guidance row exists (the company published none): the builder has
+    # rebuilt the half-year from the reported quarters, which still lets
+    # H2 = FY guidance - H1 check the reported back half.
+    h1 = plan.h1_values if plan.h1_values else spec.guidance.get(plan.h1_label)
     fy = spec.guidance.get(plan.fy_label)
     if h1 is None or fy is None:
         raise ModelError(
@@ -87,10 +100,13 @@ def build(spec: ModelSpec, plan: QuarterlyPlan) -> tuple[dict[str, Financials], 
     labels = (plan.q1_label, f"Q2 {suffix}", f"Q3 {suffix}", f"Q4 {suffix}")
     quarters = {label: Financials() for label in labels}
     lines: list[QuarterLine] = []
+    h1_origin = (
+        "reported Q1+Q2" if plan.h1_values else plan.h1_label
+    )
 
     for metric in METRICS:
         first = q1.get(metric)
-        half = h1.get(metric)
+        half = h1.get(metric) if not isinstance(h1, dict) else h1.get(metric)
         year = fy.get(metric)
         if first is None or half is None or year is None:
             continue
@@ -108,7 +124,7 @@ def build(spec: ModelSpec, plan: QuarterlyPlan) -> tuple[dict[str, Financials], 
         lines.extend([
             QuarterLine(labels[0], metric, first, f"{plan.q1_label} actual"),
             QuarterLine(labels[1], metric, second,
-                        f"{plan.h1_label} {half:g} - {plan.q1_label} {first:g}"),
+                        f"{h1_origin} {half:g} - {plan.q1_label} {first:g}"),
             QuarterLine(labels[2], metric, third,
                         f"H2 {h2:g} x {q3_share:.3f}"),
             QuarterLine(labels[3], metric, fourth,

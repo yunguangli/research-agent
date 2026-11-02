@@ -26,7 +26,7 @@ console = Console()
 class MessageBuffer:
     # Fixed teams that always run (not user-selectable)
     FIXED_AGENTS = {
-        "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
+        "Research Team": ["Adversarial Reviewer", "Research Manager"],
         "Trading Team": ["Trader"],
         "Risk Management": ["Aggressive Analyst", "Neutral Analyst", "Conservative Analyst"],
         "Portfolio Management": ["Portfolio Manager"],
@@ -215,7 +215,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
             "News Analyst",
             "Fundamentals Analyst",
         ],
-        "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
+        "Research Team": ["Adversarial Reviewer", "Research Manager"],
         "Trading Team": ["Trader"],
         "Risk Management": ["Aggressive Analyst", "Neutral Analyst", "Conservative Analyst"],
         "Portfolio Management": ["Portfolio Manager"],
@@ -400,10 +400,8 @@ def display_complete_report(final_state):
     if final_state.get("investment_debate_state"):
         debate = final_state["investment_debate_state"]
         research = []
-        if debate.get("bull_history"):
-            research.append(("Bull Researcher", debate["bull_history"]))
-        if debate.get("bear_history"):
-            research.append(("Bear Researcher", debate["bear_history"]))
+        if debate.get("challenge_history"):
+            research.append(("Adversarial Investment Review", debate["challenge_history"]))
         if final_state.get("investment_plan"):
             research.append(("Research Manager", final_state["investment_plan"]))
         if research:
@@ -439,7 +437,7 @@ def display_complete_report(final_state):
 
 def update_research_team_status(status):
     """Update status for research team members (not Trader)."""
-    research_team = ["Bull Researcher", "Bear Researcher", "Research Manager"]
+    research_team = ["Adversarial Reviewer", "Research Manager"]
     for agent in research_team:
         message_buffer.update_agent_status(agent, status)
 
@@ -495,9 +493,9 @@ def update_analyst_statuses(message_buffer, chunk, wall_time_tracker=None):
     if (
         all_filed
         and selected
-        and message_buffer.agent_status.get("Bull Researcher") == "pending"
+        and message_buffer.agent_status.get("Adversarial Reviewer") == "pending"
     ):
-        message_buffer.update_agent_status("Bull Researcher", "in_progress")
+        message_buffer.update_agent_status("Adversarial Reviewer", "in_progress")
 
 
 def extract_content_string(content):

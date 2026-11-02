@@ -61,6 +61,10 @@ def create_trader(llm):
                     "instrument's quote currency (for example 189.5), never a percentage "
                     "or a range; convert a percentage distance to the price level it "
                     "implies, or omit the field if you cannot state a number. "
+                    + ("" if portfolio_context.strip() else
+                       "No portfolio context was supplied: discuss trims, stops and position "
+                       "changes qualitatively — never a fixed trim percentage or a stop as a "
+                       "portfolio instruction. ")
                     + NO_EXTERNAL_TOOLS
                     + get_language_instruction()
                 ),

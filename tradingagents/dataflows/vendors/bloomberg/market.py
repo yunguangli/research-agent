@@ -1,20 +1,19 @@
 """Prices and indicators from Bloomberg.
 
-The backend returns bars; the formatting mirrors the Yahoo vendor so the market
-analyst's tools, the verified snapshot and the cache keep working unchanged.
+The backend returns bars as CSV in the same shape the Yahoo vendor produces,
+so the router, the market analyst's tools and the indicator layer treat them
+identically. Indicators are computed locally from those bars by the shared
+helper in ``dataflows.indicators`` — Bloomberg supplies prices, not RSI.
 
-Indicators are not implemented here yet. They must be computed locally from the
-bars (Bloomberg supplies prices, not RSI), and that computation currently lives
-inside the Yahoo vendor. Until it is extracted into a shared helper, route
-``technical_indicators`` to another vendor::
-
-    TRADINGAGENTS_DATA_VENDORS={"core_stock_apis":"bloomberg",
-                                "technical_indicators":"alpha_vantage"}
+Symbol mapping lives in ``symbols.py`` (``5803.T`` → ``5803 JP Equity``).
 """
 
 from __future__ import annotations
 
-from tradingagents.dataflows.errors import VendorNotConfiguredError
+import pandas as pd
+
+from tradingagents.dataflows.bars import parse_bars_csv, prepare_bars
+from tradingagents.dataflows.indicators import render_window, value_on_date
 
 from .backend import get_backend
 
@@ -24,10 +23,26 @@ def get_stock_data(symbol: str, start_date: str, end_date: str) -> str:
     return get_backend().bars(symbol, start_date, end_date)
 
 
-def get_stock_indicators(symbol: str, indicator: str, curr_date: str, look_back_days: int = 30) -> str:
-    """Not implemented: indicators need the shared computation helper first."""
-    raise VendorNotConfiguredError(
-        "The Bloomberg vendor supplies prices but not indicators yet. Until the "
-        "indicator computation is shared between vendors, route technical_indicators "
-        "to alpha_vantage or yfinance and keep bloomberg for core_stock_apis."
-    )
+def bars_frame(symbol: str, as_of_date: str, fill_gaps: bool = True) -> pd.DataFrame:
+    """Bloomberg bars as a DataFrame, held to the shared run rules.
+
+    Five years back from the run date is what the loader asks of any vendor;
+    the cutoff, gap and staleness rules are the ones in ``dataflows.bars``.
+    """
+    start = (pd.to_datetime(as_of_date) - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
+    text = get_stock_data(symbol, start, as_of_date)
+    return prepare_bars(parse_bars_csv(text), symbol, as_of_date, fill_gaps)
+
+
+def get_stock_indicators(
+    symbol: str,
+    indicator: str,
+    curr_date: str,
+    look_back_days: int = 30,
+) -> str:
+    """The indicator window over Bloomberg's bars; the computation is shared."""
+
+    def on_date(symbols: str, name: str, date: str) -> str:
+        return str(value_on_date(bars_frame, symbols, name, date))
+
+    return render_window(bars_frame, on_date, symbol, indicator, curr_date, look_back_days)

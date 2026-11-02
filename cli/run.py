@@ -89,6 +89,9 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
         if selections.get(key) is not None:
             config[key] = selections[key]
     config["output_language"] = selections.get("output_language", "English")
+    # The horizon is optional everywhere: the selection already carries the
+    # env value, the remembered answer or the default.
+    config["decision_horizon"] = selections.get("decision_horizon") or config["decision_horizon"]
     # --checkpoint/--no-checkpoint overrides only when explicitly given; omitting
     # the flag preserves TRADINGAGENTS_CHECKPOINT_ENABLED / the default (#976).
     if checkpoint is not None:
@@ -270,20 +273,18 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
                 # Research Team - Handle Investment Debate State
                 if chunk.get("investment_debate_state"):
                     debate_state = chunk["investment_debate_state"]
-                    bull_hist = debate_state.get("bull_history", "").strip()
-                    bear_hist = debate_state.get("bear_history", "").strip()
+                    challenge = (
+                        debate_state.get("challenge_history")
+                        or debate_state.get("bull_history")
+                        or ""
+                    ).strip()
                     judge = (chunk.get("investment_plan") or "").strip()
 
                     # Only update status when there's actual content
-                    if bull_hist or bear_hist:
+                    if challenge:
                         update_research_team_status("in_progress")
-                    if bull_hist:
                         message_buffer.update_report_section(
-                            "investment_plan", f"### Bull Researcher Analysis\n{bull_hist}"
-                        )
-                    if bear_hist:
-                        message_buffer.update_report_section(
-                            "investment_plan", f"### Bear Researcher Analysis\n{bear_hist}"
+                            "investment_plan", f"### Adversarial Review\n{challenge}"
                         )
                     if judge:
                         message_buffer.update_report_section(

@@ -3,6 +3,8 @@
 import functools
 import json
 import logging
+import os
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -83,11 +85,43 @@ def resolve_instrument_identity(ticker: str) -> dict:
         return {}
 
 
+def _bloomberg_identity(ticker: str) -> dict:
+    """Bloomberg's identity fields when a Bloomberg backend is configured.
+
+    A Bloomberg-configured run reads the company's name and classification from
+    the source that prices it, so an unreachable Yahoo cannot strip the prompts
+    down to a bare ticker. No backend configured costs one environment check,
+    leaving vanilla behaviour untouched; any failure falls through to the Yahoo
+    profile below rather than ending the lookup.
+    """
+    if not os.environ.get("TRADINGAGENTS_BLOOMBERG_BACKEND", "").strip():
+        return {}
+    try:
+        from tradingagents.dataflows.vendors.bloomberg.backend import get_backend
+
+        backend = get_backend()
+        identity_getter = getattr(backend, "identity", None)
+        if identity_getter is None:
+            return {}   # a backend that does not answer identity questions
+        found = identity_getter(ticker) or {}
+    except Exception as exc:  # noqa: BLE001 — identity is best-effort by design
+        logger.debug("Bloomberg identity for %s unavailable: %s", ticker, exc)
+        return {}
+    return {key: value for key, value in found.items() if value}
+
+
 @functools.lru_cache(maxsize=256)
 def _identity(ticker: str) -> dict:
-    """The vendor's identity fields for ``ticker``; raises if the lookup fails."""
+    """The identity fields for ``ticker``; raises if the lookup fails.
+
+    Bloomberg first when a backend is configured (its fields are already the
+    final identity keys), otherwise the vendor profile.
+    """
+    identity = _bloomberg_identity(ticker)
+    if identity:
+        return identity
     info = get_company_profile(ticker)
-    identity: dict[str, str] = {}
+    identity = {}
     company_name = _clean_identity_value(info.get("longName")) or _clean_identity_value(
         info.get("shortName")
     )
@@ -98,6 +132,8 @@ def _identity(ticker: str) -> dict:
         ("industry", "industry"),
         ("exchange", "exchange"),
         ("quoteType", "quote_type"),
+        ("country", "country"),
+        ("currency", "currency"),
     ):
         value = _clean_identity_value(info.get(source_key))
         if value:
@@ -190,12 +226,38 @@ def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
 
 FIGURE_MARKER_RULE = (
     "\n\nMark the model's figures: when you quote a number that comes from the verified "
-    "model above, wrap it in double square brackets, as [[229.5]] or [[JPY 4,111]]. Mark "
+    "model above, wrap it in double square brackets, as [[229.5]] or [[JPY 4,111]]. "
+    "The sign goes inside the brackets: [[−14]], not −[[14]]. Mark "
     "only figures you took from that model, and never a citation, a source number or a "
     "list number: [[6]] is read as the figure 6. A number you computed yourself (a PEG, a "
-    "growth rate, a margin of safety, a position size, a stop or entry level) or took from "
-    "a vendor, broker, filing or consensus stays unmarked. The brackets are removed before "
+    "growth rate, a margin of safety, a position size, a stop or entry level — including "
+    "a price you get as EPS × multiple: 215.4 × 50 = 10,770 is your arithmetic, not a "
+    "model line) or took from a vendor, broker, filing or consensus stays unmarked. The "
+    "brackets are removed before "
     "the report is shown; they let the system check your arithmetic against the model.\n"
+    "Checking arithmetic is encouraged: if two figures in the package do not tie, report "
+    "the discrepancy in one line rather than silently changing either number.\n"
+)
+
+COMPARATIVE_CLAIM_RULE = (
+    "\nA comparative claim must be true of the figures printed beside it. Before writing "
+    "\"exceeds\", \"above\", \"below\", \"grew\" or \"is X% of\", check the two numbers in "
+    "that same sentence — 38.6bn is about 61% of 63.7bn; it does not exceed it. Recompute "
+    "every growth rate from the figures you print: a rate that contradicts your own table "
+    "(\"SG&A grew 4%\" above a table showing 37,589 vs 35,340 = +6.4%) is an error. "
+    "Missing data is a gap, not evidence in either direction — never read direction from "
+    "an absence. Two agents agreeing on the same evidence is one observation, not two — "
+    "agreement is never cited as support. Write each figure once: never print it bare and "
+    "then again in brackets. When the figures do not support a claim, restate the true "
+    "relationship or drop the claim.\n"
+)
+
+SIZING_RULE = (
+    "Without the caller's position size, cost basis, risk tolerance or mandate, keep "
+    "sizing and protection qualitative: never prescribe a fixed trim percentage, a specific "
+    "stop-loss distance or an exact position change as a portfolio instruction, and never "
+    "convert a tactical chart pattern into a portfolio-level action — timing and sizing "
+    "stay conditional and descriptive.\n"
 )
 
 
@@ -215,6 +277,7 @@ def research_package_block(state: Mapping[str, Any], max_chars: int = 4000) -> s
         + package[:max_chars]
         + "\n"
         + FIGURE_MARKER_RULE
+        + COMPARATIVE_CLAIM_RULE
     )
 
 
@@ -236,6 +299,62 @@ def case_block(state: Mapping[str, Any], max_chars: int = 3000) -> str:
         "\n\nCASES ARGUED (deltas against the verified model; the base case is the model "
         "itself, so do not average these):\n" + table[:max_chars] + "\n"
     )
+
+
+def fill_placeholders(template: str, values: dict) -> str:
+    """Substitute every {{placeholder}}; an unknown one becomes null, loudly."""
+    for key, value in values.items():
+        template = template.replace("{{" + key + "}}", str(value))
+    leftover = re.findall(r"\{\{[^}]+\}\}", template)
+    if leftover:
+        logging.getLogger(__name__).warning(
+            "Prompt placeholder(s) with no runtime value: %s", sorted(set(leftover))
+        )
+        template = re.sub(r"\{\{[^}]+\}\}", "null", template)
+    return template
+
+
+def position_fields(portfolio_text: str) -> tuple[str, str]:
+    """Current position and average cost from the rendered portfolio block.
+
+    Three states stay distinct (position / flat / no context): an empty block is
+    two nulls, never a flat book — treating "not provided" as "flat" would
+    invent a fact about the caller's account.
+    """
+    text = (portfolio_text or "").strip()
+    if not text:
+        return "null", "null"
+    if "No current position in" in text:
+        return "flat — no position at the analysis date", "null"
+    quantity = re.search(r"Current position in [^:]+:\s*(-?[\d.,]+)\s*units", text)
+    price = re.search(r"average price\s*(-?[\d.,]+)", text)
+    position = f"{quantity.group(1)} units" if quantity else "null"
+    return position, (price.group(1) if price else "null")
+
+
+def evidence_pack(ticker: str, as_of: str) -> str:
+    """The corpus's document index for this ticker, point-in-time filtered.
+
+    The same listing the corpus tool serves (dates, types, withheld-after-cutoff
+    section), so a prompt-time "evidence pack" and a tool call agree on which
+    documents existed on the analysis date. No corpus configured is a stated
+    gap, not an empty pack.
+    """
+    from tradingagents.dataflows.vendors.research_corpus import (
+        list_research_documents as corpus_list_documents,
+        research_dir_from_env,
+        resolve_corpus_root,
+    )
+
+    root = research_dir_from_env()
+    if root is None:
+        return "null — no research corpus is configured for this run."
+    try:
+        return corpus_list_documents(
+            ticker=ticker, as_of=as_of, types="", root=str(resolve_corpus_root(root, ticker))
+        )
+    except Exception as exc:  # noqa: BLE001 - a listing failure is a stated gap, never a crash
+        return f"null — the evidence pack could not be listed ({type(exc).__name__})."
 
 
 def report_or_absent(text: str, source: str) -> str:

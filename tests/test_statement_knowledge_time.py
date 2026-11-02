@@ -14,6 +14,7 @@ import pytest
 from tradingagents import default_config
 from tradingagents.dataflows import router
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.errors import VendorNotConfiguredError
 from tradingagents.dataflows.vendors.alpha_vantage import fundamentals as alpha_vantage
 from tradingagents.dataflows.vendors.yahoo import fundamentals as yahoo
 
@@ -55,6 +56,12 @@ def test_statements_come_from_sec_edgar_first_by_default():
     served = []
     chain = {name: (lambda *a, _n=name, **k: served.append(_n) or f"{_n} statements")
              for name in router.VENDOR_METHODS["get_balance_sheet"]}
+
+    def _bloomberg_refuses(*a, **k):
+        # What the real blpapi backend does: balance sheets are not implemented.
+        raise VendorNotConfiguredError("balance sheets are not implemented on blpapi")
+
+    chain["bloomberg"] = _bloomberg_refuses
     with mock.patch.dict(router.VENDOR_METHODS, {"get_balance_sheet": chain}):
         router.route_to_vendor("get_balance_sheet", "AAPL", "quarterly", PAST)
     assert served == ["sec_edgar"]

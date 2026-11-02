@@ -100,6 +100,41 @@ def _normalize_crypto(s: str) -> str | None:
     return f"{base}-USD" if base else None
 
 
+# Bloomberg's exchange codes in dot form, translated to the suffixes this
+# system uses everywhere — identity, the benchmark map, corpus folders, the
+# memory log and report folder names all key on them. Only codes that are NOT
+# Yahoo suffixes appear here, so a valid ticker can never be rewritten:
+# `.SS` (Shanghai) is deliberately absent even though Bloomberg's Sweden is SS.
+BLOOMBERG_SUFFIXES = {
+    ".JT": ".T",     # Japan
+    ".TT": ".TW",    # Taiwan
+    ".LN": ".L",     # London
+    ".AU": ".AX",    # Australia
+    ".CN": ".TO",    # Canada
+    ".GR": ".DE",    # Germany (Xetra)
+    ".FP": ".PA",    # France (Paris)
+    ".SP": ".SI",    # Singapore
+    ".US": "",       # the US has no Yahoo suffix
+}
+
+
+def canonical_ticker(raw: str) -> str:
+    """The system's own form of a ticker, whatever dialect the caller used.
+
+    ``3711.TT`` (Bloomberg) and ``3711.TW`` (this system) are one instrument;
+    every entry point — the CLI, ``propagate``, backtests, the corpus resolver
+    — runs input through here once, so every downstream key agrees. An
+    unrecognised suffix passes through untouched: a wrong guess is a wrong
+    instrument, so it fails later where a mapping is required.
+    """
+    value = str(raw or "").strip()
+    head, dot, suffix = value.rpartition(".")
+    if not dot or not head:
+        return value
+    mapped = BLOOMBERG_SUFFIXES.get("." + suffix.upper())
+    return f"{head}{mapped}" if mapped is not None else value
+
+
 def normalize_symbol(raw: str) -> str:
     """Map a user/broker symbol to its canonical Yahoo Finance symbol.
 
@@ -124,6 +159,10 @@ def normalize_symbol(raw: str) -> str:
     s = raw.strip().upper()
     # Broker CFD/qualifier suffixes Yahoo never uses.
     s = s.rstrip("+")
+    # A Bloomberg-style exchange suffix (3711.TT) before anything else: these
+    # codes are not Yahoo's, so translating them cannot collide with a rule
+    # below, and the alias tables then see the symbol the vendor understands.
+    s = canonical_ticker(s)
 
     crypto = _normalize_crypto(s)
     if s in _ALIASES:

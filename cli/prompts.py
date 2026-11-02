@@ -740,6 +740,30 @@ def ensure_api_key(provider: str) -> str | None:
     return key
 
 
+def ask_decision_horizon(default: str | None = None) -> str:
+    """Ask for the horizon the technical analysis is framed against.
+
+    Free text — "intraday", "3-6 months", "12+ months" — and genuinely
+    optional: Enter keeps the default and a cancel falls back to it rather
+    than exiting the run (unlike the required provider/model prompts).
+    """
+    fallback = (default or "").strip() or "3-6 months"
+    answer = questionary.text(
+        "Decision horizon for the technical analysis "
+        "(e.g. intraday, 3-6 months, 12+ months):",
+        default=fallback,
+        style=questionary.Style(
+            [
+                ("text", "fg:green"),
+                ("highlighted", "noinherit"),
+            ]
+        ),
+    ).ask()
+    if answer is None:
+        return fallback
+    return answer.strip() or fallback
+
+
 def ask_output_language(default=None) -> str:
     """Ask for report output language.
 

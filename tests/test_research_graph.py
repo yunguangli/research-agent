@@ -114,6 +114,16 @@ def test_citations_are_told_to_avoid_the_figure_marker():
     assert "Documents cited" in prompt
 
 
+def test_prompt_sends_the_vendor_statement_tools_to_fallback():
+    """Corpus first: the documents are the primary evidence, Bloomberg only
+    fills the periods they never state."""
+    Recorder.prompts = []
+    create_fundamentals_analyst(Recorder(), tools=[*TOOLS, *CORPUS_TOOLS])(_state(PACKAGE))
+    prompt = _system_prompt(Recorder.prompts[0])
+    assert "FALLBACK" in prompt
+    assert "a number stated in a document wins" in prompt
+
+
 def test_the_unit_rule_converts_hundred_million_yen():
     Recorder.prompts = []
     create_fundamentals_analyst(Recorder(), tools=[*TOOLS, *CORPUS_TOOLS])(_state(PACKAGE))
@@ -129,6 +139,66 @@ def test_the_verified_model_is_injected_and_must_not_be_recalculated():
     assert "VERIFIED MODEL" in prompt
     assert "revenue 130.0" in prompt
     assert "do not recompute" in prompt
+
+
+def test_every_template_placeholder_is_filled_from_the_run():
+    """The 24-section template is rendered, never shipped with {{…}} intact,
+    and the sections that carry the contract reach the model."""
+    Recorder.prompts = []
+    state = _state(PACKAGE)
+    state["decision_horizon"] = "3-6 months"
+    state["portfolio_context"] = (
+        "Portfolio at the analysis date:\n"
+        "- Current position in TEST: 500 units, average price 7,980.00\n"
+        "- Cash available: 1,000.00 USD"
+    )
+    create_fundamentals_analyst(Recorder(), tools=[*TOOLS, *CORPUS_TOOLS])(state)
+    prompt = _system_prompt(Recorder.prompts[0])
+    assert "{{" not in prompt and "}}" not in prompt
+    # runtime context filled from state
+    assert "Analysis date: 2026-10-28" in prompt
+    assert "Instrument: TEST" in prompt
+    assert "Decision horizon: 3-6 months" in prompt
+    assert "Current position: 500 units" in prompt
+    assert "Average cost: 7,980.00" in prompt
+    # the output contract arrived intact
+    assert "1. RUNTIME CONTEXT" in prompt
+    assert "## 1. Executive conclusion" in prompt
+    assert "## 14. Summary table" in prompt
+    assert "24. FINAL QUALITY CHECK" in prompt
+    # the tools actually bound to this node are the ones listed
+    assert "get_fundamentals(" in prompt and "list_research_documents(" in prompt
+
+
+def test_the_investor_context_stays_null_without_a_portfolio_or_horizon():
+    Recorder.prompts = []
+    create_fundamentals_analyst(Recorder())(_state())
+    prompt = _system_prompt(Recorder.prompts[0])
+    assert "Decision horizon: null" in prompt
+    assert "Current position: null" in prompt
+    # no corpus, no model: their blocks are null, not half-present
+    assert "Available research corpus:\nnull" in prompt
+    assert "Available normalized financial dataset or verified model:\nnull" in prompt
+
+
+def test_another_companys_spec_is_neither_model_nor_consensus(monkeypatch, tmp_path):
+    """A leftover TRADINGAGENTS_RESEARCH_MODEL from an earlier test (Fujikura
+    during an ASE run) must supply neither the model nor its consensus."""
+    from tradingagents.graph import trading_graph as tg
+
+    from .test_research_kernel import spec as kernel_spec
+
+    path = tmp_path / "other.json"
+    data = kernel_spec().to_dict()
+    data["ticker"] = "5803.T"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv("TRADINGAGENTS_RESEARCH_MODEL", str(path))
+
+    assert tg._configured_spec("3711.TW") is None       # another company
+    assert tg._configured_spec("5803.T") is not None    # its own company
+
+    monkeypatch.setenv("TRADINGAGENTS_RESEARCH_MODEL", str(tmp_path / "missing.json"))
+    assert tg._configured_spec("5803.T") is None        # unreadable pointer ignored
 
 
 def test_graph_setup_adds_corpus_tools_to_fundamentals_only(monkeypatch, tmp_path):
@@ -176,11 +246,20 @@ def _spec(path, revenue_op=410.0):
         ],
         "guidance": {"FY25": {"revenue": 120.0, "operating_profit": 15.0, "net_profit": 9.0}},
         "forecast": {"FY26": {"net_profit": 10.0}},
-        "bridges": [{
-            "metric": "revenue", "base_period": "FY25", "target_period": "FY26",
-            "base_value": 120.0, "declared_total": 130.0,
-            "lines": [{"label": "New business", "value": 10.0}],
-        }],
+        "bridges": [
+            {
+                "metric": "revenue", "base_period": "FY25", "target_period": "FY26",
+                "base_value": 120.0, "declared_total": 130.0,
+                "lines": [{"label": "New business", "value": 10.0}],
+            },
+            # A forecast year carries its topline: revenue and operating profit
+            # are bridged, net profit alone would be an orphan (kernel rule).
+            {
+                "metric": "operating_profit", "base_period": "FY25", "target_period": "FY26",
+                "base_value": 15.0, "declared_total": 16.0,
+                "lines": [{"label": "New business", "value": 1.0}],
+            },
+        ],
         "share_bases": [{"name": "basic", "shares_m": 10.0}],
         "valuation": {
             "price": 20.0, "fair_value_multiple_low": 10.0, "fair_value_multiple_high": 12.0,

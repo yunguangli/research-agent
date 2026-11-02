@@ -46,6 +46,10 @@ def main(argv: list[str] | None = None) -> int:
     paths.add_argument("--ticker", default="", help="Also show this ticker's latest report folder")
 
     args = parser.parse_args(argv)
+    if getattr(args, "ticker", None):
+        from tradingagents.dataflows.symbols import canonical_ticker
+
+        args.ticker = canonical_ticker(args.ticker)
 
     if args.command == "paths":
         return _paths(args)

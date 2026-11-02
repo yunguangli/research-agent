@@ -33,6 +33,14 @@ class BloombergBackend(Protocol):
     def overview(self, symbol: str, as_of: str) -> str:
         """Company overview, or raise if the backend has no such field group."""
 
+    def identity(self, symbol: str) -> dict:
+        """Optional: the instrument's identity fields (``company_name``,
+        ``sector``, ``industry``) for the agents' prompts.
+
+        A backend that omits it is simply not asked — the caller falls back to
+        the vendor profile it already uses.
+        """
+
 
 _BACKENDS: dict[str, type] = {}
 

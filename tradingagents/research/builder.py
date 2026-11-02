@@ -32,7 +32,7 @@ SHAPE = """{
   ],
   "actuals":     {"FY3/26": {"revenue": 0, "operating_profit": 0, "ordinary_profit": 0, "net_profit": 0}},
   "guidance":    {"FY3/27": {"revenue": 0, "operating_profit": 0, "ordinary_profit": 0, "net_profit": 0}},
-  "forecast":    {"FY3/28": {"net_profit": 0, "ordinary_profit": 0}},
+  "forecast":    {"FY3/28": {"revenue": 0, "operating_profit": 0, "net_profit": 0, "ordinary_profit": 0}},
   "quarterly":   {"Q1 FY3/27": {"revenue": 0, "operating_profit": 0, "net_profit": 0}},
   "quarterly_plan": {"fy_label": "FY3/27", "h1_label": "H1 FY3/27", "q1_label": "Q1 FY3/27",
                      "h2_split": {"revenue": [0.5, 0.5], "operating_profit": [0.5, 0.5], "net_profit": [0.5, 0.5]}},
@@ -58,13 +58,33 @@ SHAPE = """{
 }"""
 
 RULES = """Rules:
-- Use the disclosed facts below exactly. Do not change a disclosed number.
+- Use the disclosed ACTUALS below exactly; never change a reported number.
+  Management's guidance inside those facts is a reference, not an answer — the
+  next rules say how you must use it.
 - Build the current fiscal year's quarters and the next fiscal year's quarters.
   Q2 of the current year is fully determined by H1 guidance minus Q1 actual;
   Q3/Q4 split H2 guidance, and you must state that split in quarterly_plan.
 - Give annual periods for the current fiscal year and the two following years.
+- Management guidance is a REFERENCE, not your forecast. Build your own view for
+  every guided period: put your numbers in "forecast" under the same period
+  label (they replace the guidance row in the model), set that period's basis to
+  "forecast", and leave management's numbers untouched in "guidance" — the
+  report prints both side by side and the debate reads them. Say in warnings, in
+  one sentence, where you differ from guidance and why. A forecast that equals
+  guidance on every line is adoption, not an independent build: derive it
+  bottom-up (your own quarters and bridges) and, if it lands on guidance,
+  say in warnings why it coincides. Quarters keep following management's timing;
+  do not bend the annual row to make them agree.
+- Every guidance AND forecast year needs revenue, operating profit and net
+  profit together. If the documents give no visibility for a later year,
+  forecast the topline from stated assumptions (or bridge it from the previous
+  year) — never leave revenue null while writing net profit: a net profit
+  without its topline is rejected by the validator.
 - Provide at least three scenarios: Bear, Base and Bull. Each carries its own EPS,
-  multiple and target. A single scenario is not a scenario analysis.
+  multiple and target. A single scenario is not a scenario analysis. Scenario
+  multiples must sit inside the declared fair-value multiples (the Base target
+  belongs within the fair-value range): one model cannot publish two valuations
+  that cannot both be right — if they disagree, reconcile them before returning.
 - Write cash-flow figures in the model's unit. Japanese filings quote 億円
   (100 million yen): 403億円 is JPY40.3bn, not JPY403bn. A capex figure near or
   above 20% of revenue is almost always a unit error.
@@ -85,6 +105,24 @@ RULES = """Rules:
 - Every forecast line comes from a named bridge line. Each bridge line's
   "provenance" is exactly one of: disclosed, guidance, derived, assumption,
   internal_note. Derived lines must carry a "formula" and the inputs in words.
+- Resolve relative time: when a document says "this year", "next year", "from
+  next quarter" or "starting 2H", map it against the DOCUMENT'S OWN date to an
+  explicit FY label, and say the mapping in warnings. A project's commencement
+  is not its revenue contribution: an investment decision or a ramp start is
+  not full-run-rate revenue — state the ramp you assume and when contribution
+  begins.
+- Bridge each metric from its own drivers. Do not infer revenue from an
+  operating-profit estimate (a broker's OP number implies a volume you cannot
+  see), and do not infer net profit from a revenue consensus. An external
+  estimate enters the metric it states, only.
+- Split H2 between Q3 and Q4 by the seasonality the documents or the reported
+  quarters actually show; use 50/50 only when nothing does, and say in warnings
+  that the split is an assumption.
+- Scenario multiples must come from market reasoning (peer multiples, the
+  company's own history, the rate environment), then the target follows as
+  EPS x multiple. Never choose a multiple because it lands the target inside
+  the fair-value range — that fits the multiple to the output, and the kernel
+  will compare the result to the band anyway.
 - Every non-obvious number carries a citation: document_id plus page or para.
   Use only document ids from the list below. A bridge line labelled "derived" or
   "internal_note" must cite the document it came from.
@@ -119,7 +157,7 @@ def _content(response) -> str:
     return str(content)
 
 
-def _figure_snippets(store, records, as_of: str | None, limit: int = 6) -> str:
+def _figure_snippets(store, records, as_of: str | None, limit: int = 8) -> str:
     """Passages that state headline figures, whatever the document's language.
 
     The excerpts above are the first pages of each document; a results table can sit
@@ -127,6 +165,10 @@ def _figure_snippets(store, records, as_of: str | None, limit: int = 6) -> str:
     """
     terms = (
         "net profit", "net income", "operating profit", "revenue",
+        # Period words: a quarterly results table often says "first quarter" and
+        # "results" without any headline term above, and Q1/Q2 actuals hidden
+        # behind them were reported as undisclosed.
+        "first quarter", "quarterly", "results",
         "当期純利益", "営業利益", "売上高", "親会社株主",
     )
     seen: set[str] = set()
@@ -146,12 +188,20 @@ def _figure_snippets(store, records, as_of: str | None, limit: int = 6) -> str:
 
 def build_prompt(*, ticker: str, company: str, as_of: str, facts_text: str,
                  index_text: str, excerpts: str, price: float | None,
-                 unit: str, currency: str, consensus=None, figures: str = "") -> str:
-    price_line = (
-        f"The share price for valuation is {price:,.0f} {currency}; use exactly this."
-        if price else
-        "No market price is available. Set valuation.price to 0 and add a warning saying so."
-    )
+                 unit: str, currency: str = "", consensus=None, figures: str = "") -> str:
+    # The corpus build cannot know the issuer's currency, so it must not claim
+    # one (a Taiwan listing priced "668 JPY" made the model flag a mismatch
+    # that should never have existed); a caller that knows passes it.
+    if not price:
+        price_line = "No market price is available. Set valuation.price to 0 and add a warning saying so."
+    elif currency:
+        price_line = f"The share price for valuation is {price:,.0f} {currency}; use exactly this."
+    else:
+        price_line = (
+            f"The share price for valuation is {price:,.0f} in the issuer's own currency — set "
+            '"currency" and "unit" to that currency (e.g. JPY/JPY_bn, TWD/TWD_bn, USD/USD_m) and '
+            "use exactly this price."
+        )
     consensus_block = ""
     if consensus is not None and consensus.periods:
         rows = []
@@ -283,12 +333,29 @@ def _resolve_label(mapping: dict, wanted: str | None, prefix: str | None) -> str
     return None
 
 
+def _year_token(label: str | None) -> str | None:
+    """The fiscal-year part of a label ("Q1 FY3/27" -> "FY3/27"), if it has one."""
+    if not label:
+        return None
+    match = re.search(r"FY\s*\d{1,2}/\d{2}|FY\d{2,4}", str(label), re.IGNORECASE)
+    return re.sub(r"\s+", "", match.group(0)).upper() if match else None
+
+
 def _repair_quarterly_plan(spec: ModelSpec) -> None:
     """Point the quarterly plan at labels that exist, or drop the plan.
 
-    A plan is a convenience: it derives Q2-Q4 from guidance. If its labels do not
-    match the guidance the model actually supplied, dropping the plan keeps the
-    rest of the model (and the explicit quarterly figures) usable.
+    A plan is a convenience: it derives Q2-Q4 from Q1 actual plus H1 and FY
+    guidance. If its labels do not match the guidance the model actually
+    supplied, dropping the plan keeps the rest of the model (and the explicit
+    quarterly figures) usable.
+
+    A missing H1 guidance row is different from a wrong label: the company gave
+    no half-year forecast, so the model could not supply one. The H1 total is
+    then rebuilt from the two reported quarters of that year — the Q2 line
+    becomes definitional (H1 - Q1 = Q2), but H2 = FY guidance - H1 still
+    cross-checks the reported Q3/Q4, which is the part that matters. Only when
+    the labels disagree about the year, or Q1/Q2 are missing, is the plan
+    dropped outright.
     """
     plan = spec.quarterly_plan
     if not isinstance(plan, dict):
@@ -300,6 +367,33 @@ def _repair_quarterly_plan(spec: ModelSpec) -> None:
         plan["h1_label"], plan["fy_label"], plan["q1_label"] = h1, fy, q1
         spec.quarterly_plan = plan
         return
+
+    # No H1 guidance row: rebuild H1 from the reported halves of the year the
+    # plan's own Q1 names. The labels must agree on that year first — a label
+    # pointing somewhere else is a wrong label, not a missing row.
+    if fy and q1:
+        year = _year_token(q1)
+        if year and _year_token(plan.get("h1_label")) == year:
+            q2 = _resolve_label(spec.quarterly, f"Q2 {year}", None)
+            first = spec.quarterly.get(q1)
+            second = spec.quarterly.get(q2) if q2 else None
+            h1_values: dict[str, float] = {}
+            if first is not None and second is not None:
+                for metric in ("revenue", "operating_profit", "net_profit"):
+                    half_year, half_quarter = first.get(metric), second.get(metric)
+                    if half_year is not None and half_quarter is not None:
+                        h1_values[metric] = half_year + half_quarter
+            if h1_values:
+                plan["fy_label"], plan["q1_label"] = fy, q1
+                plan["h1_values"] = h1_values
+                spec.quarterly_plan = plan
+                spec.warnings.append(
+                    f"Quarterly plan has no H1 guidance row: H1 rebuilt from reported "
+                    f"{q1} + {q2}, so the Q2 line is definitional; H2 = {fy} guidance - H1 "
+                    "still checks the reported Q3/Q4."
+                )
+                return
+
     spec.quarterly_plan = None
     spec.warnings.append(
         "Dropped the quarterly plan: its labels "
@@ -363,7 +457,7 @@ def build_spec(
     facts_text: str,
     price: float | None,
     unit: str = "JPY_bn",
-    currency: str = "JPY",
+    currency: str = "",   # unknown by default: an asserted-but-wrong currency is worse than none
     skip_documents: set[str] | None = None,
     max_attempts: int = 2,
     dump_path=None,

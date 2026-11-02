@@ -47,8 +47,14 @@ def test_a_marked_negative_figure_matches_its_negative_value():
     from tradingagents.research.schemas import Bridge, Line
 
     model_spec = spec(
-        bridges=[Bridge("revenue", "FY25", "FY26", 120.0, [Line("FX headwind", -5.0)],
-                        declared_total=115.0)]
+        bridges=[
+            # a forecast year keeps its topline: both revenue and operating
+            # profit are bridged, or the kernel rejects the orphan net profit
+            Bridge("revenue", "FY25", "FY26", 120.0, [Line("FX headwind", -5.0)],
+                   declared_total=115.0),
+            Bridge("operating_profit", "FY25", "FY26", 15.0, [Line("Scale", 1.0)],
+                   declared_total=16.0),
+        ]
     )
     model = kernel.run(model_spec)
     values = audit.known_values(model, value(model))
@@ -77,6 +83,51 @@ def test_the_marks_are_stripped_for_the_report():
 
 def test_marked_figures_are_listed_in_order():
     assert audit.marked_figures("[[1.0]] then [[2.0]] and [[1.0]]") == ["1.0", "2.0", "1.0"]
+
+
+def test_guidance_values_are_known_even_when_the_forecast_overrides_them():
+    """Management's guidance is printed in the package's comparison table, so
+    marking it quotes the model's own artifact — the rows no longer carry it."""
+    from tradingagents.research.schemas import Bridge, Financials, Line
+
+    model_spec = spec(
+        forecast={"FY26": Financials(net_profit=10.0), "FY25": Financials(revenue=130.0)},
+        bridges=[
+            Bridge("revenue", "FY25", "FY26", 130.0, [Line("New business", 10.0)],
+                   declared_total=140.0),
+            Bridge("operating_profit", "FY25", "FY26", 15.0, [Line("New business", 1.0)],
+                   declared_total=16.0),
+        ],
+        segments={},
+    )
+    model_spec.periods[1].basis = "forecast"
+    model_spec.scenarios[0].multiple = 10.0    # FY25 anchors the fair value (EPS 0.9):
+                                               # keep the Base target inside its band
+    model = kernel.run(model_spec)
+    values = audit.known_values(model, value(model), [])
+    assert 120.0 in values                        # guidance, not in any row
+    assert audit.audit_text("Management said [[120.0]] for FY25.", "F", values) == []
+
+
+def test_numbers_inside_bridge_formulas_are_model_content():
+    """H1 actuals and H2 guidance appear in the package as bridge formulas
+    ('H1 262.5 less 195.5 = 67.0'); analysts mark them from there."""
+    model_spec = spec()
+    model_spec.bridges[0].lines[0].formula = "H1 262.5 less 195.5 = 67.0 delta"
+    model = kernel.run(model_spec)
+    values = audit.known_values(model, value(model), [])
+    assert audit.audit_text("H1 was [[262.5]] vs [[195.5]].", "F", values) == []
+
+
+def test_the_rendered_scenario_change_is_a_known_figure():
+    """The package prints scenarios as '(-42%)'; a mark on that percent is a
+    quote of the package, not a misquote."""
+    model = kernel.run(spec())
+    val = value(model)
+    rendered = int(f"{val.scenarios[0]['change'] * 100:.0f}")
+    values = audit.known_values(model, val, [])
+    assert float(rendered) in values and float(abs(rendered)) in values
+    assert audit.audit_text(f"The bear case sits at [[{abs(rendered)}]].", "F", values) == []
 
 
 def test_a_state_audit_checks_the_four_written_sections():
@@ -173,3 +224,265 @@ def test_the_same_misquote_twice_on_one_line_is_one_finding():
     _model, _valuation, values = known()
     findings = audit.audit_text("EPS [[1.4]] and again [[1.4]].", "F", values)
     assert [finding.number for finding in findings] == [1.4]
+
+
+def test_a_sign_glued_outside_the_brackets_counts_as_the_sign():
+    """Models write −[[14]]; the figure is −14, which the model has."""
+    assert audit.marked_figures("profit −[[14]] tax") == ["−14"]
+    assert audit.audit_text("profit −[[14]] tax", "F", {-14.0}) == []
+
+
+def test_an_unmarked_sign_still_flags():
+    """[[14]] on its own claims +14, and +14 against a model of −14 is a finding."""
+    findings = audit.audit_text("profit [[14]] tax", "F", {-14.0})
+    assert [finding.number for finding in findings] == [14.0]
+
+
+# --- comparative claims (relational consistency) -----------------------------
+
+# The sentence the 4062.T report published: every figure right, the relation false.
+C_CLAIM = ("(c) Net profit already exceeds the prior full year at the half-year mark: "
+           "H1 FY3/27 net profit of 38.6bn versus 63.7bn for all of FY3/26 63.7.")
+BULL_CLAIM = ("Positive indicators are everywhere except the daily chart. Net cash is ~¥258bn, "
+              "the equity ratio is 53.5%, H1 net profit of ¥38.6bn already exceeds all of "
+              "FY3/26, and the dividend is progressive with a 20% payout guideline.")
+
+
+def _relations(text, table=None):
+    return audit.relational_findings(text, "S", {} if table is None else table, "JPY_bn")
+
+
+def test_a_claim_contradicted_by_its_own_printed_figures_is_flagged():
+    findings = _relations(C_CLAIM)
+    assert [finding.kind for finding in findings] == ["relation"]
+
+
+def test_the_true_version_of_the_same_claim_is_not_flagged():
+    assert _relations(
+        "H1 net profit of 63.7bn already exceeds the 38.6bn of the prior full year."
+    ) == []
+
+
+def test_the_debate_repetition_is_caught_by_the_model_period_label():
+    """The bull prints only one operand; the object is the model's own row."""
+    table = {"FY3/26": {"net_profit": 63.7}}
+    findings = _relations(BULL_CLAIM, table)
+    assert [finding.kind for finding in findings] == ["relation"]
+    assert _relations("H1 net profit of ¥70.0bn already exceeds all of FY3/26.", table) == []
+    assert _relations(BULL_CLAIM) == []          # no model rows: Tier 2 has no object
+
+
+def test_a_delta_welded_to_the_predicate_is_not_a_false_subject():
+    assert _relations(
+        "The model's 190.0 matches consensus and sits 25.0 above company guidance "
+        "of 165.0, because management is conservative."
+    ) == []
+    # the unit suffix and markdown emphasis must not break the weld
+    assert _relations(
+        "The model assumes FY3/28 OP of ¥190bn, which is already §25bn above company "
+        "guidance of ¥165bn."
+    ) == []
+    assert _relations(
+        "The model's 190.0 sits 25.0 *above* company guidance of 165.0."
+    ) == []
+    # percent deltas: "2% above base and 3% above base" never compares 2 with 3
+    assert _relations(
+        "My aggressive case is modest: 2% above base revenue and 3% above base "
+        "operating profit for FY3/28, with the base 50x multiple doing the work."
+    ) == []
+
+
+def test_a_case_blob_is_data_not_prose():
+    blob = '{"stance": "bearish", "probability": 0.34, "revenue_pct": -2.0, "momentum": ' \
+           '"Negative: lower high at 12,580 vs 13,750, below 50D, MACD -473"}'
+    assert _relations(blob) == []
+
+
+def test_a_claim_in_a_new_clause_is_not_paired_with_the_previous_figure():
+    """The Nov 2 run's five findings were all this shape: the predicate opened
+    its own clause with an implied subject, so the figure before it is not the
+    thing being compared."""
+    assert _relations(
+        "But this is a capital-intensive manufacturer with capex around ¥200bn this "
+        "year, ¥350bn next year and more than ¥400bn thereafter, and with operating "
+        "cash flow ex-customer-advances of roughly ¥74bn against ¥48bn of H1 capex."
+    ) == []
+    assert _relations(
+        "…ex-advances H1 operating cash flow is closer to ¥74bn against ¥48bn of H1 "
+        "capex, and capex is stepping to roughly ¥350bn next year and above ¥400bn "
+        "thereafter."
+    ) == []
+    assert _relations("**Stop Loss**: ¥7,779 on a weekly close (cut to half); full "
+                      "exit below ¥7,400.") == []
+    assert _relations(
+        "Hold at 1.0x standard allocation through a 12.8% gap-down, with a "
+        "weekly-close half-cut only at 7,779 and full exit below 7,400, means you "
+        "stay fully exposed."
+    ) == []
+    # a true comparison in the same shape is skipped too — precision first
+    assert _relations(
+        "Free cash flow of ¥26.1bn is far below the capex step-up to ¥350bn in "
+        "FY3/28, and more than ¥400bn a year thereafter."
+    ) == []
+
+
+def test_a_hedge_counts_only_inside_the_claim():
+    """An 'about' elsewhere in the sentence must not widen THIS comparison's
+    tolerance — that accident let a stop-loss line through on Nov 2."""
+    assert len(_relations(
+        "Revenue of 395bn exceeds 416.2bn, and about 60% of that is seasonal."
+    )) == 1
+    assert _relations("Revenue of 395bn roughly exceeds 416.2bn.") == []
+
+
+def test_the_object_must_stay_in_the_claims_own_clause():
+    """The Nov 2 11:55 findings: a duration idiom whose 'object' sits in the
+    next clause, and a negated cap whose two percentages are unrelated."""
+    assert _relations(
+        "4062.T has fallen from a 12400 close (2026-10-06) to 8165, −34.2% in under "
+        "a month, and now sits only 4.9% above a rising average."
+    ) == []
+    assert _relations(
+        "The plan's current sizing guidance—each tranche sized so stop risk is no "
+        "more than 0.5% of portfolio—is based on a 5.7% stop distance."
+    ) == []
+    # the colon appositive is NOT a boundary: the known true positive still flags
+    assert len(_relations(
+        "(c) Net profit already exceeds the prior full year at the half-year mark: "
+        "H1 FY3/27 net profit of 38.6bn versus 63.7bn for all of FY3/26 63.7."
+    )) == 1
+
+
+def test_operands_read_the_unicode_minus():
+    operands = audit._operands("changed −34.2% versus -5.0%")
+    assert [operand[2] for operand in operands] == [-34.2, -5.0]
+
+
+def test_a_sentence_ending_before_a_ticker_still_splits():
+    """The digit guard used to glue "…the analyst will. 4062.T is below…" into
+    one sentence, and the claim then paired 10 against 9,047.92."""
+    text = ("On the downtrend, I agree with the tape more than the conservative "
+            "analyst will. 4062.T is below the 10 EMA at 9,047.92 and recovered.")
+    assert _relations(text) == []
+
+
+def test_an_indicators_period_is_not_a_figure():
+    """"8,165 is below the 10 EMA at 9,047.92" must pair the price with the
+    price, not with the 10 in the indicator's name — and the claim is true."""
+    assert _relations(
+        "4062.T at 8,165 is below the 10 EMA at 9,047.92 and the 50 SMA at "
+        "10,170.47, RSI is 37.85, MACD histogram is −144.48, and VWMA at 9,182.74 "
+        "is above the 8,165 price."
+    ) == []
+
+
+def test_a_spaced_sign_belongs_to_the_marked_figure():
+    """The bridge writer puts the minus outside and a space after it: the figure
+    is −19.0 (which the model has), not +19.0."""
+    assert audit.marked_figures("base 89.0 + 57.0 OP increase − [[19.0]] tax") == ["−19.0"]
+    # …but a completed figure before the sign means subtraction, not a sign
+    assert audit.marked_figures("[[1,200]] − [[300]] costs") == ["1,200", "300"]
+    assert audit.marked_figures("margin fell from 5 − [[3]] points") == ["3"]
+
+
+def test_a_prepositional_object_without_a_subject_is_not_paired_backwards():
+    assert _relations("**Invalidation:** a close below 7,883, which would open the "
+                      "200-day SMA at 7,756.7.") == []
+
+
+def test_units_that_do_not_line_up_are_skipped():
+    assert _relations("The 22.9% margin exceeds 15.0bn.") == []
+    assert _relations("Profit of 38.6 exceeds 63.7bn.") == []   # a bare number's unit is unknowable
+
+
+def test_a_range_makes_the_pairing_ambiguous():
+    assert _relations("The band 6,915-8,644 exceeds spot 8,359.") == []
+
+
+def test_table_rows_are_column_structure_not_claims():
+    assert _relations("| Zone | Basis |\n| 7,883 - 8,248 | above the low |") == []
+
+
+def test_a_hedged_claim_needs_a_gross_violation_to_flag():
+    assert _relations("Revenue of 395bn roughly exceeds 416.2bn.") == []
+    assert len(_relations("Revenue of 395bn exceeds 416.2bn.")) == 1
+
+
+def test_dates_ticks_days_and_basis_points_are_not_operands():
+    text = ("On 2026-10-30 the 4062.T close of 8,359 is below VWMA (9,340.8), while the "
+            "50-day line sits above and the range spanned 250bp.")
+    assert _relations(text) == []
+
+
+def test_the_state_audit_finds_false_comparisons_in_every_prose_section():
+    model, valuation, _values = known()
+    state = {
+        "fundamentals_report": C_CLAIM,
+        "investment_debate_state": {
+            "challenge_history": "Adversarial Analyst: H1 net profit of 4.0 already exceeds all of FY24.",
+        },
+    }
+    stats: dict = {}
+    findings = audit.audit_state(state, model, valuation, stats=stats)
+    relations = [finding for finding in findings if finding.kind == "relation"]
+    assert {finding.section for finding in relations} == {"Fundamentals Analyst", "Adversarial Reviewer"}
+    # figure statistics are untouched by the relational scan: only zeroes were
+    # recorded (these sections mark no figures), never a relation count
+    assert not any(stats.get("sections", {}).values())
+
+
+def test_render_reports_relational_findings_in_their_own_block():
+    relation = audit.Finding("Fundamentals Analyst", 38.6, C_CLAIM, kind="relation")
+    text = audit.render([relation], stats={"marked": 0, "sections": {}})
+    assert "contradict the figures" in text
+    assert "nothing was checked" not in text
+
+
+def test_render_keeps_the_figure_table_and_adds_the_relation_block():
+    mixed = [
+        audit.Finding("F", 999.0, "FY26 revenue 999.0"),
+        audit.Finding("F", 38.6, C_CLAIM, kind="relation"),
+    ]
+    text = audit.render(mixed, stats={"marked": 1, "sections": {"F": 1}})
+    assert "do not match the verified model" in text
+    assert "contradict the figures" in text
+
+
+def test_the_repair_replaces_the_false_claim_with_the_true_relationship():
+    model = kernel.run(spec())
+    state = {"fundamentals_report": C_CLAIM}
+    findings = audit.relational_findings(
+        C_CLAIM, "Fundamentals Analyst", audit._period_table(model), model.spec.unit
+    )
+    fixed = ("H1 FY3/27 net profit reached 38.6bn, approximately 61% of the prior full "
+             "year's 63.7bn.")
+    changed = audit.repair_relations(state, findings, lambda prompt: fixed, model=model)
+    assert changed == ["Fundamentals Analyst"]
+    assert state["fundamentals_report"] == fixed
+    assert audit.relational_findings(fixed, "F", audit._period_table(model), model.spec.unit) == []
+
+
+def test_a_repair_that_still_contradicts_the_figures_is_rejected():
+    model = kernel.run(spec())
+    state = {"fundamentals_report": C_CLAIM}
+    findings = audit.relational_findings(
+        C_CLAIM, "Fundamentals Analyst", audit._period_table(model), model.spec.unit
+    )
+    worse = "H1 net profit of 10.0bn already exceeds the prior full year of 63.7bn."
+    assert audit.repair_relations(state, findings, lambda prompt: worse, model=model) == []
+    assert state["fundamentals_report"] == C_CLAIM
+
+
+def test_a_failed_or_stub_repair_leaves_the_text_alone():
+    model = kernel.run(spec())
+    state = {"fundamentals_report": C_CLAIM}
+    findings = audit.relational_findings(
+        C_CLAIM, "Fundamentals Analyst", audit._period_table(model), model.spec.unit
+    )
+
+    def boom(prompt):
+        raise RuntimeError("provider unavailable")
+
+    assert audit.repair_relations(state, findings, boom, model=model) == []
+    assert audit.repair_relations(state, findings, lambda prompt: "Report.", model=model) == []
+    assert state["fundamentals_report"] == C_CLAIM

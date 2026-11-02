@@ -115,3 +115,71 @@ def test_the_prompt_text_is_empty_when_no_year_is_public():
 def test_the_unit_sets_the_scale():
     years = vendor_facts.parse_annual_statement(STATEMENT, "USD_m")
     assert years["2026-03-31"].revenue == pytest.approx(1_182_400.0)
+
+
+def test_the_statement_unit_follows_the_market_not_the_ticker():
+    # Asian markets report in billions (億/억); everything else in millions.
+    assert vendor_facts.statement_unit("5803.T") == "LOCAL_bn"
+    assert vendor_facts.statement_unit("3711.TW") == "LOCAL_bn"
+    assert vendor_facts.statement_unit("005930.KS") == "LOCAL_bn"
+    assert vendor_facts.statement_unit("AAPL") == "LOCAL_m"
+    assert vendor_facts.statement_unit("AAPL.US") == "LOCAL_m"
+    assert vendor_facts.statement_unit("") == "LOCAL_m"
+
+
+def test_the_vendor_text_is_labelled_as_fallback_evidence():
+    """Corpus first: the prompt must say a figure stated in a document wins."""
+    years = {"2024-03-31": ReportedYear("2024-03-31", revenue=100.0)}
+    annual = vendor_facts.describe(years, "2026-10-30")
+    quarters = vendor_facts.describe_quarters(years, "2026-10-30")
+    for text in (annual, quarters):
+        assert "fallback evidence" in text
+        assert "the document wins" in text
+    assert "year ended 2024-03-31" in annual
+    assert "quarter ended 2024-03-31" in quarters
+    assert vendor_facts.describe({}, "2026-10-30") == ""
+    assert vendor_facts.describe_quarters({}, "2026-10-30") == ""
+
+
+# The six real quarterly rows Bloomberg serves for 4062 JP Equity: millions of
+# yen dated on fiscal period ends — the Q1/Q2 figures the model had estimated.
+QUARTERS = [
+    {"Date": "2025-06-30", "IS_ADJ_SALES_REVENUE_TURNOVER": 97464.0, "IS_OPER_INC": 17636.0, "NET_INCOME": 12728.0},
+    {"Date": "2025-09-30", "IS_ADJ_SALES_REVENUE_TURNOVER": 98021.0, "IS_OPER_INC": 14937.0, "NET_INCOME": 9341.0},
+    {"Date": "2025-12-31", "IS_ADJ_SALES_REVENUE_TURNOVER": 103136.0, "IS_OPER_INC": 11954.0, "NET_INCOME": 8931.0},
+    {"Date": "2026-03-31", "IS_ADJ_SALES_REVENUE_TURNOVER": 117580.0, "IS_OPER_INC": 17500.0, "NET_INCOME": 32713.0},
+    {"Date": "2026-06-30", "IS_ADJ_SALES_REVENUE_TURNOVER": 123219.0, "IS_OPER_INC": 26880.0, "NET_INCOME": 17918.0},
+    {"Date": "2026-09-30", "IS_ADJ_SALES_REVENUE_TURNOVER": 139327.0, "IS_OPER_INC": 33236.0, "NET_INCOME": 20656.0},
+]
+
+
+def _csv(quarterly: bool, as_of: str) -> str:
+    from tradingagents.dataflows.vendors.bloomberg.blpapi_backend import _income_statement_csv
+
+    return _income_statement_csv(QUARTERS, quarterly=quarterly, as_of=as_of)
+
+
+def test_the_backend_quarterly_statement_withholds_the_unfiled_quarter():
+    quarters = vendor_facts.parse_annual_statement(_csv(True, "2026-10-30"), "JPY_bn")
+    # 2026-09-30 + 90 days is after the run: that quarter could not have been filed.
+    assert "2026-09-30" not in quarters
+    # Q1 FY3/27, an actual where the model had an estimate.
+    assert quarters["2026-06-30"].revenue == pytest.approx(123.219)
+    assert quarters["2026-06-30"].operating_profit == pytest.approx(26.880)
+    assert quarters["2026-06-30"].net_profit == pytest.approx(17.918)
+
+
+def test_the_backend_annual_statement_sums_the_four_quarters():
+    years = vendor_facts.parse_annual_statement(_csv(False, "2026-10-30"), "JPY_bn")
+    fy26 = years["2026-03-31"]
+    # 97,464 + 98,021 + 103,136 + 117,580 = 416,201 million = the model's 416.1bn.
+    assert fy26.revenue == pytest.approx(416.201)
+    assert fy26.operating_profit == pytest.approx(62.027)
+    assert fy26.net_profit == pytest.approx(63.713)
+    # An incomplete four-quarter window is never published as a part year.
+    assert "2025-06-30" not in years
+
+
+def test_everything_is_withheld_for_a_same_day_run():
+    with pytest.raises(vendor_facts.VendorFactsError, match="no annual statement"):
+        vendor_facts.parse_annual_statement(_csv(True, "2025-06-30"), "JPY_bn")

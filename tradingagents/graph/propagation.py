@@ -18,6 +18,7 @@ class Propagator:
         past_context: str = "",
         instrument_context: str = "",
         portfolio_context: str = "",
+        decision_horizon: str = "",
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -25,7 +26,8 @@ class Propagator:
         resolved once at run start (see
         ``TradingAgentsGraph.resolve_instrument_context``). When empty, agents
         fall back to ticker-only context via
-        ``get_instrument_context_from_state``.
+        ``get_instrument_context_from_state``. ``decision_horizon`` frames the
+        market analyst's report; empty leaves its own fallback in force.
         """
         return {
             "messages": [("human", company_name)],
@@ -36,10 +38,12 @@ class Propagator:
             "past_context": past_context,
             "memory_note": "",
             "portfolio_context": portfolio_context,
+            "decision_horizon": decision_horizon,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",
                     "bear_history": "",
+                    "challenge_history": "",
                     "history": "",
                     "current_response": "",
                     "count": 0,

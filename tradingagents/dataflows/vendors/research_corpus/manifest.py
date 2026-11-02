@@ -7,7 +7,7 @@ Nothing here talks to a network or a vendor; the folder is the source of truth.
 Every record carries what a point-in-time system needs: when the document became
 public, what kind of document it is, what may be mined from it, and whether it
 may be sent to an LLM. When the date cannot be established the record is kept
-but flagged, and it is withheld from historical runs rather than guessed.
+but flagged, and its timing is reported as unverified rather than guessed.
 """
 
 from __future__ import annotations
@@ -186,6 +186,24 @@ def _sha256(path: Path) -> str:
 def _document_id(ticker: str, relative_path: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", Path(relative_path).stem.lower()).strip("-")[:48]
     return f"doc-{ticker}-{slug}" if ticker else f"doc-{slug}"
+
+
+# The report tree a run writes (`reporting._SECTIONS`) plus the combined
+# report. A report saved into a corpus folder — by answering the save-path
+# prompt with that folder — is an OUTPUT of the corpus, never evidence for it:
+# feeding it back would let the analysis cite its own conclusions.
+_REPORT_FOLDERS = frozenset({
+    "1_analysts", "1b_research", "1c_audit", "1d_cases",
+    "2_research", "3_trading", "4_risk", "5_portfolio",
+})
+
+
+def _is_report_output(relative_path: str) -> bool:
+    parts = Path(relative_path).parts
+    return (
+        any(part in _REPORT_FOLDERS for part in parts)
+        or Path(relative_path).name.lower().startswith("complete_report")
+    )
 
 
 def classify(name: str) -> tuple[str, list[str]]:
@@ -452,6 +470,8 @@ def scan_corpus(
 
         override = overrides.get(relative, {})
         doc_type, contains = classify(path.name)
+        if "doc_type" not in override and _is_report_output(relative):
+            doc_type, contains = "reference_output", ["report"]
         warnings: list[str] = []
 
         published_at = override.get("published_at")

@@ -106,6 +106,17 @@ def _margin(numerator: float | None, denominator: float | None) -> float | None:
     return numerator / denominator * 100.0
 
 
+def _warn(spec: ModelSpec, message: str) -> None:
+    """Append a computed warning once.
+
+    The spec is validated again on every load, and the build already wrote its
+    warnings into the file — without this, each run() re-appends the same
+    capex/unit warning and the published package shows it twice.
+    """
+    if message not in spec.warnings:
+        spec.warnings.append(message)
+
+
 def run(spec: ModelSpec) -> ModelResult:
     """Build every period row and validate the model's arithmetic."""
     checks: list[Check] = []
@@ -123,6 +134,14 @@ def run(spec: ModelSpec) -> ModelResult:
         if unknown:
             errors.append(f"{group_name} refers to undeclared period(s): {sorted(unknown)}")
 
+    labels = [p.label for p in spec.periods]
+    duplicates = sorted({label for label in labels if labels.count(label) > 1})
+    if duplicates:
+        errors.append(
+            f"period label(s) declared more than once: {duplicates} — keep exactly one "
+            "entry per period and change its basis instead of adding a second one"
+        )
+
     by_period: dict[str, Financials] = {}
     sources: dict[str, dict[str, str]] = {}
 
@@ -135,6 +154,29 @@ def run(spec: ModelSpec) -> ModelResult:
         merged = _merge(by_period.get(label), fin)
         by_period[label] = merged
         sources.setdefault(label, {}).update(dict.fromkeys(_present(fin), "forecast"))
+
+    # Guidance is reference: a period still labelled "guidance" whose numbers
+    # were forecast over would print management's label above the model's own
+    # figures — relabel it, keeping management's numbers in the guidance block.
+    for period in spec.periods:
+        if period.basis != "guidance":
+            continue
+        guided = spec.guidance.get(period.label)
+        if guided is None:
+            continue
+        current = by_period.get(period.label, Financials())
+        differing = [
+            name for name in ("revenue", "operating_profit", "net_profit")
+            if guided.get(name) is not None and current.get(name) is not None
+            and abs(guided.get(name) - current.get(name)) > TOL
+        ]
+        if differing:
+            errors.append(
+                f"{period.label} is labelled basis 'guidance' but its "
+                f"{' and '.join(differing)} differ from management's guidance: set that "
+                "period's basis to 'forecast' (the guidance block keeps management's "
+                "numbers for the comparison table)"
+            )
 
     # Bridges fill or confirm revenue / operating profit for the target period.
     for bridge in spec.bridges:
@@ -177,6 +219,30 @@ def run(spec: ModelSpec) -> ModelResult:
         setattr(target, bridge.metric, bridge.total)
         sources.setdefault(bridge.target_period, {})[bridge.metric] = "bridge"
 
+    # --- the topline must exist for whatever the model forecasts ----------
+    # A forecast year with net profit but no revenue or operating profit is an
+    # orphan: EPS computes anyway while margin and growth read n/a, so a reader
+    # sees a bottom line with no business behind it. The fix is to forecast the
+    # topline — state the assumption and bridge it — never to drop it.
+    for period in spec.periods:
+        if period.basis == "actual":
+            continue    # a disclosure gap in a reported year cannot be filled
+        fin = by_period.get(period.label, Financials())
+        if fin.net_profit is None:
+            continue
+        missing = [
+            name for name, value in
+            (("revenue", fin.revenue), ("operating_profit", fin.operating_profit))
+            if value is None
+        ]
+        if missing:
+            errors.append(
+                f"{period.label} forecasts net profit {fin.net_profit:g} without "
+                f"{' and '.join(missing)}: forecast the topline and operating profit as "
+                "well — state the assumption and bridge them from the previous year; "
+                "net profit cannot be modelled on its own"
+            )
+
     rows: list[PeriodRow] = []
     for period in spec.periods:
         fin = by_period.get(period.label, Financials())
@@ -196,6 +262,31 @@ def run(spec: ModelSpec) -> ModelResult:
             sources=sources.get(period.label, {}),
         )
         rows.append(row)
+
+    # A forecast that lands on management's guidance for every line was adopted,
+    # not built: the guidance table prints +0.0% everywhere and a reader cannot
+    # tell whose numbers these are. The model may still arrive at guidance from
+    # its own quarters — but then it says so, in a warning naming the period.
+    for row in rows:
+        guided = spec.guidance.get(row.label)
+        if guided is None or row.basis == "guidance":
+            continue
+        tied = (
+            (row.revenue, guided.revenue),
+            (row.operating_profit, guided.operating_profit),
+            (row.net_profit, guided.net_profit),
+        )
+        if not all(a is not None and b is not None and abs(a - b) <= TOL for a, b in tied):
+            continue
+        if any(row.label in note and "guidance" in note.lower() for note in spec.warnings):
+            continue    # the coincidence is on the record: the report can explain it
+        errors.append(
+            f"{row.label} forecast equals management guidance on every line (revenue, "
+            "operating profit, net profit): that is adoption, not an independent build. "
+            "Build the year from your own quarters and bridges — and if your numbers "
+            "legitimately land on guidance, add a warnings entry naming this period that "
+            "explains why they coincide."
+        )
 
     # --- quarterly build -------------------------------------------------
     # A plan derives Q2-Q4 from Q1 actual plus H1/FY guidance. A reported table
@@ -219,14 +310,34 @@ def run(spec: ModelSpec) -> ModelResult:
 
     if spec.quarterly:
         quarters = list(spec.quarterly.items())
+        guided = spec.guidance.get(spec.quarterly_fy)
         for metric in ("revenue", "operating_profit", "net_profit"):
             total = sum(q.get(metric) or 0 for _, q in quarters)
-            fy = by_period.get(spec.quarterly_fy, Financials()).get(metric)
-            if fy is not None:
-                checks.append(_check(f"quarters sum to {spec.quarterly_fy} {metric}", fy, total, spec.unit))
-                if abs(total - fy) > TOL:
+            # The plan derives quarters FROM management guidance, so guidance is
+            # the number they must tie to. The annual row may be the model's own
+            # forecast over that guidance (guidance is reference, not the answer),
+            # which is a difference to report, not an arithmetic failure.
+            guide_value = guided.get(metric) if guided is not None else None
+            row_value = by_period.get(spec.quarterly_fy, Financials()).get(metric)
+            source = guide_value if guide_value is not None else row_value
+            if source is not None:
+                checks.append(
+                    _check(f"quarters sum to {spec.quarterly_fy} {metric}", source, total, spec.unit)
+                )
+                if abs(total - source) > TOL:
                     errors.append(
-                        f"Quarterly {metric} sums to {total:g} but {spec.quarterly_fy} is {fy:g}"
+                        f"Quarterly {metric} sums to {total:g} but {spec.quarterly_fy} is {source:g}"
+                    )
+                elif (
+                    guide_value is not None
+                    and row_value is not None
+                    and abs(row_value - guide_value) > TOL
+                ):
+                    _warn(
+                        spec,
+                        f"{spec.quarterly_fy} quarters follow management guidance "
+                        f"({guide_value:g} {metric}) while the annual row is the model's own "
+                        f"forecast ({row_value:g}): they are meant to differ.",
                     )
             if spec.h1_label and len(quarters) >= 2:
                 h1 = by_period.get(spec.h1_label, Financials()).get(metric)
@@ -265,14 +376,16 @@ def run(spec: ModelSpec) -> ModelResult:
         revenue = by_period.get(label, Financials()).revenue
         if revenue:
             if flow.capex / revenue > 0.20:
-                spec.warnings.append(
+                _warn(
+                    spec,
                     f"{label} capex is {flow.capex / revenue:.0%} of revenue; check the unit "
-                    "(a Japanese filing's 億円 is 0.1bn, not 1bn)."
+                    "(a Japanese filing's 億円 is 0.1bn, not 1bn).",
                 )
             if flow.depreciation / revenue > 0.20:
-                spec.warnings.append(
+                _warn(
+                    spec,
                     f"{label} depreciation is {flow.depreciation / revenue:.0%} of revenue; "
-                    "check the unit."
+                    "check the unit.",
                 )
         expected_ocf = flow.net_profit + flow.depreciation + flow.working_capital_change
         checks.append(_check(f"{label} operating cash flow", expected_ocf, flow.operating_cash_flow, spec.unit))
@@ -353,6 +466,28 @@ def run(spec: ModelSpec) -> ModelResult:
                 unit=f" {spec.currency}",
             )
         )
+
+    # Two valuations that cannot both be right: a Base scenario outside the
+    # declared fair-value band. The report would print both with nothing bridging
+    # them, and a reader cannot tell which one the rating came from.
+    fv_row = _valuation_row(rows, spec)
+    if fv_row is not None:
+        base_eps = fv_row.eps.get(spec.valuation.fair_value_basis or spec.eps_basis)
+        low_multiple = spec.valuation.fair_value_multiple_low
+        high_multiple = spec.valuation.fair_value_multiple_high
+        if base_eps and low_multiple and high_multiple:
+            band_low = base_eps * low_multiple
+            band_high = base_eps * high_multiple
+            for scenario in spec.scenarios:
+                if "base" not in scenario.name.lower() or scenario.target_price is None:
+                    continue
+                if scenario.target_price < band_low * 0.95 or scenario.target_price > band_high * 1.05:
+                    errors.append(
+                        f"Base scenario target {scenario.target_price:g} sits outside the "
+                        f"fair-value range {band_low:g}-{band_high:g}: reconcile the scenario "
+                        "multiple with the declared fair-value multiples — one model cannot "
+                        "publish two valuations that cannot both be right."
+                    )
 
     if errors:
         raise ModelError("Model does not tie:\n  - " + "\n  - ".join(errors))

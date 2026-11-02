@@ -54,6 +54,19 @@ def _resolve_entry(log, ticker, date, decision, reflection="Good call."):
     log.update_with_outcome(ticker, date, 0.05, 0.02, 5, reflection)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_price_cache(tmp_path, monkeypatch):
+    """Settlement's prices now go through the shared bar loader, which caches
+    per symbol in the suite's one cache directory; a test that mocks yfinance
+    must not read rows an earlier test cached. The suite also blocks sockets,
+    so an empty answer must read as a reachable vendor saying "no rows" rather
+    than as an outage."""
+    from tradingagents.dataflows.vendors.yahoo import common, ohlcv
+
+    monkeypatch.setattr(ohlcv, "get_config", lambda: {"data_cache_dir": str(tmp_path)})
+    monkeypatch.setattr(common, "vendor_reachable", lambda host: True)
+
+
 def _price_df(prices, start="2026-01-05"):
     """Minimal DataFrame matching yfinance .history() output shape.
 
@@ -785,6 +798,26 @@ class TestPortfolioManagerInjection:
         pm_node(state)
         assert "Lessons from prior decisions" not in captured["prompt"]
 
+    def test_pm_prompt_carries_the_model_marker_rule(self):
+        """Without the runtime marker rule the synthesizer's quotes of model
+        figures arrive unmarked and the number audit cannot see them."""
+        captured = {}
+        state = _make_pm_state()
+        state["research_package"] = "FUNDAMENTAL MODEL: revenue 130.0"
+        create_portfolio_manager(_structured_pm_llm(captured))(state)
+        prompt = captured["prompt"]
+        assert "double square brackets" in prompt
+        assert "revenue 130.0" in prompt
+
+    def test_the_runtime_horizon_fills_an_empty_structured_time_horizon(self):
+        """The model left the optional field empty while its own summary stated
+        the horizon: the runtime value must be echoed, not printed as missing."""
+        captured = {}
+        state = _make_pm_state()
+        state["decision_horizon"] = "3-6 months"
+        result = create_portfolio_manager(_structured_pm_llm(captured))(state)
+        assert "**Time Horizon**: 3-6 months" in result["final_trade_decision"]
+
     def test_pm_returns_rendered_markdown_with_rating(self):
         """The structured PortfolioDecision is rendered to markdown that
         downstream consumers (memory log, signal processor, CLI display)
@@ -1033,7 +1066,7 @@ def test_a_longer_window_asks_for_enough_price_history(monkeypatch):
         def __init__(self, symbol):
             self.symbol = symbol
 
-        def history(self, start, end):
+        def history(self, start, end, **kwargs):
             asked["start"], asked["end"] = start, end
             import pandas as pd
             days = pd.bdate_range(start, end)

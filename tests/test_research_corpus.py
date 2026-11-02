@@ -71,24 +71,31 @@ def test_scan_classifies_dates_and_licences(tmp_path):
 def test_point_in_time_hides_later_documents(tmp_path):
     store = CorpusStore(_corpus(tmp_path), "5803.T")
 
-    visible = {r.storage_path for r in store.list_documents("2026-08-07")}
+    # A document known to be published after the run date never appears.
+    visible = {r.storage_path for r in store.list_documents("2026-08-01")}
     assert "Fujikura Financial Results 2026514.md" in visible
-    assert "Fujikura Earnings Call 2026807.md" in visible
-    assert "Nomura Quick Note.md" not in visible  # undated -> fail closed
+    assert "Fujikura Earnings Call 2026807.md" not in visible
+    later = {r.storage_path for r in store.withheld("2026-08-01")}
+    assert "Fujikura Earnings Call 2026807.md" in later
 
-    withheld = {r.storage_path for r in store.withheld("2026-08-07")}
-    assert "Nomura Quick Note.md" in withheld
+    # An undated document is evidence for any dated run, flagged not hidden.
+    visible_0807 = {r.storage_path for r in store.list_documents("2026-08-07")}
+    assert "Fujikura Financial Results 2026514.md" in visible_0807
+    assert "Nomura Quick Note.md" in visible_0807
+    assert "Nomura Quick Note.md" not in {r.storage_path for r in store.withheld("2026-08-07")}
 
 
-def test_undated_document_is_withheld_from_a_dated_run(tmp_path):
+def test_an_undated_document_is_visible_and_flagged_in_a_dated_run(tmp_path):
+    """Policy: every document is evidence. A missing date must not remove the
+    company's own folder from the run — it is shown with timing unverified."""
     root = _corpus(tmp_path)
     store = CorpusStore(root, "5803.T")
     visible = {r.storage_path for r in store.list_documents("2026-10-01")}
-    assert "meeting notes.md" not in visible
-    assert "meeting notes.md" in {r.storage_path for r in store.withheld("2026-10-01")}
+    assert "meeting notes.md" in visible
+    assert "meeting notes.md" not in {r.storage_path for r in store.withheld("2026-10-01")}
 
     records = {r.storage_path: r for r in store.records}
-    assert records["meeting notes.md"].date_precision == "unknown"
+    assert records["meeting notes.md"].date_precision == "unknown"   # timing still unverified
     assert any("mtime" in w for w in records["meeting notes.md"].warnings)
 
     # With no as-of date the corpus shows everything, undated included.
@@ -121,9 +128,8 @@ def test_reference_output_is_never_evidence(tmp_path):
     assert "Fujikura Latest Forecast .md" in included
 
 
-def test_the_withheld_lines_name_the_real_reason(tmp_path):
-    """An unknown publication date is fail-closed, not future-dated: the tool
-    must not tell the analyst a document was published after the run."""
+def test_the_withheld_line_names_only_the_later_documents(tmp_path):
+    """Undated documents are evidence: shown, flagged, never reported as future."""
     from tradingagents.dataflows.vendors.research_corpus import list_research_documents
 
     root = _corpus(tmp_path)
@@ -133,9 +139,30 @@ def test_the_withheld_lines_name_the_real_reason(tmp_path):
     later = next(line for line in out.splitlines() if "published after the analysis date" in line)
     assert "Fujikura Presentation 20261101.md" in later
 
-    unknown = next(line for line in out.splitlines() if "publication date unknown" in line)
-    assert "meeting notes.md" in unknown
-    assert "Fujikura Presentation" not in unknown
+    # visible lines carry the title, not the file name
+    undated = [line for line in out.splitlines() if "meeting notes" in line]
+    assert undated and all("DATE UNKNOWN" in line for line in undated)
+    assert "publication date unknown" not in out     # no longer a withheld reason
+
+
+def test_a_saved_report_is_an_output_not_evidence(tmp_path):
+    """A report saved into the corpus (the save prompt accepts any folder) must
+    never be fed back to the next run as evidence about the same company."""
+    root = _corpus(tmp_path)
+    (root / "1_analysts").mkdir()
+    (root / "1_analysts" / "fundamentals.md").write_text(FILING, encoding="utf-8")
+    (root / "complete_report.html").write_text("<html>analysis</html>", encoding="utf-8")
+
+    store = CorpusStore(root, "5803.T")
+    visible = {r.storage_path for r in store.list_documents("2026-10-30")}
+    assert "1_analysts/fundamentals.md" not in visible
+    assert "complete_report.html" not in visible
+
+    quality = {r.storage_path: r.doc_quality for r in store.records}
+    assert quality["1_analysts/fundamentals.md"] == "reference_output"
+    assert quality["complete_report.html"] == "reference_output"
+    # the real evidence is untouched
+    assert "Fujikura Earnings Call 2026807.md" in visible
 
 
 def test_reference_output_cannot_be_read_into_an_analysis(tmp_path):

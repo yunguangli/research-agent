@@ -183,7 +183,8 @@ def test_the_snapshot_does_not_present_a_filled_price_as_reported(monkeypatch, t
     """Gap filling exists so indicators compute on a continuous series. The
     verification snapshot is the one place a number must be what the vendor
     reported, or the module built to stop invented prices supplies them."""
-    from tradingagents.dataflows.vendors.yahoo import ohlcv, snapshot
+    from tradingagents.dataflows import snapshot
+    from tradingagents.dataflows.vendors.yahoo import ohlcv
 
     frame = pd.DataFrame({
         "Date": ["2026-05-06", "2026-05-07", "2026-05-08"],

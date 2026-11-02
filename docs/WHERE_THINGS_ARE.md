@@ -37,7 +37,7 @@ reports\5803.T_20261028_104355\
   1b_research\research_package.md   the verified model (computed, no prose)
   1c_audit\numbers.md           figures in the prose that do not match the model
   1d_cases\cases.md             base + each debate case, recomputed from capped deltas
-  2_research\bull.md, bear.md, manager.md
+  2_research\challenge.md, manager.md
   3_trading\trader.md
   4_risk\aggressive.md, conservative.md, neutral.md
   5_portfolio\decision.md

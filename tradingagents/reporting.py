@@ -64,8 +64,7 @@ _SECTIONS = (
         ("Cases Recomputed On The Model", "cases.md", ("case_table",)),
     )),
     ("II. Research Team Decision", "2_research", (
-        ("Bull Researcher", "bull.md", ("investment_debate_state", "bull_history")),
-        ("Bear Researcher", "bear.md", ("investment_debate_state", "bear_history")),
+        ("Adversarial Investment Review", "challenge.md", ("investment_debate_state", "challenge_history")),
         ("Research Manager", "manager.md", ("investment_plan",)),
     )),
     ("III. Trading Team Plan", "3_trading", (

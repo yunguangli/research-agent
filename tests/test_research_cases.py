@@ -210,7 +210,7 @@ def test_an_unknown_stance_is_ignored_rather_than_raising():
 
 
 def test_the_case_list_keeps_one_case_per_stance():
-    from tradingagents.agents.researchers.bull_researcher import _with_case
+    from tradingagents.research.cases import with_case as _with_case
 
     first = cases.Case(stance="aggressive", probability=0.4)
     second = cases.Case(stance="aggressive", probability=0.6)

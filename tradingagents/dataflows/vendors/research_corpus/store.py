@@ -6,9 +6,11 @@ The store answers three questions the analyst needs:
 * what does one document say (with page anchors, so a claim can be cited),
 * which documents mention a term, and what do the surrounding lines say.
 
-Nothing is fetched from a network. A document dated after the run date is
-invisible, and an undated document is visible only when no as-of date is given.
-That is the same fail-closed rule the vendor router applies to market data.
+Nothing is fetched from a network. A document *known* to be published after
+the run date is invisible; everything else is evidence the LLM gets to read —
+an undated document included, flagged with its timing unverified rather than
+hidden or guessed. That keeps the one rule that matters (no look-ahead)
+without losing the company's own documents to a missing date.
 """
 
 from __future__ import annotations
@@ -58,9 +60,14 @@ def resolve_corpus_root(base: str | Path, ticker: str) -> Path:
     """The folder for ``ticker`` under a shared research root.
 
     A root can hold one company (point it straight at the folder) or many, one
-    subfolder per instrument. Both layouts resolve without configuration.
+    subfolder per instrument. Both layouts resolve without configuration, and a
+    Bloomberg-style ticker (``3711.TT``) finds the same folder its canonical
+    form (``3711.TW``) does.
     """
+    from tradingagents.dataflows.symbols import canonical_ticker
+
     base = Path(base).expanduser()
+    ticker = canonical_ticker(ticker)
     if not ticker:
         return base
     for name in (ticker, ticker.replace(".", "_"), ticker.split(".")[0]):
@@ -140,19 +147,24 @@ class CorpusStore:
                 continue
             if wanted and record.doc_type not in wanted:
                 continue
-            if cutoff is not None:
-                # Fail closed: an unknown publication date cannot be shown to
-                # have existed on the run date, so a historical run does not see it.
+            # Look-ahead is the one hard rule: a document known to be published
+            # after the run date is invisible. A document whose date is unknown
+            # stays visible — the listing flags it — rather than being hidden
+            # from every dated run, which would drop most of a company's own
+            # folder for want of a date.
+            if cutoff is not None and record.date_precision != "unknown":
                 effective = _effective_date(record)
-                if effective is None or record.date_precision == "unknown":
-                    continue
-                if effective > cutoff:
+                if effective is not None and effective > cutoff:
                     continue
             visible.append(record)
         return sorted(visible, key=lambda r: (r.published_at or "", r.document_id))
 
     def withheld(self, as_of: str | None) -> list[DocumentRecord]:
-        """Documents that exist now but were not public on ``as_of``."""
+        """Documents known to be published after ``as_of``.
+
+        Undated documents are not withheld: they are visible with a flag, so a
+        missing date never removes a company's own evidence from the run.
+        """
         cutoff = _as_of_iso(as_of)
         if cutoff is None:
             return []
@@ -161,10 +173,8 @@ class CorpusStore:
             for record in self._records
             if not record.excluded
             and record.doc_quality != "reference_output"
-            and (
-                record.date_precision == "unknown"
-                or (_effective_date(record) or "9999") > cutoff
-            )
+            and record.date_precision != "unknown"
+            and (_effective_date(record) or "9999") > cutoff
         ]
 
     def get(self, document_id: str) -> DocumentRecord:
@@ -305,30 +315,21 @@ def list_research_documents(
     if not visible:
         lines.append("NO_DATA_AVAILABLE: no visible documents match this request.")
     for record in visible:
+        # An undated document is evidence by policy; the flag keeps the reader
+        # from treating its timing as verified.
+        when = (
+            f"published {record.published_at} ({record.date_precision} via {record.date_source})"
+            if record.date_precision != "unknown"
+            else f"published {record.published_at or 'unknown'} (DATE UNKNOWN: timing unverified, included by policy)"
+        )
         lines.append(
-            f"- {record.document_id} | {record.doc_type} | published {record.published_at} "
-            f"({record.date_precision} via {record.date_source}) | {record.pages or '?'}p | "
+            f"- {record.document_id} | {record.doc_type} | {when} | {record.pages or '?'}p | "
             f"{record.license} | {record.title}"
         )
     if withheld:
-        # Two different reasons, and the wrong one tells the analyst a document
-        # exists on a date it may simply not have: an unknown publication date
-        # is fail-closed, not future-dated.
-        cutoff = _as_of_iso(as_of) or ""
-        dated, undated = [], []
-        for record in withheld:
-            future = record.date_precision != "unknown" and (_effective_date(record) or "9999") > cutoff
-            (dated if future else undated).append(record)
-        if dated:
-            lines.append("Withheld (published after the analysis date): " + ", ".join(
-                f"{r.storage_path} ({r.published_at})" for r in dated
-            ))
-        if undated:
-            lines.append(
-                "Withheld (publication date unknown, so a dated run cannot be shown it existed "
-                "by then): "
-                + ", ".join(f"{r.storage_path} ({r.published_at or 'date unknown'})" for r in undated)
-            )
+        lines.append("Withheld (published after the analysis date): " + ", ".join(
+            f"{r.storage_path} ({r.published_at})" for r in withheld
+        ))
     if excluded:
         lines.append(
             "Excluded from evidence; do not read these and do not treat them as source material: "

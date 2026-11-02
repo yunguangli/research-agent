@@ -2,6 +2,7 @@
 
 import datetime
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -15,6 +16,7 @@ from cli.display import (
 from cli.prefs import load_last_run, sanitize, save_last_run
 from cli.prompts import (
     ask_anthropic_effort,
+    ask_decision_horizon,
     ask_gemini_thinking_config,
     ask_glm_region,
     ask_minimax_region,
@@ -37,6 +39,7 @@ from cli.prompts import (
     select_research_depth,
     select_shallow_thinking_agent,
 )
+from tradingagents.dataflows.symbols import canonical_ticker
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients.factory import REASONING_EFFORT_PROVIDERS
 from tradingagents.llm_clients.openai_client import check_endpoint
@@ -171,11 +174,16 @@ def _prompt_selections(prefs, flags):
         console.print(
             create_question_box(
                 "Step 1: Ticker Symbol",
-                "Enter the ticker, with exchange suffix when needed (e.g. SPY, 0700.HK, BTC-USD)",
+                "Enter the ticker, with exchange suffix when needed "
+                "(e.g. SPY, 0700.HK, BTC-USD; Bloomberg suffixes like 3711.TT and 5803.JT work too)",
                 "SPY",
             )
         )
         selected_ticker = get_ticker()
+    # One canonical spelling from here on, whether the ticker came from a flag
+    # or from the prompt: 3711.TT (Bloomberg) becomes 3711.TW for everything
+    # downstream — identity, benchmark, corpus, memory log, report folders.
+    selected_ticker = canonical_ticker(selected_ticker)
     asset_type = detect_asset_type(selected_ticker)
     # Only announce when it's not the default stock path, to avoid printing
     # "stock" on every run.
@@ -354,10 +362,31 @@ def _prompt_selections(prefs, flags):
             "Configure Claude effort level", ask_anthropic_effort,
         )
 
+    # Step 9: Decision horizon (optional — the default answers it, so a run
+    # with no terminal is never blocked or asked to name it).
+    horizon_env = os.environ.get("TRADINGAGENTS_DECISION_HORIZON")
+    if horizon_env:
+        decision_horizon = horizon_env.strip()
+        console.print(f"[green]✓ Decision horizon from environment:[/green] {decision_horizon}")
+    elif not (sys.stdin and sys.stdin.isatty()):
+        decision_horizon = DEFAULT_CONFIG["decision_horizon"]
+    else:
+        remembered_horizon = (prefs.get("decision_horizon") or "").strip()
+        console.print(
+            create_question_box(
+                "Step 9: Decision Horizon",
+                "The horizon the technical analysis is framed against "
+                "(free text, e.g. intraday, 3-6 months, 12+ months)",
+                remembered_horizon or DEFAULT_CONFIG["decision_horizon"],
+            )
+        )
+        decision_horizon = ask_decision_horizon(remembered_horizon or None)
+
     return {
         "ticker": selected_ticker,
         "asset_type": asset_type.value,
         "analysis_date": analysis_date,
+        "decision_horizon": decision_horizon,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
         "llm_provider": selected_llm_provider.lower(),

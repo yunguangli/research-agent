@@ -12,6 +12,7 @@ accepted.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from dataclasses import dataclass, field
 
@@ -209,21 +210,53 @@ def parse_case(text: str) -> Case | None:
     That difference is not cosmetic: a failed parse silently drops the case from
     the debate table, leaving the managers with one side of the argument.
     """
+    scanned = _scan_cases(text)
+    return scanned[-1] if scanned else None
+
+
+def _scan_cases(text: str) -> list[Case]:
+    """Every valid case object in the text, in the order they appear."""
     decoder = json.JSONDecoder()
-    start = text.rfind("{")
-    while start >= 0:
+    found: list[Case] = []
+    pos = 0
+    while True:
+        start = text.find("{", pos)
+        if start < 0:
+            break
         try:
             data, _end = decoder.raw_decode(text, start)
         except json.JSONDecodeError:
-            start = text.rfind("{", 0, start)
+            pos = start + 1
             continue
         if isinstance(data, dict) and "stance" in data:
-            try:
-                return Case.from_dict(data)
-            except ModelError:
-                pass
-        start = text.rfind("{", 0, start)
-    return None
+            with contextlib.suppress(ModelError):
+                found.append(Case.from_dict(data))
+        pos = start + 1
+    return found
+
+
+def parse_cases(text: str) -> list[Case]:
+    """Every stance's case, in first-appearance order, the last object winning.
+
+    The Adversarial Reviewer appends both stances in one answer (its positive
+    and its negative challenge), where the old two-persona debate produced one
+    each. Reading only the last object would drop half the case table.
+    """
+    by_stance: dict[str, Case] = {}
+    for case in _scan_cases(text):
+        by_stance[case.stance] = case   # first occurrence keeps the position,
+    return list(by_stance.values())     # a later one replaces the value
+
+
+def with_case(existing: str, case: Case) -> str:
+    """Add or replace this stance's case in the run's case list."""
+    try:
+        cases = json.loads(existing) if existing else []
+    except json.JSONDecodeError:
+        cases = []
+    cases = [c for c in cases if c.get("stance") != case.stance]
+    cases.append(case.to_dict())
+    return json.dumps(cases)
 
 
 def normalize_probabilities(results: list[CaseResult]) -> list[CaseResult]:

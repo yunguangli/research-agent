@@ -24,7 +24,7 @@ from pathlib import Path
 
 from tradingagents.agents.rating import RATING_REVIEW
 from tradingagents.dataflows.date_window import get_current_date
-from tradingagents.dataflows.symbols import safe_ticker_component
+from tradingagents.dataflows.symbols import canonical_ticker, safe_ticker_component
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.memory import TradingMemoryLog
 
@@ -156,6 +156,9 @@ def run_backtest(
     done = {(e["ticker"], e["date"]) for e in graph.memory_log.load_entries()}
 
     # A ticker or date given twice is one cell, run and settled once.
+    # One spelling per instrument before the grid is built: a Bloomberg-style
+    # ticker and its canonical form must not become two separate cells.
+    tickers = [canonical_ticker(ticker) for ticker in tickers]
     tickers, dates = list(dict.fromkeys(tickers)), list(dict.fromkeys(dates))
     cells = [(ticker, date) for ticker in tickers for date in dates]
     todo = [cell for cell in cells if cell not in done]

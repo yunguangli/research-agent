@@ -10,6 +10,10 @@ from __future__ import annotations
 import csv
 from datetime import date, timedelta
 
+import pandas as pd
+
+from tradingagents.dataflows.bars import load_bars
+from tradingagents.dataflows.errors import NoMarketDataError
 from tradingagents.dataflows.router import route_to_vendor
 
 
@@ -48,3 +52,37 @@ def last_close(symbol: str, as_of: str, lookback_days: int = 15) -> float | None
     except Exception:  # noqa: BLE001 - a price lookup must never end a run
         return None
     return parse_last_close(text)
+
+
+def _empty_closes() -> pd.Series:
+    """No prices: an empty *dated* series, so callers can slice it like any other."""
+    return pd.Series(dtype="float64", index=pd.DatetimeIndex([]))
+
+
+def closes(symbol: str, start_date: str, end_date: str) -> pd.Series:
+    """Daily closes over ``[start_date, end_date]`` from the configured price chain.
+
+    Scoring a past decision follows the same chain as the analysis itself —
+    Bloomberg first, Yahoo only where it is a configured fallback — so the memory
+    log never reads from a source the run would refuse to use.
+
+    No rows for the symbol returns an empty series: the caller leaves the
+    decision pending, as it always has. A vendor outage or a configuration
+    problem raises, so it is reported instead of retried silently forever.
+    """
+    try:
+        frame = load_bars(symbol, end_date, fill_gaps=False)
+    except NoMarketDataError:
+        return _empty_closes()
+    if frame is None or frame.empty:
+        return _empty_closes()
+
+    dates = pd.to_datetime(frame["Date"])
+    window = frame[(dates >= pd.to_datetime(start_date)) & (dates <= pd.to_datetime(end_date))]
+    if window.empty:
+        return _empty_closes()
+    return pd.Series(
+        pd.to_numeric(window["Close"], errors="coerce").to_numpy(),
+        index=pd.DatetimeIndex(pd.to_datetime(window["Date"])),
+        dtype="float64",
+    )

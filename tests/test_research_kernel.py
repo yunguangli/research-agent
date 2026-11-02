@@ -181,6 +181,84 @@ def test_the_error_names_the_allowed_values():
         Line("Guess", 1.0, provenance="vibes")
 
 
+def test_a_forecast_year_cannot_keep_net_profit_without_its_topline():
+    """The orphan that showed up as n/a revenue on a real run: a model may not
+    write a bottom line with no business behind it — forecast the topline."""
+    model_spec = spec(bridges=[])          # nothing fills FY26's topline
+    model_spec.forecast["FY26"] = Financials(net_profit=10.0)
+    with pytest.raises(ModelError, match="topline"):
+        run(model_spec)
+
+
+def test_a_reported_year_may_still_lack_its_topline():
+    """A disclosure gap in an actual is a fact, not a modelling choice."""
+    model_spec = spec()
+    model_spec.actuals["FY24"] = Financials(net_profit=6.0)
+    result = run(model_spec)
+    assert result.row("FY24").revenue is None
+
+
+def test_a_base_scenario_outside_the_fair_value_band_is_rejected():
+    """A real run published a ¥4,715-6,286 fair value and a ¥7,970 Base target:
+    two valuations with no bridge. A warning cannot help — the model has already
+    finished writing — so this is an error that enters the repair round."""
+    model_spec = spec()
+    model_spec.scenarios[0].multiple = 16.0        # fixture Base: EPS 1.0 ->
+    with pytest.raises(ModelError, match="outside the fair-value range"):
+        run(model_spec)                            # target 16, band 10-12
+
+
+def test_a_period_cannot_be_declared_twice():
+    """The rebuild duplicated FY3/27 (one 'guidance' entry, one 'forecast'
+    entry), so the package printed the annual row twice."""
+    model_spec = spec()
+    model_spec.periods.append(model_spec.periods[1])
+    with pytest.raises(ModelError, match="more than once"):
+        run(model_spec)
+
+
+def test_a_guided_period_forecast_over_guidance_must_be_relabelled():
+    from tradingagents.research.schemas import Bridge, Financials, Line
+
+    model_spec = spec(
+        forecast={"FY26": Financials(net_profit=10.0), "FY25": Financials(revenue=130.0)},
+        bridges=[
+            Bridge("revenue", "FY25", "FY26", 130.0, [Line("New business", 10.0)],
+                   declared_total=140.0),
+            Bridge("operating_profit", "FY25", "FY26", 15.0, [Line("New business", 1.0)],
+                   declared_total=16.0),
+        ],
+        segments={},
+    )
+    # FY25 still claims management's label while carrying the model's number.
+    with pytest.raises(ModelError, match="basis 'guidance'"):
+        run(model_spec)
+
+    model_spec.periods[1].basis = "forecast"
+    # relabelling moves the fair-value anchor to FY25 (EPS 0.9): keep the Base
+    # scenario inside the band so only the relabelling is under test here
+    model_spec.scenarios[0].multiple = 10.0
+    model = run(model_spec)
+    assert model.row("FY25").revenue == 130.0
+    assert model.spec.guidance["FY25"].revenue == 120.0    # management's number kept
+
+
+def test_running_the_kernel_twice_does_not_stack_warnings():
+    """Warnings are computed on every validation and some are already persisted
+    in the spec file; re-running must not publish the same warning twice."""
+    model_spec = spec()
+    model_spec.cashflow["FY25"] = CashFlow(
+        net_profit=9.0, depreciation=30.0, working_capital_change=-2.0, capex=30.0
+    )
+    run(model_spec)
+    after_first = list(model_spec.warnings)
+    assert sum("capex is" in w for w in after_first) == 1
+
+    run(model_spec)
+    assert model_spec.warnings == after_first
+    assert sum("capex is" in w for w in model_spec.warnings) == 1
+
+
 def test_market_cap_uses_outstanding_shares_when_given():
     model_spec = spec()
     model_spec.valuation.market_cap_shares_m = 8.0
@@ -245,6 +323,52 @@ def test_an_unresolvable_quarterly_plan_is_dropped_not_fatal():
     assert model_spec.quarterly_plan is None
     assert any("Dropped the quarterly plan" in warning for warning in model_spec.warnings)
     run(model_spec)
+
+
+def test_a_plan_without_h1_guidance_is_rebuilt_from_the_reported_halves():
+    """A company that published no H1 guidance row is not a mislabelled plan:
+    H1 is rebuilt from reported Q1+Q2, and H2 = FY guidance - H1 still checks
+    the back half (the 4062.T case: guidance carried FY only)."""
+    from tradingagents.research import builder
+
+    model_spec = spec()
+    model_spec.quarterly = {
+        "Q1 FY25": Financials(revenue=28.0, operating_profit=3.5, net_profit=2.0),
+        "Q2 FY25": Financials(revenue=27.0, operating_profit=3.5, net_profit=2.0),
+        "Q3 FY25": Financials(revenue=32.5, operating_profit=4.0, net_profit=2.5),
+        "Q4 FY25": Financials(revenue=32.5, operating_profit=4.0, net_profit=2.5),
+    }
+    model_spec.quarterly_plan = {
+        "fy_label": "FY25", "h1_label": "H1 FY25", "q1_label": "Q1 FY25", "h2_split": {},
+    }
+    model_spec.guidance.pop("H1 FY25")
+    builder._normalise_spec(model_spec)
+
+    assert model_spec.quarterly_plan is not None
+    assert model_spec.quarterly_plan["h1_values"] == {
+        "revenue": 55.0, "operating_profit": 7.0, "net_profit": 4.0,
+    }
+    assert any("H1 guidance row" in warning for warning in model_spec.warnings)
+    model = run(model_spec)
+    assert model.spec.quarterly["Q3 FY25"].revenue == pytest.approx(32.5)
+    assert model.quarterly_comparison == []
+
+
+def test_a_forecast_that_equals_guidance_must_explain_the_coincidence():
+    """Guidance is a reference: a non-guidance row identical to it on every line
+    is adoption, not a build — unless the model says why they coincide."""
+    model_spec = spec()
+    model_spec.forecast["FY25"] = Financials(revenue=120.0, operating_profit=15.0, net_profit=9.0)
+    model_spec.periods[1].basis = "forecast"
+    model_spec.scenarios[0].multiple = 10.0      # keep the Base target in its band
+    with pytest.raises(ModelError, match="adoption"):
+        run(model_spec)
+
+    model_spec.warnings.append(
+        "FY25 forecast equals management guidance because the H1 actual plus the H2 "
+        "guide tie to it exactly (management's own numbers, confirmed by the Q2 filing)."
+    )
+    run(model_spec)                              # the coincidence is on the record
 
 
 def test_spec_round_trips_through_json():

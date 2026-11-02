@@ -210,8 +210,14 @@ def test_a_decision_prompt_states_the_shape_of_its_answer(module, factory, must_
     getattr(mod, factory)(_LLM())(state)
 
     prompt = " ".join(seen)
-    assert "## Output" in prompt, "no output-format section in the prompt"
-    section = prompt.split("## Output", 1)[1]
+    # The section heading differs by agent ("## Output" vs the synthesizer's
+    # all-caps OUTPUT); the contract is the same: the answer's shape is named
+    # in the output part of the prompt.
+    index = prompt.find("## Output")
+    if index < 0:
+        index = prompt.find("OUTPUT")
+    assert index >= 0, "no output-format section in the prompt"
+    section = prompt[index:]
     assert f"**{must_name}**" in section, section[:300]
 
 

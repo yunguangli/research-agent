@@ -99,6 +99,36 @@ def test_a_consensus_eps_on_another_share_count_is_flagged():
     assert "share-count difference" in text
 
 
+def test_guidance_is_reference_and_the_model_may_forecast_its_own_number():
+    """The builder rule: management's guidance is shown beside the model, not
+    copied into it. A model overriding the guided year must still validate —
+    quarters keep tying to guidance, the annual row is its own view."""
+    from tradingagents.research.schemas import Bridge, Financials, Line
+
+    model_spec = spec(
+        forecast={"FY26": Financials(net_profit=10.0), "FY25": Financials(revenue=130.0)},
+        bridges=[
+            Bridge("revenue", "FY25", "FY26", 130.0, [Line("New business", 10.0)],
+                   declared_total=140.0),
+            Bridge("operating_profit", "FY25", "FY26", 15.0, [Line("New business", 1.0)],
+                   declared_total=16.0),
+        ],
+        segments={},
+    )
+    model_spec.periods[1].basis = "forecast"   # the rule: forecast over guidance, then relabel
+    model_spec.scenarios[0].multiple = 10.0    # FY25 is now the fair-value anchor (EPS 0.9):
+                                               # keep the Base target inside its band
+
+    model = kernel.run(model_spec)
+    assert model.row("FY25").revenue == 130.0              # the model's own view
+    assert any("follow management guidance" in w for w in model_spec.warnings)
+
+    text = report.compact_summary(model, value(model))
+    assert "Management guidance versus the model" in text
+    assert "FY25 | Revenue | 120.0 | 130.0 | +8.3%" in text
+    assert "do not copy guidance into the forecast" in text
+
+
 def test_tables_render_as_markdown_with_consistent_columns():
     model = kernel.run(spec())
     table = render.annual_table(model)

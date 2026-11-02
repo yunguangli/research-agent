@@ -18,6 +18,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_QUICK_THINK_BACKEND_URL":   "quick_think_backend_url",
     "TRADINGAGENTS_LLM_BACKEND_URL":      "backend_url",
     "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
+    "TRADINGAGENTS_DECISION_HORIZON":     "decision_horizon",
     "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
     "TRADINGAGENTS_MAX_TOOL_ROUNDS":      "max_tool_rounds",
@@ -163,6 +164,11 @@ def build_default_config() -> dict:
         # Output language for analyst reports and final decision
         # Internal agent debate stays in English for reasoning quality
         "output_language": "English",
+        # The horizon the technical analysis is framed against. Asked as an
+        # optional CLI question (Enter keeps this default); automation sets
+        # TRADINGAGENTS_DECISION_HORIZON instead. Empty keeps the market
+        # analyst's own fallback: a daily-chart timing overlay.
+        "decision_horizon": "3-6 months",
         # Debate and discussion settings
         "max_debate_rounds": 1,
         "max_risk_discuss_rounds": 1,
@@ -188,13 +194,16 @@ def build_default_config() -> dict:
         # Category-level configuration (default for all tools in category).
         # The configured value is the exact vendor chain — requests are NOT silently
         # routed to vendors you didn't choose. For ordered fallback, list several,
-        # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
+        # e.g. "bloomberg,yfinance". "default" uses all available vendors. Bloomberg
+        # is the primary source everywhere it serves the method; Yahoo only ever
+        # appears as the last fallback, never first. A vendor the method does not
+        # implement raises the typed not-configured error and the chain continues.
         "data_vendors": {
-            "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-            "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-            # Statements come from SEC EDGAR as filed (US filers), then Yahoo; the
-        # overview and insider tools, which SEC EDGAR does not serve, from Yahoo.
-        "fundamental_data": "sec_edgar,yfinance",  # Options: sec_edgar, alpha_vantage, yfinance
+            "core_stock_apis": "bloomberg,yfinance",       # Options: bloomberg, alpha_vantage, yfinance
+            "technical_indicators": "bloomberg,yfinance",  # Options: bloomberg, alpha_vantage, yfinance
+            # Bloomberg first (income statement, company overview); SEC EDGAR as
+            # filed for the US-only lines Bloomberg does not serve yet; Yahoo last.
+        "fundamental_data": "bloomberg,sec_edgar,yfinance",  # Options: bloomberg, sec_edgar, alpha_vantage, yfinance
             "news_data": "yfinance",             # Options: alpha_vantage, yfinance
             "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
             "prediction_markets": "polymarket",  # Options: polymarket (keyless)

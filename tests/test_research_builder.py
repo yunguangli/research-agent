@@ -128,6 +128,63 @@ def test_a_declared_total_equal_to_the_deltas_is_repaired(tmp_path):
     assert any("equals the sum of the deltas" in warning for warning in model.warnings)
 
 
+def test_the_price_line_does_not_claim_a_currency_it_does_not_know():
+    """The corpus build cannot know the issuer's currency; asserting JPY for a
+    Taiwan listing made the model flag a mismatch that should not exist."""
+    from tradingagents.research.builder import build_prompt
+
+    prompt = build_prompt(
+        ticker="3711.TW", company="ASE", as_of="2026-10-30",
+        facts_text="", index_text="", excerpts="", price=668.0,
+        unit="TWD_bn",                      # currency omitted: the build never knows it
+    )
+    assert "668 in the issuer's own currency" in prompt
+    assert "668 JPY" not in prompt
+
+
+def test_period_words_reach_the_snippets_so_quarterlies_are_not_missing(tmp_path):
+    """The snippet search used only headline terms, so a results table saying
+    'first quarter' and 'results' without 'revenue' never reached the prompt —
+    and the model reported actual Q1 figures as undisclosed."""
+    from tradingagents.dataflows.vendors.research_corpus import CorpusStore
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "results.md").write_text(
+        "Company overview goes here, deliberately without headline terms.\n\n"
+        "The first quarter and the quarterly performance follow, with the results "
+        "table: 124.5 at a glance.\n",
+        encoding="utf-8",
+    )
+    store = CorpusStore(root, "TEST")
+    snippets = builder._figure_snippets(store, store.list_documents(None), None)
+    assert "first quarter" in snippets.lower()
+
+
+def test_the_rules_treat_management_guidance_as_reference():
+    from tradingagents.research.builder import RULES
+
+    assert "Management guidance is a REFERENCE, not your forecast" in RULES
+
+
+def test_the_rules_forbid_two_valuations_in_one_model():
+    from tradingagents.research.builder import RULES
+
+    assert "one model cannot publish two valuations" in RULES
+
+
+def test_the_rules_forbid_a_net_profit_without_its_topline():
+    """The template that produced an orphan FY12/28: a forecast must carry the
+    topline the validator demands."""
+    from tradingagents.research.builder import RULES, SHAPE
+
+    assert "net profit" in RULES and "topline" in RULES
+    forecast_line = next(
+        line for line in SHAPE.splitlines() if line.strip().startswith('"forecast"')
+    )
+    assert '"revenue"' in forecast_line and '"operating_profit"' in forecast_line
+
+
 def test_periods_are_ordered_actual_then_guidance_then_forecast(tmp_path):
     llm = ScriptedLLM(_missing_period())
     model, _attempts = _build(llm, tmp_path)

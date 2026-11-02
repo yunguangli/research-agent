@@ -5,8 +5,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from tradingagents.dataflows.prices import closes as get_closes
 from tradingagents.dataflows.symbols import normalize_symbol
-from tradingagents.dataflows.vendors.yahoo.market import get_closes
 
 logger = logging.getLogger(__name__)
 

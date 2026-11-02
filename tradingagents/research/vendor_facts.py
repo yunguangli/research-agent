@@ -68,6 +68,21 @@ def _scale(unit: str) -> float:
     raise VendorFactsError(f"Unsupported model unit {unit!r}; use e.g. JPY_bn or USD_m")
 
 
+# Asian markets quote statements in billions (億/억/tn), the rest in millions.
+# Only the suffix reaches ``_scale``, so the currency half is a placeholder and
+# is never printed — the model states its own currency when it writes the spec.
+_ASIA_MARKETS = (
+    ".T", ".TW", ".TWO", ".KS", ".KQ", ".HK", ".SS", ".SZ", ".NS", ".BO",
+    ".SI", ".KL", ".JK", ".BKK", ".SET", ".VN",
+)
+
+
+def statement_unit(ticker: str) -> str:
+    """The scale to read this market's statements into (``LOCAL_bn``/``LOCAL_m``)."""
+    text = str(ticker or "").strip().upper()
+    return "LOCAL_bn" if any(text.endswith(suffix) for suffix in _ASIA_MARKETS) else "LOCAL_m"
+
+
 def _number(text: str) -> float | None:
     try:
         return float(text.replace(",", "").strip())
@@ -83,7 +98,9 @@ def parse_annual_statement(text: str, unit: str) -> dict[str, ReportedYear]:
     reporting currency and scaled into the model's unit; EPS is not used, because
     the kernel derives it from net profit and the share counts.
     """
-    if not text or "withheld" in text.lower():
+    if not text or "withheld" in text.lower() or text.startswith(
+        ("DATA_UNAVAILABLE", "NO_DATA_AVAILABLE")
+    ):
         raise VendorFactsError("The vendor returned no annual statement.")
     lines = text.splitlines()
     body = "\n".join(line for line in lines if not line.startswith("#"))
@@ -133,15 +150,12 @@ def is_public(period_end: str, as_of: str, lag_days: int = FILING_LAG_DAYS) -> b
     return ended + timedelta(days=lag_days) <= run
 
 
-def describe(years: dict[str, ReportedYear], as_of: str) -> str:
-    """Prompt text for the years that were public by ``as_of``, or ``""``."""
+def _describe(years: dict[str, ReportedYear], as_of: str, header: str, noun: str) -> str:
+    """Prompt text for the periods that were public by ``as_of``, or ``""``."""
     public = [year for end, year in sorted(years.items()) if is_public(end, as_of)]
     if not public:
         return ""
-    lines = [
-        "REPORTED ANNUAL FIGURES (the vendor's audited statements; use these exactly for an "
-        "actual year, never a derivation):"
-    ]
+    lines = [header]
     for year in public:
         parts = []
         for metric, label in (
@@ -152,8 +166,33 @@ def describe(years: dict[str, ReportedYear], as_of: str) -> str:
             value = year.get(metric)
             if value is not None:
                 parts.append(f"{label} {value:,.1f}")
-        lines.append(f"- year ended {year.period_end}: " + ", ".join(parts))
+        if parts:
+            lines.append(f"- {noun} ended {year.period_end}: " + ", ".join(parts))
     return "\n".join(lines)
+
+
+def describe(years: dict[str, ReportedYear], as_of: str) -> str:
+    """Annual figures public by ``as_of`` — fallback evidence, never the first source."""
+    return _describe(
+        years,
+        as_of,
+        "REPORTED ANNUAL FIGURES (data vendor — fallback evidence): use these only for an "
+        "actual year the documents do not state, and never as a derivation; where a "
+        "document gives the figure, the document wins.",
+        "year",
+    )
+
+
+def describe_quarters(years: dict[str, ReportedYear], as_of: str) -> str:
+    """Quarterly figures public by ``as_of`` — for quarters the corpus never mentions."""
+    return _describe(
+        years,
+        as_of,
+        "REPORTED QUARTERLY FIGURES (data vendor — fallback evidence): use these only for a "
+        "quarter the documents do not state; where a document gives the figure, the "
+        "document wins.",
+        "quarter",
+    )
 
 
 def fetch_annual(ticker: str, unit: str) -> dict[str, ReportedYear]:
@@ -168,6 +207,17 @@ def fetch_annual(ticker: str, unit: str) -> dict[str, ReportedYear]:
         text = route_to_vendor("get_income_statement", ticker, "annual", None)
     except Exception as exc:  # noqa: BLE001 - a missing statement must not stop a build
         raise VendorFactsError(f"No annual statement for {ticker}: {exc}") from exc
+    return parse_annual_statement(str(text), unit)
+
+
+def fetch_quarters(ticker: str, unit: str) -> dict[str, ReportedYear]:
+    """The vendor's quarterly income statement: what fills the quarters the corpus lacks."""
+    from tradingagents.dataflows.router import route_to_vendor
+
+    try:
+        text = route_to_vendor("get_income_statement", ticker, "quarterly", None)
+    except Exception as exc:  # noqa: BLE001 - a missing statement must not stop a build
+        raise VendorFactsError(f"No quarterly statement for {ticker}: {exc}") from exc
     return parse_annual_statement(str(text), unit)
 
 

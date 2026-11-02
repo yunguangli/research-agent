@@ -6,6 +6,11 @@ doesn't support (#830). This module computes a ground-truth snapshot (latest
 OHLCV row on or before the analysis date, common indicators, recent closes)
 the analyst is told to treat as the source of truth for any exact numeric
 claim. Deterministic, no LLM involved.
+
+The bars come from ``dataflows.bars.load_bars``, which follows the configured
+``core_stock_apis`` chain — so the snapshot is served by whatever supplies the
+run's prices (Bloomberg first, Yahoo as the opt-in fallback) instead of being
+hardwired to one vendor.
 """
 
 from __future__ import annotations
@@ -15,9 +20,9 @@ from collections.abc import Iterable
 import pandas as pd
 from stockstats import wrap
 
+from tradingagents.dataflows.bars import load_bars
 from tradingagents.dataflows.errors import NoMarketDataError
 from tradingagents.dataflows.symbols import normalize_symbol
-from tradingagents.dataflows.vendors.yahoo.ohlcv import load_ohlcv
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
 DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
@@ -30,13 +35,13 @@ DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
 def _verified_rows(symbol: str, as_of_date: str) -> pd.DataFrame:
     """OHLCV on or before as_of_date, date-sorted. Raises NoMarketDataError if nothing usable.
 
-    ``load_ohlcv`` already normalizes the Date column and filters out
+    ``load_bars`` already normalizes the Date column and filters out
     look-ahead rows, but we re-apply the cutoff defensively — this is a
     verification path, so it must not trust its input to be pre-filtered.
     """
     # As reported: this snapshot is quoted by the agents as exact prices, so a
     # gap-filled cell would put the previous session's number under this date.
-    data = load_ohlcv(symbol, as_of_date, fill_gaps=False)
+    data = load_bars(symbol, as_of_date, fill_gaps=False)
     if data is None or data.empty:
         raise NoMarketDataError(symbol, normalize_symbol(symbol), "no price rows")
 

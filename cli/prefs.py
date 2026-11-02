@@ -29,7 +29,7 @@ _PREFS_PATH = Path(os.path.expanduser("~")) / ".tradingagents" / "cli_prefs.json
 
 REMEMBERED = (
     "output_language", "analysts", "research_depth", "llm_provider",
-    "quick_think_llm", "deep_think_llm", "backend_url",
+    "quick_think_llm", "deep_think_llm", "backend_url", "decision_horizon",
 )
 
 
@@ -64,6 +64,8 @@ def sanitize(prefs: dict, asset_type) -> dict:
     kept: dict = {}
     if isinstance(prefs.get("output_language"), str):
         kept["output_language"] = prefs["output_language"]
+    if isinstance(prefs.get("decision_horizon"), str) and prefs["decision_horizon"].strip():
+        kept["decision_horizon"] = prefs["decision_horizon"].strip()
     if prefs.get("research_depth") in (1, 3, 5):
         kept["research_depth"] = prefs["research_depth"]
 

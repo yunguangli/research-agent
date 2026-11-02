@@ -43,6 +43,8 @@ def create_research_manager(llm):
 
 The debate always contains conflicting arguments; deciding which side is stronger is the job, so conflict alone is not a reason to Hold. Commit to the side with the stronger case, sized by how decisively it wins. Choose Hold only when the evidence is still balanced after that weighing, or too thin to support a call; do not manufacture a direction to appear decisive. Weigh the bull and bear cases on their merits, independent of which side spoke first or last.
 
+Agreement between the debaters is not evidence: both read the same reports, so two agents saying the same thing is one observation counted twice. Cite the underlying data or documents — never the headcount — and treat an absence of data as a gap, not as a point for either side.
+
 ---
 
 **Debate History:**
@@ -68,6 +70,7 @@ Write these sections, in this order, starting with the recommendation on its own
 
         new_investment_debate_state = {
             "history": investment_debate_state.get("history", ""),
+            "challenge_history": investment_debate_state.get("challenge_history", ""),
             "bear_history": investment_debate_state.get("bear_history", ""),
             "bull_history": investment_debate_state.get("bull_history", ""),
             "current_response": investment_plan,

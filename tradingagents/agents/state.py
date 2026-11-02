@@ -12,6 +12,9 @@ class InvestDebateState(TypedDict):
     bear_history: Annotated[
         str, "Bearish Conversation history"
     ]
+    challenge_history: Annotated[
+        str, "Adversarial Investment Reviewer's challenge, round by round"
+    ]
     history: Annotated[str, "Conversation history"]
     current_response: Annotated[str, "Latest response"]
     count: Annotated[int, "Length of the current conversation"]
@@ -71,6 +74,7 @@ class AgentState(MessagesState):
     past_context: Annotated[str, "Memory log context for the Portfolio Manager (same-ticker decisions + cross-ticker lessons), written by the Memory Log step"]
     memory_note: Annotated[str, "What the Memory Log step could not settle or read this run, for the report; empty when all went well"]
     portfolio_context: Annotated[str, "Caller-supplied holdings and cash, rendered at run start; empty when not provided"]
+    decision_horizon: Annotated[str, "The horizon the technical analysis is framed against; from TRADINGAGENTS_DECISION_HORIZON or the CLI question (default 3-6 months), empty when nothing supplied it"]
     research_package: Annotated[str, "Deterministic fundamental model (forecasts, bridges, valuation) for this run; empty unless a research corpus and model spec are configured"]
     research_price: Annotated[float, "The share price the model's valuation used; 0 when no model was used"]
     research_model_path: Annotated[str, "The model spec file this run used, so the audit checks the same numbers"]

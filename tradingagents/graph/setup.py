@@ -7,9 +7,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents import (
+    create_adversarial_reviewer,
     create_aggressive_debator,
-    create_bear_researcher,
-    create_bull_researcher,
     create_conservative_debator,
     create_fundamentals_analyst,
     create_market_analyst,
@@ -35,8 +34,7 @@ logger = logging.getLogger(__name__)
 # refactor drift in the speaker labels) can never hit a missing path_map entry
 # and crash LangGraph mid-run (#1088).
 DEBATE_PATH_MAP = {
-    "Bull Researcher": "Bull Researcher",
-    "Bear Researcher": "Bear Researcher",
+    "Adversarial Reviewer": "Adversarial Reviewer",
     "Research Manager": "Research Manager",
 }
 RISK_ANALYSIS_PATH_MAP = {
@@ -142,8 +140,7 @@ class GraphSetup:
             ),
         }
 
-        bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
-        bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
+        adversarial_reviewer_node = create_adversarial_reviewer(self.quick_thinking_llm)
         research_manager_node = create_research_manager(self.deep_thinking_llm)
         trader_node = create_trader(self.quick_thinking_llm)
 
@@ -163,8 +160,7 @@ class GraphSetup:
                 agent = analyst_factories[spec.key]()
             workflow.add_node(spec.agent_node, _analyst_graph(spec, agent, self.max_tool_rounds, tools))
 
-        workflow.add_node("Bull Researcher", bull_researcher_node)
-        workflow.add_node("Bear Researcher", bear_researcher_node)
+        workflow.add_node("Adversarial Reviewer", adversarial_reviewer_node)
         workflow.add_node("Research Manager", research_manager_node)
         workflow.add_node("Trader", trader_node)
         workflow.add_node("Aggressive Analyst", aggressive_analyst)
@@ -181,15 +177,14 @@ class GraphSetup:
             first_steps.append("Memory Log")
         for node in first_steps:
             workflow.add_edge(START, node)
-        workflow.add_edge(first_steps, "Bull Researcher")
+        workflow.add_edge(first_steps, "Adversarial Reviewer")
 
-        # Both research-debate edges share the complete DEBATE_PATH_MAP (#1088).
-        for debate_node in ("Bull Researcher", "Bear Researcher"):
-            workflow.add_conditional_edges(
-                debate_node,
-                self.conditional_logic.should_continue_debate,
-                DEBATE_PATH_MAP,
-            )
+        # The single review edge shares the complete DEBATE_PATH_MAP (#1088).
+        workflow.add_conditional_edges(
+            "Adversarial Reviewer",
+            self.conditional_logic.should_continue_debate,
+            DEBATE_PATH_MAP,
+        )
         workflow.add_edge("Research Manager", "Trader")
         workflow.add_edge("Trader", "Aggressive Analyst")
         # All three risk edges share the complete RISK_ANALYSIS_PATH_MAP (#1088).
