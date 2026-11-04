@@ -117,7 +117,8 @@ def test_guidance_is_reference_and_the_model_may_forecast_its_own_number():
     )
     model_spec.periods[1].basis = "forecast"   # the rule: forecast over guidance, then relabel
     model_spec.scenarios[0].multiple = 10.0    # FY25 is now the fair-value anchor (EPS 0.9):
-                                               # keep the Base target inside its band
+    model_spec.scenarios[0].eps = 0.9          # keep the Base target inside its band
+    model_spec.scenarios[0].period = "FY25"
 
     model = kernel.run(model_spec)
     assert model.row("FY25").revenue == 130.0              # the model's own view
@@ -127,6 +128,12 @@ def test_guidance_is_reference_and_the_model_may_forecast_its_own_number():
     assert "Management guidance versus the model" in text
     assert "FY25 | Revenue | 120.0 | 130.0 | +8.3%" in text
     assert "do not copy guidance into the forecast" in text
+
+    published = report.compact_summary(model, value(model), instructions=False)
+    assert "Management guidance versus the model" in published
+    assert "do not copy guidance into the forecast" not in published
+    assert "Do not recalculate these figures" not in published
+    assert "say in one sentence why" not in published.lower()
 
 
 def test_tables_render_as_markdown_with_consistent_columns():

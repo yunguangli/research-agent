@@ -6,15 +6,16 @@ from tradingagents.agents.tools import (
     get_global_news,
     get_macro_indicators,
     get_news,
-    get_prediction_markets,
 )
 
 # The tools this analyst is offered; its tool node is built from the same tuple.
+# Prediction markets are deliberately absent: a single-name equity rating must not
+# be moved by election or recession odds that have no demonstrated transmission to
+# the company (#finding: news analyst).
 TOOLS = (
     get_news,
     get_global_news,
     get_macro_indicators,
-    get_prediction_markets,
 )
 
 
@@ -26,7 +27,19 @@ def create_news_analyst(llm):
         instrument_context = get_instrument_context_from_state(state)
 
         system_message = (
-            f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'), and get_prediction_markets(topic, limit) for live market-implied probabilities of forward-looking events (e.g. 'Fed rate cut', 'recession 2026', geopolitical or sector events). Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
+            f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(start_date, end_date) for news about the {asset_label} under analysis, get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news, and get_macro_indicators(indicator, curr_date, look_back_days) to ground macro commentary in actual data from FRED (e.g. 'cpi', 'core_pce', 'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve'). Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
+            + """
+
+EVIDENCE RULES
+
+- If get_news returns no usable company news (DATA_UNAVAILABLE or NO_DATA_AVAILABLE), say so and make NO incremental news adjustment. Do not substitute global macro, election odds, an "AI bubble" theme or unrelated cross-asset moves for company news.
+- Use a macro item only when you can state the company-specific transmission mechanism and, where possible, its size (for example, a disclosed FX sensitivity or an input cost as a share of COGS). A headline that merely correlates is not evidence.
+- Do not present market-implied probabilities (prediction markets, polls, "odds") as scenario probabilities, position sizes or risk budgets. You do not have that tool in this run, and a probability is not a company fact.
+- Separate what is known from what is inferred. An absence of news is a gap, not a signal.
+- Never let a macro headline change a fundamental rating by itself; the reader decides the trade.
+- If both the company-news and macro feeds are unavailable, report the gap in one short
+  paragraph plus a small table; put retry history and vendor diagnostics at the end, not in
+  the conclusion."""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()
         )

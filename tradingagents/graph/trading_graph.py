@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import tradingagents
 from tradingagents.agents.context import build_instrument_context, resolve_instrument_identity
 from tradingagents.agents.rating import run_rating
+from tradingagents.agents.sizing import has_exact_size
 from tradingagents.dataflows.config import run_config, run_config_context, set_config
 from tradingagents.dataflows.date_window import get_current_date, is_historical
 from tradingagents.dataflows.symbols import canonical_ticker, safe_ticker_component
@@ -85,6 +87,53 @@ _NOT_IN_SIGNATURE = frozenset({
 })
 
 
+def _unresolved_per_share_fields(final_state: dict) -> list[str]:
+    """Fields of material challenges that were not applied, for the EPS gate."""
+    try:
+        data = json.loads(str(final_state.get("model_challenges") or "{}"))
+    except ValueError:
+        return []
+    fields: list[str] = []
+    for challenge in data.get("challenges") or []:
+        if str(challenge.get("severity")) == "material" and not (challenge.get("proposed_values") or {}):
+            fields.extend(challenge.get("affected_fields") or [])
+    for issue in data.get("deterministic_issues") or []:
+        if issue.get("kind") == "share_basis" and issue.get("severity") == "material":
+            fields.extend(issue.get("fields") or [])
+    return fields
+
+
+def superseded_values(final_state: dict) -> set[float]:
+    """The v1 values a model repair replaced; no later section may use them."""
+    try:
+        log = json.loads(str(final_state.get("model_repair_log") or "{}"))
+    except ValueError:
+        return set()
+    values: set[float] = set()
+    for change in log.get("changes") or []:
+        old, new = change.get("old"), change.get("new")
+        if (
+            isinstance(old, (int, float))
+            and not isinstance(old, bool)
+            and old
+            and (not isinstance(new, (int, float)) or abs(float(new) - float(old)) > 1e-9)
+        ):
+            values.add(float(old))
+    return values
+
+
+def _cites_superseded(text: str, values: set[float]) -> bool:
+    """Whether a prose section reuses a figure the repair replaced."""
+    for token in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        try:
+            number = float(token.replace(",", ""))
+        except ValueError:
+            continue
+        if any(abs(number - value) <= max(0.005, abs(value) * 0.002) for value in values):
+            return True
+    return False
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -146,10 +195,22 @@ class TradingAgentsGraph:
         self.selected_analysts = tuple(selected_analysts)
 
         # Set up the graph: keep the workflow for recompilation with a checkpointer.
-        self.workflow = self.graph_setup.setup_graph(selected_analysts, memory_node=self._memory_step)
+        self.workflow = self.graph_setup.setup_graph(
+            selected_analysts, memory_node=self._memory_step, repair_hook=self.run_repair_gate
+        )
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
         self._resuming = False
+        # Provenance of the run's model spec, set when create_run_state loads it.
+        self._spec_source = ""
+        self._spec_created_at = ""
+        self._spec_compatibility = ""
+        self._spec_compatibility_reason = ""
+        self._basis_names: dict[str, str] = {}
+        self._spec_sector = ""
+        self._sensitivity_items: list[dict] = []
+        self._sensitivity_gaps: list[str] = []
+        self._sensitivity_table = ""
 
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock",
                                    trade_date: str | None = None) -> str:
@@ -318,29 +379,72 @@ class TradingAgentsGraph:
             "analysts": list(self.selected_analysts),
             "max_debate_rounds": cfg.get("max_debate_rounds"),
             "max_risk_discuss_rounds": cfg.get("max_risk_discuss_rounds"),
+            "decision_horizon": cfg.get("decision_horizon"),
+            "run_purpose": cfg.get("run_purpose"),
+            "holding_period_days": cfg.get("holding_period_days"),
+            "benchmark_ticker": cfg.get("benchmark_ticker"),
+            "price_override": os.environ.get("TRADINGAGENTS_MODEL_PRICE") or None,
             "output_language": cfg.get("output_language"),
             "data_vendors": dict(cfg.get("data_vendors") or {}),
             "tool_vendors": dict(cfg.get("tool_vendors") or {}),
         }
 
-    def save_reports(self, final_state, ticker, save_path=None, html=True) -> Path:
-        """Write the report tree for a completed run, like the CLI does.
+    def prepare_final_state(self, final_state, ticker) -> dict:
+        """Audit the prose, repair contradicted claims, and compute the case table.
 
-        Programmatic callers get the same on-disk reports the CLI produces. Pass
-        an explicit ``save_path`` or let it default under ``results_dir``; the
-        report is also written as one HTML page unless ``html`` is False.
-
-        When a research model was used, the prose is audited against it first and
-        the findings are written as a section: a figure an agent restated wrongly
-        or took from a conflicting vendor snapshot is named rather than inherited.
+        Runs before anything is recorded or rendered, so the report, the state log
+        and the memory entry all carry the same text. Idempotent: a state that
+        already has an audit or a case table is left alone, so a second save does
+        not repair twice.
         """
-        if save_path is None:
-            save_path = self.default_report_path(ticker)
-        if research_dir_from_env() is not None and not final_state.get("report_audit"):
+        if research_dir_from_env() is None:
+            # No corpus, no model: the audit is absent by design, not because a
+            # figure passed. Say so, so a missing 1c_audit cannot read as clean.
+            final_state["report_audit"] = (
+                "The number audit did not run: no research corpus is configured, so this "
+                "run built no deterministic model and there was no model figure to check. "
+                "Set TRADINGAGENTS_RESEARCH_DIR to enable it."
+            )
+        elif final_state.get("research_model_source") == "unavailable":
+            # The run used no model. Do not reopen an older spec to "audit" against
+            # figures the report never quoted.
+            final_state["report_audit"] = (
+                "The number audit did not run: no research model was used in this run, "
+                "so no figure could be checked against one."
+            )
+        elif research_dir_from_env() is not None and not final_state.get("report_audit"):
             audit = self.report_audit(final_state, ticker)
             if audit:
                 final_state["report_audit"] = audit
-        if final_state.get("debate_cases") and not final_state.get("case_table"):
+                if audit.startswith("The number audit did not run") and (
+                    final_state.get("research_model_source") not in {"built", "reused"}
+                ):
+                    # The header must carry the same verdict as the audit section.
+                    # A model that was loaded and used keeps its provenance even if
+                    # the later audit could not run: the report still shows its figures.
+                    final_state["research_model_source"] = "unavailable"
+                    final_state["spec_compatibility"] = "unavailable"
+                    final_state["spec_compatibility_reason"] = (
+                        "no usable research model (see 1c_audit/numbers.md)"
+                    )
+        if not final_state.get("debate_cases"):
+            # A state saved before the case list was stored, or one whose list was
+            # dropped, can rebuild it from the review transcript: the reviewer
+            # appends the JSON objects, and parse_cases keeps the last per stance.
+            history = str(
+                (final_state.get("investment_debate_state") or {}).get("challenge_history") or ""
+            )
+            if history:
+                from tradingagents.research.cases import parse_cases
+
+                found = parse_cases(history)
+                if found:
+                    final_state["debate_cases"] = json.dumps([case.to_dict() for case in found])
+        if (
+            final_state.get("debate_cases")
+            and not final_state.get("case_table")
+            and final_state.get("research_fair_value_verified", True)
+        ):
             try:
                 model, valuation, _spec = self._research_model(
                     ticker,
@@ -356,10 +460,312 @@ class TradingAgentsGraph:
                 )
             except Exception as exc:  # noqa: BLE001 - a report must still be written
                 logger.warning("Case comparison could not be computed: %s", exc)
+        if not final_state.get("case_table"):
+            if not final_state.get("research_fair_value_verified", True):
+                final_state["case_table"] = (
+                    "No case table was produced: the per-share basis is unverified, so the "
+                    "cases would price an indicative EPS."
+                )
+            else:
+                debate_now = final_state.get("investment_debate_state") or {}
+                if debate_now.get("first_review"):
+                    if final_state.get("research_model_source") == "unavailable":
+                        note = "No case table was produced: this run had no verified model."
+                    else:
+                        note = (
+                            "No case table was produced: the adversarial review did not return "
+                            "the two case objects. The debate text above is unquantified."
+                        )
+                    final_state["case_table"] = note
+        if not final_state.get("metrics_table") and (
+            final_state.get("research_model_path")
+            and final_state.get("research_model_source") != "unavailable"
+        ):
+            # Growth and incremental margin are different numbers and the debate
+            # has confused them; publish both for every consecutive model year.
+            try:
+                model, _valuation, _spec = self._research_model(
+                    ticker,
+                    final_state.get("trade_date"),
+                    final_state.get("research_price") or None,
+                    allow_build=False,
+                    spec_hint=final_state.get("research_model_path") or None,
+                )
+                from tradingagents.research.metrics import period_metrics, render_metrics
+
+                metrics = period_metrics(model)
+                if metrics:
+                    final_state["metrics_table"] = render_metrics(metrics)
+            except Exception as exc:  # noqa: BLE001 - a report must still be written
+                logger.info("Metrics table could not be computed: %s", exc)
+        self._apply_decision_integrity(final_state)
+        # A superseded conclusion that survives verbatim in the decision is
+        # replaced by its repair text; anything the repair could not match is
+        # already covered by the superseded-number check above.
+        from tradingagents.research import repair as repair_module
+
+        pairs = repair_module.conclusion_pairs(
+            str(final_state.get("model_repair_addendum") or "")
+        )
+        decision_text = str(final_state.get("final_trade_decision") or "")
+        if pairs and decision_text:
+            replaced = 0
+            for old, new in pairs:
+                if old and old in decision_text:
+                    decision_text = decision_text.replace(old, new)
+                    replaced += 1
+            if replaced:
+                final_state["final_trade_decision"] = decision_text
+                final_state["replacement_conclusions_applied"] = str(replaced)
+        # One status for the report: a model that was loaded and audited is
+        # VERIFIED; a corpus run whose model was rejected or failed repair is
+        # UNVERIFIED; no corpus at all is NOT_APPLICABLE.
+        source = str(final_state.get("research_model_source") or "")
+        if source == "unavailable":
+            final_state["model_status"] = (
+                "UNVERIFIED" if research_dir_from_env() is not None else "NOT_APPLICABLE"
+            )
+        elif final_state.get("research_model_path"):
+            final_state["model_status"] = "VERIFIED"
+        else:
+            final_state["model_status"] = "NOT_APPLICABLE"
+        if final_state["model_status"] == "VERIFIED":
+            from tradingagents.research import status as status_module
+
+            try:
+                sensitivity_ids = json.loads(str(final_state.get("sensitivity_ids") or "[]"))
+            except ValueError:
+                sensitivity_ids = []
+            # The statuses set at run start (and updated by the repair gate) know
+            # the balance-sheet and tax inputs; recompute only for an old
+            # checkpoint that predates them.
+            if not final_state.get("operating_model_status"):
+                statuses = status_module.assess(
+                    model_status="VERIFIED",
+                    basis={
+                        key: str(final_state.get(key) or "")
+                        for key in ("market_cap_basis", "forecast_eps_basis",
+                                    "dilution_sensitivity_basis")
+                    },
+                    has_band=final_state.get("research_fair_value_low") is not None,
+                    challenge_fields=_unresolved_per_share_fields(final_state),
+                    sensitivity_count=len(sensitivity_ids),
+                    price=final_state.get("research_price") or None,
+                )
+                for key in ("operating_model_status", "eps_model_status", "eps_status",
+                            "valuation_status", "sensitivity_model_status",
+                            "sensitivity_status"):
+                    final_state[key] = statuses[key]
+                final_state["valuation_method_statuses"] = json.dumps(
+                    statuses["valuation_method_statuses"]
+                )
+                final_state["research_fair_value_verified"] = statuses["valuation_controlling"]
+            final_state["overall_status"] = (
+                "" if final_state.get("model_status") == "VERIFIED"
+                else "Not Rated"
+            )
+            if (
+                final_state.get("valuation_status") != status_module.VERIFIED
+                or final_state.get("decision_status") == "PROVISIONAL"
+            ):
+                final_state["decision_status"] = "PROVISIONAL"
+            else:
+                final_state["decision_status"] = "FINAL"
+        elif final_state["model_status"] == "UNVERIFIED":
+            final_state["overall_status"] = "Not Rated"
+            final_state["decision_status"] = "NOT_RATED"
+        else:   # no deterministic model in this run at all
+            final_state["operating_model_status"] = "NOT_APPLICABLE"
+            final_state["eps_model_status"] = ""
+            final_state["eps_status"] = ""
+            final_state["valuation_status"] = ""
+            final_state["sensitivity_model_status"] = ""
+            final_state["sensitivity_status"] = ""
+            final_state["research_fair_value_verified"] = False
+            final_state["overall_status"] = ""
+            final_state["decision_status"] = ""
+        conflicts = self._detect_conflicts(final_state)
+        final_state["decision_conflicts"] = conflicts
+        final_state["stage_status"] = self._stage_status(final_state)
+        final_state["controlling_decision"] = (
+            "portfolio_manager"
+            if str(final_state.get("final_trade_decision") or "").strip()
+            else ""
+        )
+        decision = str(final_state.get("final_trade_decision") or "")
+        if conflicts and "**Superseded intermediate decisions**" not in decision:
+            final_state["final_trade_decision"] = decision + (
+                "\n\n**Superseded intermediate decisions**: " + "; ".join(conflicts) +
+                ". The Portfolio Manager's decision is controlling; the intermediate "
+                "proposals are in the appendix."
+            )
+        debate = final_state.get("investment_debate_state") or {}
+        first = str(debate.get("first_review") or "").strip()
+        if first:
+            from tradingagents.research.cases import strip_case_json
+
+            parts = ["### Round 1", strip_case_json(first).strip()]
+            latest = str(debate.get("last_review") or "").strip()
+            if (
+                int(debate.get("count") or 0) > 1
+                and latest
+                and latest != first
+                and "NO MATERIAL UPDATE" not in latest.upper()
+            ):
+                parts += ["", "### Subsequent Material Update", strip_case_json(latest).strip()]
+            issue = str(debate.get("unresolved_issue") or "").strip()
+            if issue:
+                parts += ["", "### Remaining Unresolved Issue", issue]
+            final_state["debate_summary"] = "\n\n".join(parts)
+        risk = final_state.get("risk_debate_state") or {}
+        final_state["research_rounds_used"] = int(debate.get("count") or 0)
+        final_state["risk_rounds_used"] = int(risk.get("count") or 0) // 3
+        return final_state
+
+    # An exact size in prose: a percentage of a position, a share count, or a
+    # tranche count. The pattern lives with the agent-side gate so both agree.
+    def _stage_status(self, final_state) -> dict[str, str]:
+        """Whether each decision stage produced output, and where a reader finds it.
+
+        The 13:09 report moved the Research Manager and the Trader to the appendix
+        without saying so; a reader could not tell a policy decision from a failure.
+        """
+        return {
+            "research_manager": (
+                "completed_appendix_only"
+                if str(final_state.get("investment_plan") or "").strip()
+                else "failed"
+            ),
+            "trader": (
+                "completed_appendix_only"
+                if str(final_state.get("trader_investment_plan") or "").strip()
+                else "failed"
+            ),
+            "portfolio_manager": (
+                "completed_main_report"
+                if str(final_state.get("final_trade_decision") or "").strip()
+                else "failed"
+            ),
+        }
+
+    def _detect_conflicts(self, final_state) -> list[str]:
+        """Where an intermediate proposal disagrees with the controlling decision."""
+        conflicts: list[str] = []
+        rating = run_rating(final_state)
+        plan = str(final_state.get("investment_plan") or "")
+        trader = str(final_state.get("trader_investment_plan") or "")
+        decision = str(final_state.get("final_trade_decision") or "")
+        rm = re.search(r"(?m)^\*\*Recommendation\*\*:\s*(\w+)", plan)
+        action = re.search(r"(?m)^\*\*Action\*\*:\s*(\w+)", trader)
+        new_action = re.search(r"(?m)^\|\s*New investor\s*\|\s*(\w+)\s*\|", decision)
+        if rm and rm.group(1).lower() != rating.lower():
+            conflicts.append(
+                f"Research Manager recommended {rm.group(1)}; the decision is {rating}"
+            )
+        if action and new_action:
+            expected = {"buy": "initiate", "sell": "avoid", "hold": "wait"}.get(
+                action.group(1).lower()
+            )
+            if expected and new_action.group(1).lower() not in {expected, "review"}:
+                conflicts.append(
+                    f"Trader proposed {action.group(1)}; the decision tells a new investor "
+                    f"to {new_action.group(1)}"
+                )
+        no_book = not str(final_state.get("portfolio_context") or "").strip()
+        if no_book and re.search(r"(?m)^\*\*Stop Loss\*\*:\s*(?!not provided)\S", trader):
+            conflicts.append("an exact stop was proposed with no portfolio context")
+        return conflicts
+
+    def _apply_decision_integrity(self, final_state) -> None:
+        """Mark a decision assembled from unverified or fallback inputs.
+
+        Three things make a decision advisory rather than validated: no usable
+        research model (so no number audit), a structured agent that answered in
+        free text, and exact sizing proposed with no portfolio context. The report
+        must say so in the header and in the decision itself — the PM's prose
+        otherwise reads with the same confidence as a fully checked run.
+        """
+        reasons: list[str] = []
+        if final_state.get("research_model_source") == "unavailable":
+            reasons.append("research model unavailable, so no number audit ran")
+        fallbacks = final_state.get("structured_fallbacks") or {}
+        if fallbacks:
+            reasons.append(
+                "structured output fell back for "
+                + ", ".join(sorted(fallbacks))
+            )
+        no_portfolio = not str(final_state.get("portfolio_context") or "").strip()
+        decision = str(final_state.get("final_trade_decision") or "")
+        trader = str(final_state.get("trader_investment_plan") or "")
+        exact_sizing = no_portfolio and has_exact_size(decision + "\n" + trader)
+        if exact_sizing:
+            from tradingagents.agents.sizing import exact_size_match
+
+            final_state["sizing_instruction"] = (
+                exact_size_match(decision + "\n" + trader) or ""
+            )
+            reasons.append(
+                "exact position sizes were proposed with no portfolio weight, cost "
+                "basis, benchmark or mandate"
+            )
+        replaced = superseded_values(final_state)
+        if replaced and _cites_superseded(decision + "\n" + trader, replaced):
+            reasons.append(
+                "the decision cites a figure superseded by the model repair"
+            )
+        if str(final_state.get("trader_status") or "") == "advisory":
+            reasons.append(
+                "the Trader answered in free text after two schema attempts, so its "
+                "levels and size are advisory"
+            )
+
+        final_state["decision_integrity"] = (
+            "DEGRADED: " + "; ".join(reasons) if reasons else "validated"
+        )
+        if not reasons or not decision.strip():
+            return
+
+        if exact_sizing and "**Sizing note**" not in decision:
+            decision += (
+                "\n\n**Sizing note**: Exact position sizes appear above, but no portfolio "
+                "weight, cost basis, benchmark or mandate was supplied. Treat them as "
+                "illustrative, not as instructions."
+            )
+        if "**Decision integrity**" not in decision:
+            decision += (
+                "\n\n**Decision integrity**: DEGRADED — " + "; ".join(reasons) + ". "
+                "The direction was reviewed; exact sizing and execution instructions are "
+                "not schema-validated."
+            )
+        final_state["final_trade_decision"] = decision
+
+    def save_reports(self, final_state, ticker, save_path=None, html=True) -> Path:
+        """Write the report tree for a completed run, like the CLI does.
+
+        Programmatic callers get the same on-disk reports the CLI produces. Pass
+        an explicit ``save_path`` or let it default under ``results_dir``; the
+        report is also written as one HTML page unless ``html`` is False.
+
+        The audit and the case table are prepared here when the caller did not
+        already do it (``prepare_final_state`` runs before the decision is
+        recorded on both the CLI and ``propagate`` paths).
+        """
+        if save_path is None:
+            save_path = self.default_report_path(ticker)
+        # Duck-typed callers (the reporting tests) may supply only run_settings;
+        # a real graph always has the method.
+        prepare = getattr(self, "prepare_final_state", None)
+        if prepare is not None:
+            prepare(final_state, ticker)
         return write_report_tree(final_state, ticker, save_path, settings=self.run_settings(), html=html)
 
     def report_audit(self, final_state, company_name) -> str:
-        """Compare the figures in the prose with the model's figures."""
+        """Compare the figures in the prose with the model's figures.
+
+        With no usable model there is nothing to compare against, and the report
+        must say that rather than silently drop the section: a missing audit reads
+        like a clean one.
+        """
         try:
             model, valuation, _spec = self._research_model(
                 company_name,
@@ -368,13 +774,19 @@ class TradingAgentsGraph:
                 allow_build=False,
                 spec_hint=final_state.get("research_model_path") or None,
             )
-        except _ModelUnavailable:
-            return ""
+        except _ModelUnavailable as exc:
+            reason = " ".join(str(exc).split())
+            return (
+                "The number audit did not run: no usable research model was available "
+                f"({reason}). No figure in this report was checked against a model."
+            )
         from tradingagents.research import audit
 
         stats: dict = {}
-        findings = audit.audit_state(final_state, model, valuation, stats=stats)
-        if any(finding.kind == "relation" for finding in findings):
+        findings = audit.audit_state(
+            final_state, model, valuation, stats=stats, superseded=superseded_values(final_state)
+        )
+        if any(finding.kind in {"relation", "percentage"} for finding in findings):
             # A claim its own figures contradict is caught before publication:
             # one repair pass rewrites the sentence, and the same check must
             # accept the rewrite or the original (and the finding) stand.
@@ -388,7 +800,10 @@ class TradingAgentsGraph:
                     # fresh one first, then re-audit into IT (assigning {} on the
                     # left of the call would discard the counts it just recorded).
                     stats = {}
-                    findings = audit.audit_state(final_state, model, valuation, stats=stats)
+                    findings = audit.audit_state(
+                        final_state, model, valuation, stats=stats,
+                        superseded=superseded_values(final_state),
+                    )
         return audit.render(findings, stats=stats)
 
     def default_report_path(self, ticker) -> Path:
@@ -414,10 +829,98 @@ class TradingAgentsGraph:
             decision_horizon=str(self.config.get("decision_horizon") or ""),
         )
         # Empty unless a corpus is configured, so vanilla runs keep the same state.
-        package, price, spec_path = self._research_package(company_name, trade_date)
+        package, artifact, price, spec_path = self._research_package(company_name, trade_date)
         state["research_package"] = package
+        state["research_package_artifact"] = artifact
         state["research_price"] = price or 0.0
         state["research_model_path"] = spec_path
+        state["research_model_path_v1"] = spec_path
+        state["active_model_version"] = "v1" if spec_path else ""
+        state["fundamentals_challenge_check"] = "pending" if spec_path else "not_applicable"
+        state["model_challenges"] = ""
+        state["model_repair_log"] = ""
+        state["model_repair_addendum"] = ""
+        from tradingagents.research.report import fair_value_range_from_summary
+
+        low, high = fair_value_range_from_summary(package)
+        state["research_fair_value_low"] = low
+        state["research_fair_value_high"] = high
+        bases = getattr(self, "_basis_names", None) or {}
+        state["market_cap_basis"] = bases.get("market_cap_basis", "")
+        state["forecast_eps_basis"] = bases.get("forecast_eps_basis", "")
+        state["dilution_sensitivity_basis"] = bases.get("dilution_sensitivity_basis", "")
+        state["equity_value_share_basis"] = bases.get("equity_value_share_basis", "")
+        output_status = getattr(self, "_output_status", None) or {}
+        state["operating_model_status"] = output_status.get(
+            "operating_model_status", "VERIFIED" if spec_path else "NOT_APPLICABLE"
+        )
+        state["eps_model_status"] = output_status.get(
+            "eps_model_status", "UNVERIFIED" if spec_path else "SUPPRESSED"
+        )
+        state["eps_status"] = state["eps_model_status"]          # alias
+        state["valuation_method_statuses"] = json.dumps(
+            output_status.get("valuation_method_statuses", {})
+        )
+        state["valuation_status"] = output_status.get(
+            "valuation_status", "UNVERIFIED" if spec_path else "SUPPRESSED"
+        )
+        state["sensitivity_model_status"] = output_status.get("sensitivity_model_status", "UNAVAILABLE")
+        state["sensitivity_status"] = state["sensitivity_model_status"]   # alias
+        state["research_fair_value_verified"] = bool(output_status.get("valuation_controlling"))
+        state["action_status"] = "controlling"
+        state["trader_status"] = "structured"
+        state["sector"] = getattr(self, "_spec_sector", "") or ""
+        state["decision_basis"] = ""
+        state["decision_audit_result"] = ""
+        state["model_status"] = "VERIFIED" if spec_path else "NOT_APPLICABLE"
+        state["overall_status"] = ""
+        state["decision_status"] = (
+            "NOT_RATED" if state["model_status"] == "UNVERIFIED"
+            else "PROVISIONAL" if state["valuation_status"] != "VERIFIED"
+            else "FINAL"
+        ) if spec_path else ""
+        state["blocking_issue"] = ""
+        state["sizing_instruction"] = ""
+        state["non_model_decision_basis"] = {}
+        state["repairs_applied"] = 0
+        state["unresolved_blocking"] = 0
+        state["unresolved_material"] = 0
+        state["sensitivity_table"] = getattr(self, "_sensitivity_table", "")
+        state["sensitivity_ids"] = json.dumps(
+            [item.get("sensitivity_id") for item in getattr(self, "_sensitivity_items", [])]
+        )
+        state["sensitivity_gaps"] = json.dumps(getattr(self, "_sensitivity_gaps", []))
+        state["controlling_fair_value_low"] = None
+        state["controlling_fair_value_base"] = None
+        state["controlling_fair_value_high"] = None
+        source = getattr(self, "_spec_source", "") or ""
+        state["research_model_source"] = source
+        state["research_model_created_at"] = getattr(self, "_spec_created_at", "") or ""
+        state["stale_model_path"] = ""
+        state["stale_model_package"] = ""
+        if package and not spec_path:
+            # Keep the previous spec for comparison only; it must not drive the
+            # rating, valuation or transaction of a run that could not use it.
+            stale_path, stale_package = self._stale_model_reference(company_name, trade_date)
+            state["stale_model_path"] = stale_path
+            state["stale_model_package"] = stale_package
+        state["spec_compatibility"] = (
+            "not_applicable" if source == "built" else ("unknown" if spec_path else "")
+        )
+        state["spec_compatibility_reason"] = (
+            "built for this run" if source == "built" else ""
+        )
+        if spec_path and source == "reused":
+            state["spec_compatibility"] = getattr(self, "_spec_compatibility", "") or "unknown"
+            state["spec_compatibility_reason"] = (
+                getattr(self, "_spec_compatibility_reason", "") or ""
+            )
+        if package and not spec_path:
+            # No usable spec: say which model is unavailable and why. This is the
+            # deterministic research model, never the LLM client.
+            state["research_model_source"] = "unavailable"
+            state["spec_compatibility"] = "unavailable"
+            state["spec_compatibility_reason"] = " ".join(package.split())[:400]
         return state
 
     def research_package(self, company_name: str, trade_date: str | None = None,
@@ -431,20 +934,81 @@ class TradingAgentsGraph:
         return self._research_package(company_name, trade_date, price)[0]
 
     def _research_package(self, company_name: str, trade_date: str | None = None,
-                          price: float | None = None) -> tuple[str, float, str]:
-        """The package text, the share price used, and the spec path behind them."""
+                          price: float | None = None) -> tuple[str, str, float, str]:
+        """The package text, the published version of it, the price and the spec path.
+
+        The two texts differ only in the imperative lines the prompt needs; the
+        report must not publish instructions addressed to the analyst.
+        """
         root = research_dir_from_env()
         if root is None:
-            return "", 0.0, ""
+            return "", "", 0.0, ""
 
         try:
             model, valuation, spec_path = self._research_model(company_name, trade_date, price)
         except _ModelUnavailable as exc:
-            return str(exc), 0.0, ""
+            note = str(exc)
+            return note, note, 0.0, ""
 
-        from tradingagents.research import report as research_report
+        from tradingagents.research import (
+            capital,
+            report as research_report,
+            sensitivity,
+            status as status_module,
+        )
+        from tradingagents.research.shares import basis_report
 
-        return research_report.compact_summary(model, valuation), valuation.price, str(spec_path)
+        items, gaps = sensitivity.rank(model.spec, top=5)
+        table = sensitivity.render(items)
+        basis = basis_report(model.spec)
+        statuses = status_module.assess(
+            model_status="VERIFIED",
+            basis=basis,
+            has_band=(
+                valuation.fair_value_low is not None and valuation.fair_value_high is not None
+            ),
+            sensitivity_count=len(items),
+            price=valuation.price,
+            has_depreciation=bool(model.spec.cashflow),
+            has_net_debt=bool(
+                model.spec.net_debt is not None
+                and model.spec.net_debt.components_verified()
+            ),
+            ev_ebitda_multiple=model.spec.valuation.ev_ebitda_multiple,
+            capital_verified=capital.validated(model.spec)[0],
+        )
+        if statuses["sensitivity_model_status"] != status_module.VERIFIED:
+            table = ""
+            items = []
+        self._output_status = statuses
+        self._basis_names = basis
+        self._sensitivity_items = [item.to_dict() for item in items]
+        self._sensitivity_gaps = gaps
+        self._sensitivity_table = table
+        include_per_share = statuses["eps_model_status"] == status_module.VERIFIED
+        include_ev = (
+            statuses["valuation_method_statuses"].get("ev_ebitda") == status_module.VERIFIED
+        )
+        include_ev_per_share = bool(
+            include_ev and statuses.get("ev_per_share_status") == status_module.VERIFIED
+        )
+        package = research_report.compact_summary(
+            model, valuation, include_per_share=include_per_share,
+            include_ev_ebitda=include_ev, include_ev_per_share=include_ev_per_share,
+        )
+        artifact = research_report.compact_summary(
+            model, valuation, instructions=False,
+            include_per_share=include_per_share,
+            include_ev_ebitda=include_ev, include_ev_per_share=include_ev_per_share,
+        )
+        if table:
+            gaps_line = (
+                f"\n\nResearch gaps (no explicit model assumption): {', '.join(gaps)}."
+                if gaps else ""
+            )
+            package = f"{package}\n\n{table}{gaps_line}"
+            artifact = f"{artifact}\n\n{table}{gaps_line}"
+        return package, artifact, valuation.price, str(spec_path)
 
     def _research_model(self, company_name: str, trade_date: str | None = None,
                         price: float | None = None, allow_build: bool = True,
@@ -468,9 +1032,61 @@ class TradingAgentsGraph:
         }
         if spec_path is None and not allow_build:
             raise _ModelUnavailable("No model spec is available to audit against.")
-        if spec_path is None or rebuild:
-            from tradingagents.research.schemas import ModelError
+        rebuilt = spec_path is None or rebuild
+        config = getattr(self, "config", None) or {}
+        purpose = str(config.get("run_purpose") or "production").strip().lower()
 
+        from tradingagents.research import kernel, provenance, report as research_report, valuation
+        from tradingagents.research.schemas import ModelError
+
+        compatibility, compatibility_reason = provenance.NOT_APPLICABLE, "built for this run"
+        if not rebuilt:
+            # Identity is read from the spec itself; an unreadable file is
+            # reported by the load below, with the same message as before.
+            try:
+                probe = research_report.load_spec(spec_path)
+                unit, currency = probe.unit, probe.currency
+            except (ModelError, OSError, KeyError, ValueError):
+                unit, currency = "", ""
+            compatibility, compatibility_reason = provenance.check(
+                spec_path, ticker=company_name, unit=unit, currency=currency, corpus=corpus
+            )
+            if compatibility == provenance.INCOMPATIBLE:
+                if purpose == "production" and allow_build:
+                    logger.warning(
+                        "Model spec %s is incompatible (%s); rebuilding it",
+                        spec_path, compatibility_reason,
+                    )
+                    rebuilt = True
+                    compatibility = provenance.NOT_APPLICABLE
+                    compatibility_reason = "rebuilt: the loaded spec was incompatible"
+                elif purpose == "production":
+                    raise _ModelUnavailable(
+                        "MODEL UNAVAILABLE: the spec at "
+                        f"{spec_path.name} is incompatible with this run "
+                        f"({compatibility_reason}), and a production run may not reuse it. "
+                        "Report the model as unavailable."
+                    )
+            elif compatibility == provenance.UNKNOWN:
+                if purpose == "production" and allow_build:
+                    # "Unknown" is not a licence to publish numbers: a production
+                    # run rebuilds once rather than trust a spec it cannot verify.
+                    logger.warning(
+                        "Model spec %s cannot be verified (%s); rebuilding it",
+                        spec_path, compatibility_reason,
+                    )
+                    rebuilt = True
+                    compatibility = provenance.NOT_APPLICABLE
+                    compatibility_reason = (
+                        "rebuilt: the loaded spec's dependency compatibility could not be verified"
+                    )
+                else:
+                    logger.warning(
+                        "Model spec %s reused with unverified dependencies: %s",
+                        spec_path, compatibility_reason,
+                    )
+
+        if rebuilt:
             try:
                 spec_path = self._build_spec_from_corpus(company_name, corpus, trade_date)
             except ModelError as exc:
@@ -478,9 +1094,8 @@ class TradingAgentsGraph:
                     f"MODEL UNAVAILABLE: {exc} Report the model as unavailable; "
                     "do not estimate its numbers."
                 ) from exc
-
-        from tradingagents.research import kernel, report as research_report, valuation
-        from tradingagents.research.schemas import ModelError
+            compatibility = provenance.NOT_APPLICABLE
+            compatibility_reason = "built for this run"
 
         try:
             spec = research_report.load_spec(spec_path)
@@ -489,7 +1104,23 @@ class TradingAgentsGraph:
                 spec.valuation.price = resolved
             if note and note not in spec.warnings:   # a reload must not stack the note
                 spec.warnings.append(note)
-            model = kernel.run(spec)
+            model = kernel.run(spec, strict=purpose != "replay")
+            if allow_build:
+                # Provenance for the report: built now, or loaded from a file
+                # with a dependency verdict.
+                from tradingagents.research.shares import basis_report
+
+                self._spec_source = "built" if rebuilt else "reused"
+                self._basis_names = basis_report(spec)
+                self._spec_sector = spec.sector
+                self._spec_compatibility = compatibility
+                self._spec_compatibility_reason = compatibility_reason
+                try:
+                    self._spec_created_at = datetime.fromtimestamp(
+                        Path(spec_path).stat().st_mtime
+                    ).isoformat(timespec="seconds")
+                except OSError:
+                    self._spec_created_at = ""
             return model, valuation.value(model), spec_path
         except (ModelError, OSError, KeyError, ValueError) as exc:
             logger.warning("Research model at %s could not be used: %s", spec_path, exc)
@@ -598,7 +1229,63 @@ class TradingAgentsGraph:
         import json as _json
 
         path.write_text(_json.dumps(spec.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        # The dependencies this forecast was built from, beside the spec, so a
+        # later run can say "compatible" instead of guessing.
+        from tradingagents.research import provenance
+
+        try:
+            provenance.write_manifest(
+                path,
+                ticker=company_name,
+                unit=spec.unit,
+                currency=spec.currency,
+                corpus=corpus,
+                as_of=str(trade_date or ""),
+            )
+        except OSError as exc:
+            logger.warning("Could not write the dependency manifest for %s: %s", path, exc)
         return path
+
+    def _stale_model_reference(self, company_name: str, trade_date: str | None) -> tuple[str, str]:
+        """The previous spec, kept for comparison only; it never drives the run.
+
+        A failed rebuild or an incompatible spec leaves an older file on disk. It is
+        rendered into the appendix with an explicit banner so a reader can compare,
+        but the report, rating and transaction were built without it.
+        """
+        root = research_dir_from_env()
+        if root is None:
+            return "", ""
+        corpus = resolve_corpus_root(root, company_name)
+        safe = safe_ticker_component(company_name)
+        candidates = []
+        shared = _configured_spec(company_name)
+        if shared is not None:
+            candidates.append(shared[0])
+        candidates.extend([
+            corpus / "model.json",
+            corpus / f"{safe}.json",
+            self._models_dir() / f"{safe}.json",
+        ])
+        path = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if path is None:
+            return "", ""
+        try:
+            from tradingagents.research import kernel, report as research_report, valuation
+
+            spec = research_report.load_spec(path)
+            model = kernel.run(spec)
+            banner = (
+                "STALE MODEL — NOT USED\n\n"
+                "This specification did not drive this run's rating, valuation or "
+                "transaction. It is kept for comparison and diagnostics only.\n\n"
+            )
+            return str(path), banner + research_report.compact_summary(
+                model, valuation.value(model), instructions=False
+            )
+        except Exception as exc:  # noqa: BLE001 - a stale reference is optional
+            logger.info("Stale model reference at %s could not be rendered: %s", path, exc)
+            return str(path), ""
 
     def _models_dir(self) -> Path:
         """Where LLM-built model specs (and failed attempts) are kept."""
@@ -649,6 +1336,379 @@ class TradingAgentsGraph:
                     "which may be stale."
                 )
         return spec_price, ""
+
+    def run_repair_gate(self, state) -> dict:
+        """Repair the model before the debate, inside the reviewer's entry path.
+
+        The Fundamentals Analyst's report is the evidence for the repair: it names
+        the fields it believes are wrong. This step extracts those challenges as a
+        bounded structured call, applies the scalar corrections to a copy of the
+        spec, re-runs the kernel, and publishes a v2 package plus a repair note.
+        A structural challenge is recorded as unresolved; a repair that breaks an
+        identity or cannot be applied leaves no model to value the decision, which
+        the report states rather than hides.
+
+        No graph node or edge is added: this runs inside the existing Adversarial
+        Reviewer transition, and is idempotent because ``active_model_version``
+        is already ``v2`` on a re-entry or a resumed checkpoint.
+        """
+        if str(state.get("active_model_version") or "") == "v2":
+            return {}
+        company = str(state.get("company_of_interest") or "")
+        trade_date = str(state.get("trade_date") or "")
+        spec_path = str(state.get("research_model_path") or "")
+        report_text = str(state.get("fundamentals_report") or "").strip()
+        if research_dir_from_env() is None or not spec_path:
+            return {"fundamentals_challenge_check": "not_applicable",
+                    "model_status": "NOT_APPLICABLE"}
+        if not report_text:
+            # No Fundamentals analyst in this run: the kernel's own checks are the
+            # gate, and the report says there was no challenge pass.
+            try:
+                self._research_model(company, trade_date, state.get("research_price") or None,
+                                     allow_build=False, spec_hint=spec_path)
+            except _ModelUnavailable as exc:
+                return self._repair_failed(str(exc), "kernel_only")
+            return {
+                "fundamentals_challenge_check": "kernel_only_pass",
+                "model_status": "VERIFIED",
+            }
+
+        from tradingagents.research import (
+            repair as repair_mod,
+            report as research_report,
+            valuation as valuation_mod,
+        )
+
+        llm = getattr(self, "deep_thinking_llm", None) or getattr(self, "quick_thinking_llm", None)
+        if llm is None:
+            return {"fundamentals_challenge_check": "not_applicable"}
+
+        package = str(state.get("research_package") or "")
+        status, challenges = self._extract_challenges(llm, report_text, package)
+        if status == "failure":
+            # An extraction miss is not "no challenges": the review was never
+            # confirmed, so no model figure may drive the decision.
+            return self._repair_failed(
+                "Analyst challenge review was not confirmed (structured extraction failed twice)",
+                "extraction_failed", challenges,
+            )
+        if status == "no_challenges_found" or not challenges:
+            return {
+                "fundamentals_challenge_check": "no_challenges_found",
+                "model_challenges": repair_mod.to_json(challenges),
+            }
+
+        try:
+            spec = research_report.load_spec(spec_path)
+        except Exception as exc:  # noqa: BLE001 - an unreadable spec is reported, not used
+            return self._repair_failed(f"the model spec could not be read ({exc})",
+                                       "repair_failed", challenges)
+
+        from tradingagents.research import issues as issues_module
+
+        deterministic = issues_module.collect(spec)
+        deterministic_counts = issues_module.counts(deterministic)
+        verified, unverified, structural = repair_mod.verify_challenges(spec, challenges)
+        unresolved = structural + unverified
+        unresolved_blocking = sum(1 for c in unresolved if c.severity == "blocking")
+        unresolved_material = (
+            sum(1 for c in unresolved if c.severity == "material")
+            + deterministic_counts.get("material", 0)
+        )
+        if unresolved_blocking:
+            # An extracted "blocking" that could not be verified must not destroy
+            # a valid model: only a verified blocking defect (or a repair that
+            # fails revalidation) withholds the rating. Disclose it as material.
+            logger.warning(
+                "Downgrading %d unverified blocking challenge(s) to material: %s",
+                unresolved_blocking,
+                "; ".join(c.challenge_type for c in unresolved if c.severity == "blocking"),
+            )
+            unresolved_material += unresolved_blocking
+            unresolved_blocking = 0
+        if not verified:
+            texts = [c.proposed_correction or c.challenge_type for c in unresolved]
+            return {
+                "fundamentals_challenge_check": "repair_unresolved",
+                "model_challenges": repair_mod.to_json(
+                    challenges, issues=[issue.to_dict() for issue in deterministic]
+                ),
+                "model_repair_log": json.dumps({
+                    "changes": [], "unresolved": texts,
+                    "unresolved_blocking": 0, "unresolved_material": unresolved_material,
+                }),
+                "model_repair_addendum": repair_mod.render_addendum([], texts),
+                "unresolved_material": unresolved_material,
+            }
+
+        try:
+            repaired, result, changes = repair_mod.repair_model(spec, verified)
+        except Exception as exc:  # noqa: BLE001 - repair is optional, disclosure is not
+            blocking = any(c.severity == "blocking" for c in verified)
+            logger.warning("Model repair did not apply: %s", exc)
+            if blocking:
+                return self._repair_failed(f"a blocking challenge could not be repaired ({exc})",
+                                           "repair_failed", challenges)
+            texts = [c.proposed_correction or c.challenge_type for c in unresolved]
+            return {
+                "fundamentals_challenge_check": "repair_unresolved",
+                "model_challenges": repair_mod.to_json(
+                    challenges, issues=[issue.to_dict() for issue in deterministic]
+                ),
+                "model_repair_log": json.dumps({
+                    "changes": [], "unresolved": texts,
+                    "unresolved_blocking": 0, "unresolved_material": unresolved_material,
+                }),
+                "model_repair_addendum": repair_mod.render_addendum([], texts),
+                "unresolved_material": unresolved_material,
+            }
+
+        valuation = valuation_mod.value(result)
+        v2_path = self._models_dir() / f"{safe_ticker_component(company)}.v2.json"
+        v2_path.write_text(
+            json.dumps(repaired.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        # The repaired model gets its own sensitivities: v1's table would price
+        # the superseded share count and EPS.
+        from tradingagents.research import sensitivity as sensitivity_module
+
+        items, gaps = sensitivity_module.rank(repaired)
+        table = sensitivity_module.render(items)
+        low, high = valuation.fair_value_low, valuation.fair_value_high
+        from tradingagents.research import capital as capital_module, status as status_module
+        from tradingagents.research.shares import basis_report
+
+        bases = basis_report(repaired)
+        statuses = status_module.assess(
+            model_status="VERIFIED",
+            basis=bases,
+            has_band=low is not None and high is not None,
+            challenge_fields=[
+                field for challenge in unresolved for field in challenge.affected_fields
+            ],
+            sensitivity_count=len(items),
+            price=valuation.price,
+            has_depreciation=bool(repaired.cashflow),
+            has_net_debt=bool(
+                repaired.net_debt is not None and repaired.net_debt.components_verified()
+            ),
+            ev_ebitda_multiple=repaired.valuation.ev_ebitda_multiple,
+            capital_verified=capital_module.validated(repaired)[0],
+        )
+        if statuses["sensitivity_model_status"] != status_module.VERIFIED:
+            table = ""
+            items = []
+            statuses = status_module.assess(
+                model_status="VERIFIED",
+                basis=bases,
+                has_band=low is not None and high is not None,
+                challenge_fields=[
+                    field for challenge in unresolved for field in challenge.affected_fields
+                ],
+                sensitivity_count=0,
+                price=valuation.price,
+                has_depreciation=bool(repaired.cashflow),
+                has_net_debt=bool(
+                    repaired.net_debt is not None
+                    and repaired.net_debt.components_verified()
+                ),
+                ev_ebitda_multiple=repaired.valuation.ev_ebitda_multiple,
+                capital_verified=capital_module.validated(repaired)[0],
+            )
+        include_per_share = statuses["eps_model_status"] == status_module.VERIFIED
+        include_ev = (
+            statuses["valuation_method_statuses"].get("ev_ebitda") == status_module.VERIFIED
+        )
+        include_ev_per_share = bool(
+            include_ev and statuses.get("ev_per_share_status") == status_module.VERIFIED
+        )
+        package_v2 = research_report.compact_summary(
+            result, valuation, include_per_share=include_per_share,
+            include_ev_ebitda=include_ev, include_ev_per_share=include_ev_per_share,
+        )
+        artifact_v2 = research_report.compact_summary(
+            result, valuation, instructions=False, include_per_share=include_per_share,
+            include_ev_ebitda=include_ev, include_ev_per_share=include_ev_per_share,
+        )
+        if table:
+            gaps_line = (
+                f"\n\nResearch gaps (no explicit model assumption): {', '.join(gaps)}."
+                if gaps else ""
+            )
+            package_v2 = f"{package_v2}\n\n{table}{gaps_line}"
+            artifact_v2 = f"{artifact_v2}\n\n{table}{gaps_line}"
+
+        unresolved_texts = [c.proposed_correction or c.challenge_type for c in unresolved]
+        addendum = self._repair_addendum(llm, report_text, changes, result, unresolved_texts)
+        logger.info("Model repaired for %s: %s field(s) changed", company, len(changes))
+        return {
+            "fundamentals_challenge_check": "repaired",
+            "active_model_version": "v2",
+            "research_model_path_v1": spec_path,
+            "research_model_path": str(v2_path),
+            "research_model_source": "repaired",
+            "research_package": package_v2,
+            "research_package_artifact": artifact_v2,
+            "research_price": valuation.price,
+            "research_fair_value_low": low,
+            "research_fair_value_high": high,
+            "research_fair_value_verified": statuses["valuation_controlling"],
+            "operating_model_status": statuses["operating_model_status"],
+            "eps_model_status": statuses["eps_model_status"],
+            "eps_status": statuses["eps_model_status"],
+            "valuation_method_statuses": json.dumps(statuses["valuation_method_statuses"]),
+            "valuation_status": statuses["valuation_status"],
+            "sensitivity_model_status": statuses["sensitivity_model_status"],
+            "sensitivity_status": statuses["sensitivity_model_status"],
+            "sensitivity_table": table,
+            "sensitivity_ids": json.dumps([item.sensitivity_id for item in items]),
+            "sensitivity_gaps": json.dumps(gaps),
+            "market_cap_basis": bases["market_cap_basis"],
+            "forecast_eps_basis": bases["forecast_eps_basis"],
+            "dilution_sensitivity_basis": bases["dilution_sensitivity_basis"],
+            "equity_value_share_basis": bases["equity_value_share_basis"],
+            "repairs_applied": len(changes),
+            "unresolved_blocking": 0,
+            "unresolved_material": unresolved_material,
+            "model_status": "VERIFIED",
+            "model_challenges": repair_mod.to_json(
+                challenges, changes, [issue.to_dict() for issue in deterministic]
+            ),
+            "model_repair_log": json.dumps({
+                "changes": changes,
+                "unresolved": unresolved_texts,
+                "unresolved_blocking": 0,
+                "unresolved_material": unresolved_material,
+            }),
+            "model_repair_addendum": addendum,
+        }
+
+    def _extract_challenges(self, llm, report_text: str, package: str) -> tuple[str, list]:
+        """(status, challenges): one bounded call, one retry, then failure.
+
+        ``failure`` is distinct from "the analyst found nothing": an unparseable
+        answer, a prose fallback or a response without an explicit status means
+        the review was never confirmed.
+        """
+        from tradingagents.agents.structured import (
+            STRUCTURED_RETRY,
+            bind_structured,
+            invoke_structured,
+        )
+        from tradingagents.research.repair import (
+            EXTRACTION_PROMPT,
+            ModelChallenge,
+            ModelChallengeList,
+        )
+
+        structured = bind_structured(llm, ModelChallengeList, "Model Repair Gate")
+        if structured is None:
+            return "failure", []
+        prompt = EXTRACTION_PROMPT.replace("{package}", package[:6000]).replace(
+            "{report}", report_text[:12000]
+        )
+        result = invoke_structured(structured, prompt, "Model Repair Gate")
+        if result is None:
+            result = invoke_structured(
+                structured, prompt + STRUCTURED_RETRY, "Model Repair Gate"
+            )
+        if result is None:
+            return "failure", []
+        challenges = [
+            challenge
+            for challenge in getattr(result, "challenges", [])
+            if isinstance(challenge, ModelChallenge)
+        ][:8]
+        status = str(getattr(result, "status", "") or "")
+        if status == "no_challenges_found":
+            return "no_challenges_found", []
+        if status != "challenges_found":
+            return "failure", challenges
+        return "challenges_found", challenges
+
+    def _repair_addendum(self, llm, report_text: str, changes: list[dict],
+                         result, unresolved: list[str]) -> str:
+        """A model-written note on affected conclusions, or the deterministic one.
+
+        The model-written version is accepted only when every number it introduces
+        is a value from the before/after models; otherwise the deterministic list
+        of changed fields is published.
+        """
+        from tradingagents.agents.structured import bind_structured, invoke_structured
+        from tradingagents.research import repair as repair_mod
+        from tradingagents.research.repair import ADDENDUM_PROMPT, ModelRepairAddendum
+
+        allowed = repair_mod.numbers_in(str(changes))
+        for row in result.rows:
+            allowed.update(v for v in (row.revenue, row.operating_profit, row.net_profit) if v)
+            allowed.update(value for value in row.eps.values() if value)
+        # The prompt shows the values as the tables print them; accept that
+        # rounding in the answer as well as the raw float.
+        allowed.update(round(float(value), 1) for value in list(allowed))
+        structured = bind_structured(llm, ModelRepairAddendum, "Model Repair Addendum")
+        if structured is not None:
+            prompt = (
+                ADDENDUM_PROMPT.replace(
+                    "{changes}", "\n".join(
+                        f"- {c['field']}: {repair_mod.shown(c.get('old'))} -> "
+                        f"{repair_mod.shown(c.get('new'))}"
+                        for c in changes
+                    )
+                )
+                .replace("{conclusions}", report_text[:8000])
+            )
+            addendum = invoke_structured(structured, prompt, "Model Repair Addendum")
+            if addendum is not None and repair_mod.addendum_is_grounded(addendum, allowed):
+                return repair_mod.render_conclusions(addendum, changes)
+            if addendum is not None:
+                logger.warning("Repair addendum introduced an unverified figure; using the diff")
+        return repair_mod.render_addendum(changes, unresolved)
+
+    def _repair_failed(self, reason: str, stage: str, challenges=None) -> dict:
+        """No usable model after a repair attempt: say so and let the run continue."""
+        from tradingagents.research import repair as repair_mod
+
+        logger.warning("Model repair gate: %s", reason)
+        blocking = sum(1 for c in list(challenges or []) if getattr(c, "severity", "") == "blocking")
+        material = sum(1 for c in list(challenges or []) if getattr(c, "severity", "") == "material")
+        issues = [
+            {
+                "challenge_type": getattr(c, "challenge_type", "") or "unspecified",
+                "affected_fields": list(getattr(c, "affected_fields", []) or []),
+                "verification_result": "unresolved",
+                "repair_attempted": bool(getattr(c, "proposed_values", {})),
+                "failure_reason": reason,
+                "publication_impact": "model EPS, valuation and rating suppressed",
+            }
+            for c in list(challenges or [])
+            if getattr(c, "severity", "") in {"blocking", "material"}
+        ]
+        return {
+            "fundamentals_challenge_check": stage,
+            "active_model_version": "unverified",
+            "research_model_source": "unavailable",
+            "research_package": "",
+            "research_package_artifact": "",
+            "research_fair_value_low": None,
+            "research_fair_value_high": None,
+            "spec_compatibility": "unavailable",
+            "spec_compatibility_reason": reason,
+            "model_status": "UNVERIFIED",
+            "overall_status": "Not Rated",
+            "decision_status": "Provisional",
+            "repairs_applied": 0,
+            "unresolved_blocking": blocking,
+            "unresolved_material": material,
+            "blocking_issue": json.dumps(issues, ensure_ascii=False),
+            # A blocked model may not feed the debate through the back door.
+            "sensitivity_table": "",
+            "sensitivity_ids": "[]",
+            "sensitivity_gaps": "[]",
+            "case_table": "",
+            "metrics_table": "",
+            "model_challenges": repair_mod.to_json(list(challenges or [])),
+        }
 
     def _memory_step(self, state):
         """The graph's Memory Log step, alongside the analysts (#1428): settle every
@@ -702,8 +1762,17 @@ class TradingAgentsGraph:
 
     def record_decision(self, company_name, trade_date, final_state):
         """Record a finished run: its state log, and its decision in the memory log
-        for reflection on the next same-ticker run. propagate() and the CLI both end here."""
+        for reflection on the next same-ticker run. propagate() and the CLI both end here.
+
+        A diagnostic run (``run_purpose`` other than ``production``) writes the
+        state log but does not teach later runs: a reused specification whose
+        dependencies were not verified must not become training feedback.
+        """
         self._log_state(trade_date, final_state)
+        purpose = str(self.config.get("run_purpose") or "production").strip().lower()
+        if purpose != "production":
+            logger.info("Run purpose %r: state log written, memory log untouched", purpose)
+            return
         decision = final_state.get("final_trade_decision")
         if not decision:
             logger.warning("No final decision for %s on %s; nothing added to the memory log",
@@ -741,6 +1810,9 @@ class TradingAgentsGraph:
         else:
             final_state = self.graph.invoke(graph_input, **args)
 
+        # Audit and repair before recording: the memory entry and the state log
+        # must carry the same text the published report does (#finding B5).
+        self.prepare_final_state(final_state, company_name)
         self.record_decision(company_name, trade_date, final_state)
 
         # Clear checkpoint on successful completion to avoid stale state.
@@ -792,6 +1864,19 @@ class TradingAgentsGraph:
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],
                 "challenge_history": final_state["investment_debate_state"].get("challenge_history", ""),
+                "first_review": final_state["investment_debate_state"].get("first_review", ""),
+                "first_review_raw": final_state["investment_debate_state"].get(
+                    "first_review_raw", ""
+                ),
+                "unresolved_issue": final_state["investment_debate_state"].get(
+                    "unresolved_issue", ""
+                ),
+                "review_missing": final_state["investment_debate_state"].get(
+                    "review_missing", ""
+                ),
+                "no_material_update": final_state["investment_debate_state"].get(
+                    "no_material_update", False
+                ),
                 "history": final_state["investment_debate_state"]["history"],
                 "current_response": final_state["investment_debate_state"][
                     "current_response"
@@ -807,6 +1892,25 @@ class TradingAgentsGraph:
             "investment_plan": final_state["investment_plan"],
             "final_trade_decision": final_state["final_trade_decision"],
             "final_rating": run_rating(final_state),
+            # The research layer and the audit, so the state log is the same
+            # frozen artifact the report was rendered from.
+            "research_package": final_state.get("research_package", ""),
+            "research_package_artifact": final_state.get("research_package_artifact", ""),
+            "research_price": final_state.get("research_price"),
+            "research_model_path": final_state.get("research_model_path", ""),
+            "stale_model_path": final_state.get("stale_model_path", ""),
+            "report_audit": final_state.get("report_audit", ""),
+            "case_table": final_state.get("case_table", ""),
+            "decision_horizon": final_state.get("decision_horizon", ""),
+            "decision_integrity": final_state.get("decision_integrity", ""),
+            "research_rounds_used": final_state.get("research_rounds_used"),
+            "risk_rounds_used": final_state.get("risk_rounds_used"),
+            "research_model_source": final_state.get("research_model_source", ""),
+            "research_model_created_at": final_state.get("research_model_created_at", ""),
+            "spec_compatibility": final_state.get("spec_compatibility", ""),
+            "spec_compatibility_reason": final_state.get("spec_compatibility_reason", ""),
+            "structured_fallbacks": final_state.get("structured_fallbacks", {}),
+            "run_purpose": self.config.get("run_purpose"),
             "run_settings": self.run_settings(),
         }
 

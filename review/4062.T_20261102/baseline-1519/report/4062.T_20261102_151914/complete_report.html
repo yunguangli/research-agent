@@ -1,0 +1,1032 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>4062.T 2026-11-02 Underweight: TradingAgents report</title>
+<style>
+:root {
+  --paper: #fbfbfa; --ink: #1c2126; --muted: #5d6670; --rule: #e2e5e8; --wash: #f2f4f5;
+  --accent: #087a59; --up: #087a59; --down: #b4372f; --level: #5d6670; --edge: #d3d8dc; --mark: #878f97;
+  --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #131a1f; --ink: #e4e8eb; --muted: #9aa6af; --rule: #263239; --wash: #1a242a;
+    --accent: #14c290; --up: #14c290; --down: #ef6f63; --level: #9aa6af; --edge: #3d4c55; --mark: #66737c;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .masthead .logo [stroke="#363636"] { stroke: var(--muted); }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 17px/1.62 var(--serif); font-kerning: normal;
+}
+.page { max-width: 46rem; margin: 0 auto; padding: 3.5rem 1.5rem 6rem; }
+main h2, main h3 { scroll-margin-top: 1rem; }
+a { color: var(--accent); text-underline-offset: 0.15em; }
+h1, h2, h3, h4 { text-wrap: balance; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.masthead { padding-bottom: 1.75rem; border-bottom: 1px solid var(--rule); }
+/* The logo leads at the top left, where readers look for it, 24px tall (the usual
+   on-screen floor for a wordmark) with at least its height clear below. */
+.masthead .logo { display: block; width: fit-content; margin: 0 0 2.25rem; }
+.masthead .logo svg { display: block; height: 1.5rem; width: auto; }
+.masthead h1 {
+  margin: 0; font: 600 2.6rem/1.1 var(--sans); letter-spacing: -0.02em;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2em 0.5em;
+}
+.masthead .rating { font-weight: 500; }
+.rating.up { color: var(--up); } .rating.down { color: var(--down); } .rating.level { color: var(--level); }
+.rating.review { color: var(--muted); font-style: italic; }
+.masthead .date { margin: 0.55rem 0 1.5rem; font: 1rem/1.4 var(--sans); color: var(--muted); }
+.run { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 0.45rem 1.25rem;
+  font: 0.85rem/1.5 var(--sans); }
+.run > div { display: contents; }
+.run dt { color: var(--muted); }
+.run dd { margin: 0; overflow-wrap: anywhere; }
+.run .note dd { color: var(--down); }
+.field { display: inline-block; margin: 0 0.15rem 0.15rem 0; padding: 0 0.4rem; border: 1px solid var(--edge);
+  border-radius: 4px; background: var(--wash); font: 0.8rem/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.run .group { display: inline-block; margin-right: 0.9rem; white-space: nowrap; }
+.run .group > .name { color: var(--muted); margin-right: 0.3rem; }
+.run .then { color: var(--muted); margin: 0 0.2rem; }
+
+/* The sections: listed under the header on narrow screens. On wide ones, a
+   quiet rail centred on the left edge (numerals for the sections, short bars
+   for their agents) that opens into the full list when pointed at or focused. */
+.contents { margin: 2.25rem 0 0; font: 0.9rem/1.45 var(--sans); }
+.contents ul { margin: 0; padding: 0; list-style: none; }
+.contents > ul > li { margin: 0 0 0.75rem; }
+.contents ul ul { margin-top: 0.2rem; padding-left: 1.6rem; font-size: 0.85rem; }
+.contents ul ul li { margin: 0.1rem 0; }
+.contents a { display: flex; align-items: center; gap: 0.6rem; color: var(--muted); text-decoration: none; }
+.contents > ul > li > a { color: var(--ink); }
+.contents .num { min-width: 1.6rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.contents .bar { display: none; }
+.contents a:hover .label, .contents a:focus-visible .label { color: var(--accent); text-decoration: underline; }
+.to-top { position: fixed; right: 1rem; bottom: calc(1rem + env(safe-area-inset-bottom));
+  padding: 0.25rem 0.6rem; border: 1px solid var(--edge); border-radius: 4px; background: var(--paper);
+  color: var(--muted); font: 0.8rem/1.4 var(--sans); text-decoration: none; }
+
+@media (min-width: 60rem) {
+  .contents { position: fixed; left: 1rem; top: 50%; transform: translateY(-50%); z-index: 1;
+    max-height: 86vh; overflow-y: auto; overscroll-behavior: contain; margin: 0;
+    padding: 0.7rem 0.9rem; border: 1px solid transparent; border-radius: 6px;
+    transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s; }
+  .contents > ul > li { margin: 0 0 0.35rem; }
+  .contents ul ul { margin-top: 0; padding-left: 0; }
+  .contents ul ul li { margin: 0; }
+  /* Marks reach 3:1 contrast and rows 24px, the WCAG 2.2 floors for a control's
+     visual cue and its pointer target. */
+  .contents a { min-height: 1.5rem; }
+  .contents .num { min-width: 1.4rem; }
+  .contents .bar { display: block; flex: none; width: 1.25rem; height: 2px; margin-left: 0.2rem;
+    border-radius: 1px; background: var(--mark); }
+  .contents .label { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap;
+    transition: opacity 0.15s, max-width 0.2s; }
+  .contents:hover, .contents:focus-within { background: var(--paper); border-color: var(--rule);
+    box-shadow: 0 6px 24px rgb(0 0 0 / 0.08); }
+  .contents:hover .label, .contents:focus-within .label { max-width: 18rem; opacity: 1; }
+  .contents a:hover .bar, .contents a:focus-visible .bar { background: var(--accent); }
+  .to-top { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .contents, .contents .label { transition: none; }
+}
+
+/* The maker's credit: one quiet line at the foot. */
+.credit { margin-top: 4.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
+  color: var(--muted); font: 0.8rem/1.4 var(--sans); }
+.credit a { color: inherit; text-decoration: none; }
+.credit a.brand { color: var(--accent); }
+.credit a:hover, .credit a:focus-visible { text-decoration: underline; }
+
+/* Three levels of separation: the five groups, the agents within a group, and
+   breaks an agent draws inside its own text. */
+main h2 {
+  margin: 4.5rem 0 0.25rem; padding-top: 1.5rem; border-top: 2px solid var(--ink);
+  font: 600 1.45rem/1.3 var(--sans); letter-spacing: -0.01em;
+}
+main section:first-child h2 { margin-top: 3rem; }
+main h3 { margin: 2.75rem 0 0.75rem; padding-top: 1.1rem; border-top: 1px solid var(--rule);
+  font: 600 1.15rem/1.35 var(--sans); color: var(--accent); }
+main h2 + h3 { margin-top: 1.25rem; padding-top: 0; border-top: 0; }
+main h4, main h5, main h6 { margin: 1.75rem 0 0.5rem; font: 600 1rem/1.4 var(--sans); }
+main h5, main h6 { color: var(--muted); }
+main p, main ul, main ol { margin: 0 0 1rem; }
+main li { margin: 0.25rem 0; }
+main strong { font-weight: 650; }
+main blockquote { margin: 1.25rem 0; padding: 0.1rem 0 0.1rem 1rem; border-left: 3px solid var(--rule);
+  color: var(--muted); }
+main code { font: 0.88em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--wash); padding: 0.1em 0.3em; border-radius: 3px; }
+main pre { background: var(--wash); padding: 0.9rem 1rem; border-radius: 4px; overflow-x: auto; }
+main pre code { background: none; padding: 0; }
+main hr { width: 3rem; margin: 2rem auto; border: 0; border-top: 1px solid var(--rule); }
+
+.table { overflow-x: auto; margin: 0 0 1.25rem; }
+table { border-collapse: collapse; width: 100%; font: 0.86rem/1.45 var(--sans);
+  font-variant-numeric: tabular-nums; }
+th, td { padding: 0.45rem 0.7rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+th { font-weight: 600; border-bottom-color: var(--muted); }
+tbody tr:last-child td { border-bottom: 0; }
+
+@media (max-width: 34rem) {
+  body { font-size: 16px; }
+  .page { padding: 2rem 1rem 3rem; }
+  .masthead h1 { font-size: 2rem; }
+  .masthead .logo svg { height: 1.25rem; }
+  .run { grid-template-columns: 1fr; gap: 0 0; }
+  .run dd { margin-bottom: 0.45rem; }
+  .run .group { white-space: normal; }
+}
+@media print {
+  :root { --paper: #fff; --ink: #000; --muted: #444; --rule: #bbb; --accent: #000; --wash: #f2f2f2;
+    --edge: #bbb; --up: #087a59; --down: #b4372f; --level: #444; }
+  body { font-size: 11pt; }
+  .table { overflow: visible; }
+  .page { max-width: none; padding: 0; }
+  .contents, .to-top { display: none; }
+  main h2 { break-before: page; border-top: 0; margin-top: 0; }
+  main section:first-child h2 { break-before: auto; }
+  main h3, main h4 { break-after: avoid; }
+  a { color: inherit; text-decoration: none; }
+  table { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="page" id="top">
+<header class="masthead">
+<a class="logo" href="https://tauric.ai" rel="noopener" aria-label="Tauric Research"><svg width="993" height="115" viewBox="0 0 993 115" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M189.86 95.0459V37.9779H165.924V29.9259H223.74V37.9779H199.804V95.0459H189.86ZM251.026 46.4259C256.071 46.4259 260.178 47.0272 263.345 48.2299C266.514 49.4032 268.89 51.3686 270.474 54.1259C272.058 56.8832 272.85 60.6379 272.85 65.3899V95.0459H264.666L263.961 89.8979H263.434C261.644 91.7752 259.386 93.2419 256.657 94.2979C253.929 95.3246 251.025 95.8379 247.946 95.8379C244.426 95.8379 241.419 95.2952 238.925 94.2099C236.432 93.0952 234.54 91.5406 233.249 89.5459C231.959 87.5512 231.313 85.2046 231.313 82.5059C231.313 78.2526 232.897 74.9672 236.065 72.6499C239.263 70.3032 244.337 68.8219 251.29 68.2059L263.258 67.0179V64.7299C263.258 61.9139 262.774 59.7139 261.806 58.1299C260.838 56.5459 259.371 55.4312 257.406 54.7859C255.47 54.1406 252.888 53.8179 249.662 53.8179C247.432 53.8179 245.012 54.0086 242.401 54.3899C239.82 54.7712 237.341 55.3432 234.965 56.1059V48.8019C237.312 48.0392 239.908 47.4526 242.754 47.0419C245.628 46.6312 248.386 46.4259 251.026 46.4259ZM250.541 89.0619C252.888 89.0619 255.162 88.6512 257.362 87.8299C259.562 86.9792 261.527 85.7179 263.258 84.0459V72.8259L252.038 73.9259C248.136 74.3659 245.35 75.2166 243.678 76.4779C242.005 77.7099 241.169 79.4699 241.169 81.7579C241.169 84.0752 241.947 85.8792 243.501 87.1699C245.056 88.4312 247.403 89.0619 250.541 89.0619ZM313.339 95.8379C307.59 95.8379 303.087 94.2979 299.831 91.2179C296.575 88.1086 294.947 83.2686 294.947 76.6979V47.1739H304.715V76.1699C304.715 80.1886 305.624 83.0779 307.443 84.8379C309.291 86.5979 311.916 87.4779 315.319 87.4779C317.871 87.4779 320.379 86.9939 322.843 86.0259C325.336 85.0286 327.492 83.5766 329.311 81.6699V47.1739H339.079V95.0459H330.983L330.367 89.9419H329.883C327.624 91.8486 325.072 93.3152 322.227 94.3419C319.382 95.3392 316.419 95.8379 313.339 95.8379ZM362.371 47.1739H370.423L371.171 53.2899H371.743C373.474 51.2072 375.703 49.5792 378.431 48.4059C381.188 47.2326 384.063 46.6459 387.055 46.6459C388.756 46.6459 390.355 46.7926 391.851 47.0859V55.8419C390.414 55.5779 388.654 55.4459 386.571 55.4459C383.99 55.4459 381.364 55.9446 378.695 56.9419C376.026 57.9392 373.84 59.4206 372.139 61.3859V95.0459H362.371V47.1739ZM409.069 95.0459V47.1739H418.837V95.0459H409.069ZM413.953 37.8459C411.871 37.8459 410.287 37.3912 409.201 36.4819C408.145 35.5726 407.617 34.2672 407.617 32.5659C407.617 30.8352 408.145 29.5152 409.201 28.6059C410.287 27.6672 411.871 27.1979 413.953 27.1979C416.036 27.1979 417.605 27.6672 418.661 28.6059C419.747 29.5152 420.289 30.8352 420.289 32.5659C420.289 34.2672 419.747 35.5726 418.661 36.4819C417.605 37.3912 416.036 37.8459 413.953 37.8459ZM464.85 95.9259C456.607 95.9259 450.315 93.8432 445.974 89.6779C441.662 85.5126 439.506 79.3526 439.506 71.1979C439.506 63.0139 441.779 56.8392 446.326 52.6739C450.902 48.5086 457.575 46.4259 466.346 46.4259C470.716 46.4259 474.735 46.9246 478.402 47.9219V55.7099C476.378 55.2406 474.486 54.8886 472.726 54.6539C470.966 54.4192 469.118 54.3019 467.182 54.3019C461.168 54.3019 456.71 55.6512 453.806 58.3499C450.931 61.0486 449.494 65.2872 449.494 71.0659C449.494 76.8739 450.858 81.1566 453.586 83.9139C456.343 86.6712 460.42 88.0499 465.818 88.0499C467.695 88.0499 469.616 87.8886 471.582 87.5659C473.547 87.2139 475.82 86.6712 478.402 85.9379V93.7259C474.236 95.1926 469.719 95.9259 464.85 95.9259ZM574.428 95.0459L553.704 69.0859C553.176 69.1152 552.37 69.1299 551.284 69.1299C548.38 69.1299 544.978 68.9832 541.076 68.6899V95.0459H531.308V31.4659C537.967 29.9699 544.846 29.2219 551.944 29.2219C561.595 29.2219 568.752 30.8059 573.416 33.9739C578.08 37.1126 580.412 42.1286 580.412 49.0219C580.412 54.0086 579.004 58.0859 576.188 61.2539C573.402 64.4219 569.266 66.6366 563.78 67.8979L585.648 95.0459H574.428ZM541.076 61.2099C543.071 61.4152 544.816 61.5619 546.312 61.6499C547.838 61.7379 549.627 61.7819 551.68 61.7819C558.427 61.7819 563.34 60.7699 566.42 58.7459C569.5 56.6926 571.04 53.4952 571.04 49.1539C571.04 46.0739 570.395 43.6099 569.104 41.7619C567.843 39.9139 565.863 38.5792 563.164 37.7579C560.495 36.9366 556.975 36.5259 552.604 36.5259C550.404 36.5259 548.424 36.6139 546.664 36.7899C544.904 36.9659 543.042 37.2299 541.076 37.5819V61.2099ZM642.947 74.0139H608.231C608.407 77.4752 609.155 80.2766 610.475 82.4179C611.795 84.5299 613.775 86.0846 616.415 87.0819C619.055 88.0792 622.443 88.5779 626.579 88.5779C630.686 88.5779 635.233 87.9472 640.219 86.6859V93.9459C635.027 95.2659 630.026 95.9259 625.215 95.9259C616.298 95.9259 609.61 93.9166 605.151 89.8979C600.722 85.8499 598.507 79.6166 598.507 71.1979C598.507 65.9179 599.402 61.4299 601.191 57.7339C602.981 54.0379 605.562 51.2366 608.935 49.3299C612.338 47.3939 616.43 46.4259 621.211 46.4259C628.251 46.4259 633.634 48.5819 637.359 52.8939C641.085 57.1766 642.947 63.3659 642.947 71.4619V74.0139ZM621.079 52.8939C616.973 52.8939 613.834 54.1406 611.663 56.6339C609.493 59.0979 608.334 62.9259 608.187 68.1179H633.751C633.634 62.9259 632.519 59.0979 630.407 56.6339C628.295 54.1406 625.186 52.8939 621.079 52.8939ZM677.365 95.9259C671.352 95.9259 665.896 95.2219 660.997 93.8139V86.7299C666.248 88.1966 671.718 88.9299 677.409 88.9299C681.809 88.9299 684.977 88.3432 686.913 87.1699C688.849 85.9672 689.817 84.2219 689.817 81.9339C689.817 80.7019 689.597 79.6899 689.157 78.8979C688.717 78.0766 687.969 77.4019 686.913 76.8739C685.857 76.3166 684.405 75.8912 682.557 75.5979L674.065 74.2779C669.137 73.4859 665.573 71.9899 663.373 69.7899C661.202 67.5899 660.117 64.6419 660.117 60.9459C660.117 56.4579 661.965 52.9232 665.661 50.3419C669.386 47.7312 675.062 46.4259 682.689 46.4259C685.094 46.4259 687.485 46.5872 689.861 46.9099C692.266 47.2032 694.481 47.6432 696.505 48.2299V55.2699C692.046 54.0379 687.456 53.4219 682.733 53.4219C677.893 53.4219 674.476 54.0526 672.481 55.3139C670.486 56.5752 669.489 58.3206 669.489 60.5499C669.489 62.2219 670.002 63.5859 671.029 64.6419C672.056 65.6686 673.889 66.4166 676.529 66.8859L685.021 68.2059C689.92 68.9686 693.513 70.3766 695.801 72.4299C698.089 74.4832 699.233 77.4606 699.233 81.3619C699.233 84.3832 698.412 86.9792 696.769 89.1499C695.156 91.3206 692.706 92.9926 689.421 94.1659C686.165 95.3392 682.146 95.9259 677.365 95.9259ZM760.579 74.0139H725.863C726.039 77.4752 726.787 80.2766 728.107 82.4179C729.427 84.5299 731.407 86.0846 734.047 87.0819C736.687 88.0792 740.075 88.5779 744.211 88.5779C748.317 88.5779 752.864 87.9472 757.851 86.6859V93.9459C752.659 95.2659 747.657 95.9259 742.847 95.9259C733.929 95.9259 727.241 93.9166 722.783 89.8979C718.353 85.8499 716.139 79.6166 716.139 71.1979C716.139 65.9179 717.033 61.4299 718.823 57.7339C720.612 54.0379 723.193 51.2366 726.567 49.3299C729.969 47.3939 734.061 46.4259 738.843 46.4259C745.883 46.4259 751.265 48.5819 754.991 52.8939C758.716 57.1766 760.579 63.3659 760.579 71.4619V74.0139ZM738.711 52.8939C734.604 52.8939 731.465 54.1406 729.295 56.6339C727.124 59.0979 725.965 62.9259 725.819 68.1179H751.383C751.265 62.9259 750.151 59.0979 748.039 56.6339C745.927 54.1406 742.817 52.8939 738.711 52.8939ZM796.986 46.4259C802.032 46.4259 806.138 47.0272 809.306 48.2299C812.474 49.4032 814.85 51.3686 816.434 54.1259C818.018 56.8832 818.81 60.6379 818.81 65.3899V95.0459H810.626L809.922 89.8979H809.394C807.605 91.7752 805.346 93.2419 802.618 94.2979C799.89 95.3246 796.986 95.8379 793.906 95.8379C790.386 95.8379 787.38 95.2952 784.886 94.2099C782.393 93.0952 780.501 91.5406 779.21 89.5459C777.92 87.5512 777.274 85.2046 777.274 82.5059C777.274 78.2526 778.858 74.9672 782.026 72.6499C785.224 70.3032 790.298 68.8219 797.25 68.2059L809.218 67.0179V64.7299C809.218 61.9139 808.734 59.7139 807.766 58.1299C806.798 56.5459 805.332 55.4312 803.366 54.7859C801.43 54.1406 798.849 53.8179 795.622 53.8179C793.393 53.8179 790.973 54.0086 788.362 54.3899C785.781 54.7712 783.302 55.3432 780.926 56.1059V48.8019C783.273 48.0392 785.869 47.4526 788.714 47.0419C791.589 46.6312 794.346 46.4259 796.986 46.4259ZM796.502 89.0619C798.849 89.0619 801.122 88.6512 803.322 87.8299C805.522 86.9792 807.488 85.7179 809.218 84.0459V72.8259L797.998 73.9259C794.097 74.3659 791.31 75.2166 789.638 76.4779C787.966 77.7099 787.13 79.4699 787.13 81.7579C787.13 84.0752 787.908 85.8792 789.462 87.1699C791.017 88.4312 793.364 89.0619 796.502 89.0619ZM841.524 47.1739H849.576L850.324 53.2899H850.896C852.627 51.2072 854.856 49.5792 857.584 48.4059C860.341 47.2326 863.216 46.6459 866.208 46.6459C867.909 46.6459 869.508 46.7926 871.004 47.0859V55.8419C869.567 55.5779 867.807 55.4459 865.724 55.4459C863.143 55.4459 860.517 55.9446 857.848 56.9419C855.179 57.9392 852.993 59.4206 851.292 61.3859V95.0459H841.524V47.1739ZM909.164 95.9259C900.921 95.9259 894.629 93.8432 890.288 89.6779C885.976 85.5126 883.82 79.3526 883.82 71.1979C883.82 63.0139 886.093 56.8392 890.64 52.6739C895.216 48.5086 901.889 46.4259 910.66 46.4259C915.03 46.4259 919.049 46.9246 922.716 47.9219V55.7099C920.692 55.2406 918.8 54.8886 917.04 54.6539C915.28 54.4192 913.432 54.3019 911.496 54.3019C905.482 54.3019 901.024 55.6512 898.12 58.3499C895.245 61.0486 893.808 65.2872 893.808 71.0659C893.808 76.8739 895.172 81.1566 897.9 83.9139C900.657 86.6712 904.734 88.0499 910.132 88.0499C912.009 88.0499 913.93 87.8886 915.896 87.5659C917.861 87.2139 920.134 86.6712 922.716 85.9379V93.7259C918.55 95.1926 914.033 95.9259 909.164 95.9259ZM941.796 23.9419H951.564V52.2779H952.048C954.248 50.3712 956.756 48.9192 959.572 47.9219C962.417 46.9246 965.395 46.4259 968.504 46.4259C974.019 46.4259 978.375 47.9952 981.572 51.1339C984.769 54.2432 986.368 59.0686 986.368 65.6099V95.0459H976.6V66.0939C976.6 62.0459 975.661 59.1566 973.784 57.4259C971.936 55.6952 969.237 54.8299 965.688 54.8299C963.048 54.8299 960.481 55.3286 957.988 56.3259C955.524 57.2939 953.383 58.7312 951.564 60.6379V95.0459H941.796V23.9419Z" fill="#14C290"/>
+<rect x="0.205322" y="14.873" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="43.1211" y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="14.679" y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="14.679" y="44.0371" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="29.3579" y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="29.3579" y="44.0371" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="71.9265" y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="71.9265" y="44.0371" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="57.2478" y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="86.6055" y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="86.6055" y="44.0371" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="101.284" y="29.1787" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="29.3579" y="58.7158" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="71.9265" y="58.7158" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="43.1211" y="87.1592" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="57.2478" y="87.1592" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="29.3579" y="73.0205" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="71.9265" y="73.0205" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="29.3579" y="87.3262" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="71.9265" y="87.3262" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="43.1211" y="101.631" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="57.2478" y="101.631" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="101.284" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+<rect x="15.0187" y="15.213" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="29.6979" y="15.213" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="43.4611" y="15.213" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="57.5876" y="15.213" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="43.4611" y="44.3771" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="0.34" y="44.3771" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="57.5876" y="44.3771" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="101.624" y="44.3771" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="43.4611" y="59.0558" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="57.5876" y="59.0558" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="0.34" y="59.0558" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="15.0187" y="59.0558" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="86.9455" y="59.0558" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="101.624" y="59.0558" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="43.4611" y="73.3605" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="57.5876" y="73.3605" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="0.34" y="73.3605" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="15.0187" y="73.3605" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="86.9455" y="73.3605" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="101.624" y="73.3605" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="0.34" y="87.6662" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="15.0187" y="87.6662" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="86.9455" y="87.6662" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="101.624" y="87.6662" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="0.34" y="101.971" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="15.0187" y="101.971" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="29.6979" y="101.971" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="72.2668" y="101.971" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="86.9455" y="101.971" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="101.624" y="101.971" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="43.4611" y="0.34" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="57.5876" y="0.34" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="15.0187" y="0.34" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="29.6979" y="0.34" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="72.2668" y="0.34" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="86.9455" y="0.34" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="72.445" y="15.213" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="86.7506" y="15.213" width="10.0489" height="10.0489" rx="5.02447" stroke="#363636" stroke-width="0.68"/>
+<rect x="100.716" y="14.873" width="10.7289" height="10.7289" rx="5.36447" fill="#14C290"/>
+</svg></a>
+<h1><span class="ticker">4062.T</span> <span class="rating down">Underweight</span></h1>
+<p class="date">Analysis of 2026-11-02</p>
+<dl class="run"><div class="detail"><dt>Generated</dt><dd>2026-11-02 15:20</dd></div><div class="detail"><dt>Deep model</dt><dd><span class="field">openrouter</span> <span class="field">deepseek/deepseek-v4.1-flash-1017</span></dd></div><div class="detail"><dt>Quick model</dt><dd><span class="field">openrouter</span> <span class="field">deepseek/deepseek-v4.1-flash-1017</span></dd></div><div class="detail"><dt>Analysts</dt><dd><span class="field">market</span> <span class="field">fundamentals</span></dd></div><div class="detail"><dt>Debate rounds</dt><dd><span class="group"><span class="name">research</span><span class="field">3</span></span> <span class="group"><span class="name">risk</span><span class="field">3</span></span></dd></div><div class="detail"><dt>Data vendors</dt><dd><span class="group"><span class="name">Prices</span><span class="field">bloomberg</span> <span class="then">→</span> <span class="field">yfinance</span></span> <span class="group"><span class="name">Indicators</span><span class="field">bloomberg</span> <span class="then">→</span> <span class="field">yfinance</span></span> <span class="group"><span class="name">Fundamentals</span><span class="field">bloomberg</span> <span class="then">→</span> <span class="field">sec_edgar</span> <span class="then">→</span> <span class="field">yfinance</span></span> <span class="group"><span class="name">News</span><span class="field">yfinance</span></span> <span class="group"><span class="name">Macro</span><span class="field">fred</span></span> <span class="group"><span class="name">Prediction markets</span><span class="field">polymarket</span></span></dd></div><div class="detail"><dt>Version</dt><dd>TradingAgents 0.7.0</dd></div></dl>
+</header>
+<nav class="contents" aria-label="Sections"><ul><li><a href="#s1"><span class="num">I</span> <span class="label">Analyst Team Reports</span></a><ul><li><a href="#s1-1"><span class="bar"></span> <span class="label">Market Analyst</span></a></li><li><a href="#s1-2"><span class="bar"></span> <span class="label">Fundamentals Analyst</span></a></li></ul></li><li><a href="#s2"><span class="num">Fundamental Research Package</span> <span class="label"></span></a><ul><li><a href="#s2-1"><span class="bar"></span> <span class="label">Fundamental Research</span></a></li></ul></li><li><a href="#s3"><span class="num">Number Audit</span> <span class="label"></span></a><ul><li><a href="#s3-1"><span class="bar"></span> <span class="label">Figures Not In The Model</span></a></li></ul></li><li><a href="#s4"><span class="num">Case Comparison</span> <span class="label"></span></a><ul><li><a href="#s4-1"><span class="bar"></span> <span class="label">Cases Recomputed On The Model</span></a></li></ul></li><li><a href="#s5"><span class="num">II</span> <span class="label">Research Team Decision</span></a><ul><li><a href="#s5-1"><span class="bar"></span> <span class="label">Adversarial Investment Review</span></a></li><li><a href="#s5-2"><span class="bar"></span> <span class="label">Research Manager</span></a></li></ul></li><li><a href="#s6"><span class="num">III</span> <span class="label">Trading Team Plan</span></a><ul><li><a href="#s6-1"><span class="bar"></span> <span class="label">Trader</span></a></li></ul></li><li><a href="#s7"><span class="num">IV</span> <span class="label">Risk Management Team Decision</span></a><ul><li><a href="#s7-1"><span class="bar"></span> <span class="label">Aggressive Analyst</span></a></li><li><a href="#s7-2"><span class="bar"></span> <span class="label">Conservative Analyst</span></a></li><li><a href="#s7-3"><span class="bar"></span> <span class="label">Neutral Analyst</span></a></li></ul></li><li><a href="#s8"><span class="num">V</span> <span class="label">Portfolio Manager Decision</span></a><ul><li><a href="#s8-1"><span class="bar"></span> <span class="label">Portfolio Manager</span></a></li></ul></li></ul></nav>
+<main>
+<section id="s1"><h2>I. Analyst Team Reports</h2><h3 id="s1-1">Market Analyst</h3>
+<h5>1. Technical conclusion</h5>
+<p><strong>4062.T is in a violent intermediate downtrend inside a long-term uptrend that is now under its first serious test.</strong> Price closed 2026-11-02 at <strong>8,045</strong>, down <strong>41.5% from the 52-week high of 13,750 (2026-06-18 high)</strong> and <strong>35.1% from the 2026-10-06 close of 12,400</strong> in roughly 19 sessions. It is still <strong>3.4% above a steeply rising 200-day SMA (7,779.40)</strong> that it has not touched this year. Momentum is re-accelerating lower, not stabilizing, and the first bounce attempt already failed. For a 3–6 month horizon the chart is unresolved and hostile to new entry; the principal caveat is that the 200-day line sits only <strong>0.32 ATR</strong> below price, so it is a test zone, not a floor.</p>
+<h5>2. Evidence</h5>
+<ul>
+<li><strong>Break sequence (dated):</strong> 10-06 close 12,400 → 10-26 close 8,248 → 10-29 close 9,859 (high 10,280) → 10-30 open 8,601 / close 8,359 (<strong>−15.2% day-on-day; gap down from 9,859</strong>) → 11-02 close 8,045 (low 7,695). The 10-26/29 rebound (+19.5%) was erased in one session and topped well below the 10-13/14 pivot area (10,620/10,495).</li>
+<li><strong>Trend stack:</strong> 10 EMA 9,026.10; 50 SMA 10,168.07 (<strong>−20.9%</strong> vs price, and falling from 10,409.45 on 10-20); 200 SMA 7,779.40. No death cross yet (50 &gt; 200), but the medium-term structure has rolled over.</li>
+<li><strong>Momentum:</strong> MACD −542.01 vs signal −389.88; histogram −152.14, having <strong>widened from −88.59 on 10-29</strong> — downside impulse is expanding again. RSI 37.2, has not printed sub-30 in the last month (low 33.3 on 10-26).</li>
+<li><strong>Participation:</strong> VWMA 9,125.99; price below it, i.e. the one-month volume-weighted cost is above the market. Down sessions carry more volume (10-15: 24.3M; 10-29: 31.9M; 11-02: 29.5M) than the early-October up days (10–14M). <em>Observation only — this is not evidence of any specific seller.</em></li>
+<li><strong>Volatility:</strong> ATR 820.40 (<strong>10.2% of price</strong>); Bollinger 2σ width is <strong>57.7%</strong> of the 9,938.05 mid (7,071.69–12,804.41). 11-02 closed 8,045, <strong>4.4% off its low</strong> and inside the band.</li>
+</ul>
+<p><strong>Conflicting evidence:</strong> price is still above a rising 200-day SMA, 11-02 closed well off its low on heavy volume (a possible absorption/covering session — <em>hypothesis</em>, with the alternative that it is simply dip-buying inside a downtrend), and the 12-month return remains about +260%.</p>
+<h5>3. Decision levels</h5>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Zone</th>
+<th>Level</th>
+<th>Evidence</th>
+<th>Implication</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Resistance (swing)</td>
+<td>12,400–12,580</td>
+<td>10-06 close 12,400; 10-05 high 12,580</td>
+<td>October lower high vs 13,750; only a reclaim restores the prior trend</td>
+</tr>
+<tr>
+<td>Resistance (repair)</td>
+<td>9,938–10,168</td>
+<td>Bollinger mid 9,938.05; 50 SMA 10,168.07</td>
+<td>Medium-term trend repair; last rally failed at 10,280</td>
+</tr>
+<tr>
+<td>Resistance (first)</td>
+<td>9,026–9,126</td>
+<td>10 EMA 9,026.10; VWMA 9,125.99</td>
+<td>Reclaiming this ends the immediate downtrend and lifts price above 1-month volume-weighted cost</td>
+</tr>
+<tr>
+<td>Overhead supply</td>
+<td>8,285–9,577</td>
+<td>08-04 high 8,285 / 08-05 low 9,577 gap; 11-02 high 8,353</td>
+<td>August gap-up zone, now filled and capping; 11-02 closed back below it</td>
+</tr>
+<tr>
+<td>Pivotal support</td>
+<td>7,695–7,779</td>
+<td>11-02 low 7,695; 200 SMA 7,779.40</td>
+<td>Long-term trend test; ~0.3 ATR away, so a probe is plausible</td>
+</tr>
+<tr>
+<td>Support</td>
+<td>7,071.69 / 6,490–6,825</td>
+<td>Bollinger lower band; 07-29 low 6,490, closes 6,735/6,825</td>
+<td>Volatility floor, then the prior −53% correction low</td>
+</tr>
+</tbody>
+</table></div>
+<h5>4. Conditional outlook</h5>
+<p><strong>Primary trigger (bearish continuation):</strong> a decisive close/weekly close below <strong>7,695</strong>. That would break the 200-day line and the November low together, shifting the long-term trend assessment and opening 7,072 then 6,490–6,825. Invalidation of this view: repeated holds above 7,779 with higher lows.</p>
+<p><strong>Primary trigger (improvement):</strong> not a one-day bounce — a multi-session base with a close above <strong>9,026–9,126</strong> and follow-through above <strong>9,577</strong>. Optional confirmation (not required): MACD histogram contracting toward zero, RSI recovering above 50. Waiting for these costs price versus anticipating, but the current signal quality is poor: recent gaps (−12.8% and −15.2% on 10-30) show that a stop cannot be relied on for protection.</p>
+<h5>5. Investment implication</h5>
+<p>As a timing overlay, this is <strong>not a favorable spot to initiate or add</strong>: trend, momentum and volume-weighted positioning all point lower, and no base exists. Volatility at 10% of price per day argues qualitatively for materially smaller risk allocation than in a low-volatility name — ATR describes risk, it does not dictate position size. Nothing here speaks to valuation: a 41.5% drawdown may or may not make the business attractive, and the fundamental view should be set independently.</p>
+<p><strong>Data limitations:</strong> no timezone or adjustment metadata was supplied; the series appears unadjusted and split-consistent (no discontinuity &gt;20% outside the 08-05 gap). The 2026-07-31 bar is a single-price print (O=H=L=C=8,325, volume 2.13M vs 15–20M typical) and is treated as unreliable; Japanese holiday gaps and the extreme 2026 price ramp distort the 200-day average.</p>
+<h3 id="s1-2">Fundamentals Analyst</h3>
+<h4>Fundamental Analysis: 4062.T</h4>
+<p><strong>Note on fiscal labels:</strong> IBIDEN labels the year ending March 2027 &quot;FY2026&quot;. Throughout this report I use the model's convention — FY3/27 = year to March 2027, FY3/28 = year to March 2028 — and treat &quot;FY2027&quot; in the internal notes as FY3/28, except where the notes' meaning is stated explicitly.</p>
+<h5>1. Executive conclusion</h5>
+<ul>
+<li><strong>Fundamental rating: Neutral</strong> (risk/reward negative-skewed). Decision horizon: 3–6 months.</li>
+<li><strong>Business direction: strongly positive.</strong> 4062.T is the top supplier of high-end IC package substrates and is running at effectively sold-out capacity in a structural shortage it expects to persist to CY2030 [doc-4062.T-ibiden-co-ltd-company-presentation-20261030 p.12].</li>
+<li><strong>Earnings direction: positive but already heavily pre-paid in the share price.</strong> H1 FY3/27 operating profit of ¥60.1bn was a record [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.1]; the FY3/27 model revenue of 565.0 and operating profit of 133.0 are exactly management guidance.</li>
+<li><strong>Forecast position versus guidance/consensus:</strong> the model matches FY3/27 guidance by construction and matches FY3/28 consensus OP of 190.0, but sits <strong>above management's FY3/28 target of ¥165bn</strong> and above management's FY3/28 revenue of ¥650bn (model 665.0). Reversing management's disclosed ~¥10bn price-decline buffer justifies ~¥175bn; the extra to 190.0 requires Cell 8 and mix upside that is not yet evidenced.</li>
+<li><strong>Cash-flow quality: weak underneath the headline.</strong> H1 operating cash flow of ¥193.2bn includes a ¥118.8bn increase in customer advances [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.9, p.5]. Excluding that, underlying cash generation was roughly ¥74bn against capex that is guided to ¥350bn in FY3/28 and above ¥400bn from FY3/29 [doc-4062.T-ibiden-q2-fy3-2027-result-call].</li>
+<li><strong>Balance sheet: strong.</strong> Capital adequacy 53.5%, and net cash of roughly ¥258bn after customer prepayments [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.1, p.4–5].</li>
+<li><strong>Valuation: expensive.</strong> At 8,045 the stock is 51.2x FY3/27 EPS of 157.2 and about 37x FY3/28 model EPS of 215.4. The model's fair-value band is 5,501–7,858 with a base of 7,539 (−6%), and my own sensitivity on a lower FY3/28 OP (¥175bn) gives roughly ¥6,600–7,200.</li>
+<li><strong>Main catalyst (in horizon):</strong> Q3 FY3/27 results (late January 2027) and the Cell 7/Cell 9 investment decision plus any medium-term-plan revision management has promised by end-FY3/27.</li>
+<li><strong>Main risk:</strong> FY3/28 guidance of ¥165bn is below consensus of ¥190bn, so the more likely near-term revision direction for consensus is <em>down</em>, not up, while the stock carries a ~37x forward multiple.</li>
+<li><strong>Principal limitation:</strong> no revenue, net profit or EPS consensus is available anywhere in the corpus; only one FY3/28 OP consensus figure exists, cited second-hand by Citi [doc-4062.T-brokers-views-oct-30-2026].</li>
+</ul>
+<h5>2. Company and earnings structure</h5>
+<p>4062.T makes money in three reported segments (H1 FY3/27, external sales / segment profit):</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Segment</th>
+<th>H1 sales ¥bn</th>
+<th>H1 segment profit ¥bn</th>
+<th>Margin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Electronics (IC package substrates)</td>
+<td>172.5</td>
+<td>50.0</td>
+<td>29.0%</td>
+</tr>
+<tr>
+<td>Ceramics (DPF, AFP, NEB, FGM)</td>
+<td>46.2</td>
+<td>5.4</td>
+<td>11.7%</td>
+</tr>
+<tr>
+<td>Others</td>
+<td>43.8</td>
+<td>4.6</td>
+<td>10.5%</td>
+</tr>
+<tr>
+<td>Consolidated</td>
+<td>262.5</td>
+<td>60.1</td>
+<td>22.9%</td>
+</tr>
+</tbody>
+</table></div>
+<p>Source: [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.12]. Electronics is ~83% of H1 operating profit and is the entire investment case; Ceramics and Others are ballast.</p>
+<p><strong>How Electronics earns:</strong> semi-additive-process (SAP) build-up substrates for AI GPUs, AI ASICs, server CPUs and high-end switches. The economics are driven by <em>substrate area and layer count</em>, not unit volume: management expects GPU/ASIC units to grow 1.8x from CY26 to CY30 but required SAP demand to grow 5.4x, and server CPU units 1.3x against 2.5x area demand [doc-4062.T-ibiden-co-ltd-company-presentation-20261030 p.12]. Larger dies (3.5 reticle in CY25 to 9+ by CY30) and more layers (SAP 9-X-9 to 14-X-14) raise price per unit and equipment time per substrate [same, p.14].</p>
+<p><strong>Barriers and position:</strong> 4062.T describes itself as top supplier in the high-end market [p.12]. The real constraint is qualified capacity — equipment lead times for lasers, laminators and plating tools, plus support engineers — which management calls the binding bottleneck, not construction [doc-4062.T-ibiden-q2-fy3-2027-result-call, Q3 and Q5]. Yields at tier-2 suppliers are described as very low, which limits how much nominal competitor capacity is real.</p>
+<p><strong>Concentration:</strong> not disclosed in the corpus. Two indirect signals of high customer concentration are visible: (i) ¥199.7bn of &quot;advances received&quot; on the balance sheet at 30 September 2026, up ¥118.8bn in six months [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.5, p.9] — customer prepayments for capacity; and (ii) capital investment explicitly justified by &quot;agreements with our customers&quot; [doc-4062.T-ibiden-q2-fy3-2027-result-call]. This is strong demand validation but also a single-customer dependency that is not quantified.</p>
+<p><strong>Competition:</strong> management confirms AI GPU substrates are moving from a two-player to a three-player structure with a Korean entrant, and that CPUs are contested by 3–4 suppliers; its offsetting argument is that aggregate competitor capacity remains far below demand [doc-4062.T-ibiden-q2-fy3-2027-result-call, Q1]. Citi separately flags that 4062.T's own high-end capacity grows ~2x while market area demand grows 3.5x — i.e. share erosion is arithmetically implied even in a tight market [doc-4062.T-brokers-views-oct-30-2026].</p>
+<h5>3. Latest results and operating drivers</h5>
+<p>H1 FY3/27 (six months to 30 September 2026), company-reported [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.1, p.7, p.12]:</p>
+<ul>
+<li>Net sales ¥262,546mn, +34.3% YoY; operating profit ¥60,116mn, +84.6%; ordinary profit ¥61,009mn, +88.9%; profit attributable to owners of parent ¥38,574mn, +74.8%.</li>
+<li>Gross profit ¥97,705mn (37.2% margin) versus ¥67,913mn (34.7%) a year earlier. SG&amp;A rose only 6.4% to ¥37,589mn against 34.3% sales growth — this operating leverage, not gross margin, is the main source of the profit step-up.</li>
+<li>Basic EPS ¥68.63, diluted ¥65.10, both restated for the two 2-for-1 splits (1 January 2026 and 1 October 2026) [p.1].</li>
+</ul>
+<p><strong>Company-confirmed drivers:</strong> &quot;favorable pricing and exceptionally strong demand for AI-related products&quot; in Electronics; Ceramics slightly above plan on backup DPF part orders; Others in line [doc-4062.T-ibiden-q2-fy3-2027-result-call]. Q2 alone (H1 minus Q1) was revenue ¥139.3bn, OP ¥33.2bn, net ¥20.7bn, with OP margin up 2.0ppt sequentially to 23.8% [doc-4062.T-ibiden-q2-fy2027-results-forecast].</p>
+<p><strong>Below the operating line — this matters for the net-profit comparison:</strong> H1 non-operating income of ¥893mn included ¥675mn FX gains and ¥1,850mn interest income, but also ¥1,669mn of depreciation on inactive assets booked as non-operating. Extraordinary items were a net ¥1,650mn loss (¥813mn subsidy income offset by an equal loss on reduction of non-current assets, plus ¥1,606mn retirement losses). Effective tax rate was 34.5% (¥20,490mn on ¥59,358mn pretax) [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.7].</p>
+<p><strong>Why FY3/26 net profit (63.7) exceeded FY3/26 operating profit (62.0):</strong> not a data error. FY3/26 pretax income was ¥91.1bn against ¥62.0bn of operating profit, driven by roughly ¥40.3bn of gains on investment securities (the FY3/26 cash-flow statement carries a ¥40.3bn non-cash deduction for that gain, and proceeds from investment sales of ¥57.4bn) [vendor cash-flow statement, FY ending 2026-03-31; doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.9 for the analogous line]. The model's −28 &quot;FY3/26 one-off gain reversal&quot; in the net-profit bridge is therefore well supported, not an arbitrary plug.</p>
+<p><strong>Cash-flow caveat on the result:</strong> the ¥193.2bn H1 operating cash flow is dominated by the ¥118.8bn advance inflow and ¥11.2bn payables increase; inventory absorbed ¥12.0bn and receivables ¥9.3bn [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.9]. This was an excellent <em>reported</em> cash period and a much more ordinary <em>underlying</em> one.</p>
+<h5>4. Management guidance and expectations</h5>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Metric (¥bn)</th>
+<th>Prior guide</th>
+<th>Revised guide FY3/27</th>
+<th>Model</th>
+<th>Consensus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Revenue</td>
+<td>550</td>
+<td>565.0</td>
+<td>565.0</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>Operating profit</td>
+<td>127</td>
+<td>133.0</td>
+<td>133.0</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>Operating margin</td>
+<td>23.1%</td>
+<td>23.5%</td>
+<td>23.5%</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>Net profit</td>
+<td>84</td>
+<td>89.0</td>
+<td>89.0</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>EPS (¥, post-split)</td>
+<td>—</td>
+<td>157.17</td>
+<td>157.2</td>
+<td>n/a</td>
+</tr>
+</tbody>
+</table></div>
+<p>Guidance revisions from [doc-4062.T-ibiden-q2-fy2027-results-forecast]; guidance figures from [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.3]. The model equals guidance for FY3/27, so <strong>there is no forecast edge in FY3/27</strong> — the model is built as H1 actual plus disclosed H2 guidance, and I see no evidence strong enough to move off that. H2 guidance implies revenue ¥302.5bn, OP ¥72.9bn and a 24.1% margin, only 0.3ppt above Q2's 23.8% — deliberately unheroic.</p>
+<p>FY3/28 medium-term plan was raised to revenue ¥650bn and OP ¥165bn (previously ¥150bn), with Electronics OP margin guided from 29% to 31% [doc-4062.T-brokers-views-oct-30-2026, Citi and GS sections; doc-4062.T-ibiden-q2-fy3-2027-result-call]. The FY3/31 target of ¥1,000bn revenue / ¥300bn+ OP was left unchanged and explicitly <strong>excludes</strong> the newly announced ¥151bn Cell 6 investment, unused Cell 8 space, and Cell 7/Cell 9 [doc-4062.T-ibiden-q2-fy3-2027-result-call, Q1 and Q4].</p>
+<p><strong>Key assumptions inside guidance:</strong> future product price declines are retained (&quot;we do not assume the current exceptional conditions will simply roll forward&quot;), worth roughly ¥10bn of OP drag in FY3/28 per GS's estimate [doc-4062.T-brokers-views-oct-30-2026]. Depreciation guided at ¥81.0bn in FY3/27 and ¥90.0bn in FY3/28; capex ~¥200bn, ¥350bn and &gt;¥400bn across FY3/27–FY3/29 [doc-4062.T-ibiden-q2-fy3-2027-result-call].</p>
+<p><strong>Missing/conflicting data:</strong> No revenue, net profit or consensus EPS exists in the corpus for any year. Only FY3/28 OP consensus of ¥190bn, cited by Citi [doc-4062.T-brokers-views-oct-30-2026]. Two internal-note conflicts are worth flagging and are not resolved: JPM states the revised FY3/28 plan as OP ¥163.0bn (vs ¥165.0bn in the transcript and in Citi/GS), and JPM's depreciation line reads &quot;FY2026 is ¥3.1bn&quot; which is inconsistent with the ¥81.0bn stated on the call — I treat JPM's figures as transcription-corrupted and use the transcript. JPM's ABF demand series is internally inconsistent (13.5 vs 11.2 implies +20%, not the stated +3.5%) and is discarded in favour of the company's own SAP index of 100 / 135 / 170 / 210 / 350 for CY26–CY30 [doc-4062.T-ibiden-co-ltd-company-presentation-20261030 p.12].</p>
+<h5>5. Independent forecast</h5>
+<p>Model annual rows (quoted, not recalculated):</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>¥bn</th>
+<th>FY3/26A</th>
+<th>FY3/27E</th>
+<th>FY3/28E</th>
+<th>FY3/29E</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Revenue</td>
+<td>416.2</td>
+<td>565.0</td>
+<td>665.0</td>
+<td>800.0</td>
+</tr>
+<tr>
+<td>Operating profit</td>
+<td>62.0</td>
+<td>133.0</td>
+<td>190.0</td>
+<td>220.0</td>
+</tr>
+<tr>
+<td>Margin</td>
+<td>14.9%</td>
+<td>23.5%</td>
+<td>28.6%</td>
+<td>27.5%</td>
+</tr>
+<tr>
+<td>Net profit</td>
+<td>63.7</td>
+<td>89.0</td>
+<td>122.0</td>
+<td>145.0</td>
+</tr>
+<tr>
+<td>EPS (¥)</td>
+<td>112.5</td>
+<td>157.2</td>
+<td>215.4</td>
+<td>256.0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Quarterly FY3/27 build: Q1 123.2/26.9/17.9, Q2 139.3/33.2/20.7, Q3 141.2/34.0/23.5, Q4 161.2/38.8/26.9 (revenue/OP/net profit).</p>
+<p><strong>My assessment by year:</strong></p>
+<ul>
+<li><strong>FY3/27 — accept guidance.</strong> H1 delivered ¥60.1bn; H2 needs ¥72.9bn. The model's H2 quarterly split (revenue 141.2 then 161.2, OP 34.0 then 38.8) implies a Q4 margin of about 24.1%, essentially flat on Q2. Given that H1 sequential margin improvement was already 2.0ppt, I regard this as slightly conservative — a modest beat to ¥136–140bn OP is plausible. I flag this as a <em>possible</em> upside but do not adopt it, because (a) the model's Q3/Q4 revenue split borrows FY3/26 seasonality (46.7%/53.3%) [model warning] rather than any company disclosure, and (b) H2 capex is heavily back-end loaded (only ¥48.3bn of PP&amp;E purchases in H1 against ~¥200bn guided for the year), which typically brings startup cost and depreciation noise.</li>
+<li><strong>FY3/28 — I am below the model.</strong> The model at 190.0 requires group operating margin of 28.6%, above management's 25.4%. The chain is: reverse the ¥10bn price buffer → ~¥175bn; add Cell 8 first contribution and mix → up to ¥190bn. The first step is broker-corroborated; the second is not. The model also assumes revenue of 665.0 versus management's ¥650bn, a +2.3% volume/mix gap for which I find no supporting disclosure — and Cell 8 is described as ramping only <em>sequentially from FY2027</em> (i.e. FY3/28), with the &quot;main operational ramp-up and corresponding depreciation impact&quot; occurring &quot;from FY2028 onward,&quot; which in company speech means FY3/29 [doc-4062.T-ibiden-q2-fy3-2027-result-call, Q5]. My base case is <strong>FY3/28 OP ¥175–185bn on ¥650–665bn revenue</strong>, centring near ¥180bn.</li>
+<li><strong>FY3/29 — treat as an extrapolation, not a forecast.</strong> The model's 220.0 is a linearisation between FY3/28 and the FY3/31 target. Cell 8 ramp +80 is an assumption; Cell 6 (¥151bn, first contribution FY2030) and Cell 7/9 (mass production beyond FY2030) do not belong in FY3/29. I would not underwrite 220.0.</li>
+</ul>
+<p><strong>Where the verified model is weak on method</strong> (Section 7 obligation): the FY3/27 revenue bridge adds +95 &quot;Electronics AI-substrate volume&quot; derived by applying <em>total company</em> H1 growth of +34.3% to the FY3/26 base, and then separately adds +30 of &quot;pricing/mix.&quot; Total-company growth already contains Electronics price and mix, so these two lines risk double counting. Electronics H1 revenue actually grew 52%, not 34.3%, so the derived volume line is also mis-specified at the segment level. The bridge still sums to revenue, but the <em>attribution</em> between volume and price is not reliable and should not be used to argue incremental-margin economics. The same caution applies to the +45 volume/utilisation term in the FY3/27→FY3/28 OP bridge, which applies a ~45% incremental margin to revenue that is partly price.</p>
+<h5>6. Forecast bridges</h5>
+<p><strong>Revenue FY3/26 → FY3/27</strong> (model): base 416.2, +95 Electronics AI-substrate volume [derived], +30 pricing/mix [assumption], +15 Ceramics/other recovery [assumption], +8.8 FX and rounding [derived] = 565.0. The Ceramics/other +15 is supported at the H1 level only (Ceramics OP ¥5.4bn, +40% YoY) and management guides Ceramics H2 OP down to ¥2.1bn on automotive weakness, so the full-year Ceramics contribution is smaller than the first half suggests. The +8.8 residual is small enough to be rounding/FX, but it is a residual, not a driver.</p>
+<p><strong>Operating profit FY3/26 → FY3/27</strong> (model): base 62.0, +50 volume/utilisation [derived], +18 pricing/mix net [assumption], −8 depreciation/startup [assumption], +6 Ceramics/other [assumption], +5 SG&amp;A/other [derived] = 133.0. This is a defensible decomposition: the volume term reconciles to the observed H1 OP delta (+¥27.5bn YoY) plus H2 guidance (+¥43.5bn), and the −8 depreciation headwind is directly supported by the ¥81.0bn FY3/27 depreciation guide (versus ¥66.2bn in FY3/26 per the vendor cash-flow statement). The +5 SG&amp;A residual is genuinely positive operating leverage — H1 SG&amp;A grew 6.4% against 34.3% revenue growth — so labelling it a residual understates its quality, but it is a residual by construction.</p>
+<p><strong>Operating profit FY3/27 → FY3/28</strong> (model): base 133.0, +45 volume/utilisation [derived], +20 pricing/mix net of decline [derived], −12 depreciation/startup [assumption], +10 Cell 8 contribution [derived], −6 SG&amp;A/other [derived] = 190.0. Two things concern me here. First, the +10 Cell 8 term applies a 65% incremental margin to a +15 revenue contribution — a margin assumption with no company disclosure behind it; management has never given Cell 8 revenue or margin guidance. Second, the −12 depreciation charge looks light: management guides depreciation up ¥9bn (to ¥90bn) while capex runs at ¥350bn; the model's own warning acknowledges depreciation rising 81→90 plus startup costs, yet only charges 12. Net effect: I would remove roughly half the Cell 8 term and add 3–5bn of startup/depreciation, which takes 190.0 to about ¥180bn.</p>
+<p><strong>Net profit FY3/27 → FY3/28</strong> (model): 89.0 + 57.0 OP increase −19 tax −5 minority/other = 122.0. The ~33% tax rate is consistent with H1's 34.5% and FY3/27's implied ~34%. I accept this conversion.</p>
+<p><strong>Operating profit → net income, FY3/27 sanity check:</strong> OP ¥133.0bn + non-operating ~¥1.5bn = ordinary ¥134.5bn (company guidance) with net profit ¥89.0bn implies a 66.2% net/pretax conversion. H1 actual was 65.0% (38.6/59.4). The two tie within 1.2ppt, so the model's −10 tax/minority line, while oddly described as &quot;incremental OP × ~14%,&quot; is not producing a wrong answer.</p>
+<h5>7. Consensus and variant perception</h5>
+<ul>
+<li><strong>FY3/27:</strong> the model equals guidance exactly. <strong>No forecast edge exists.</strong></li>
+<li><strong>FY3/28 operating profit:</strong> the model at 190.0 equals the Citi-cited consensus and is ¥25bn <em>above</em> management's ¥165bn. Say clearly why the model differs from guidance: management embeds roughly ¥10bn of future product price declines which the model reverses, and the model adds Cell 8 plus mix on top. My own view (¥175–185bn) differs from the model because the Cell 8 contribution is not yet evidenced and management's own FY3/28 revenue is ¥650bn, not the model's 665.0.</li>
+<li><strong>Where a genuine edge may exist, it is negative, not positive:</strong> management's FY3/28 target of ¥165bn is <em>below</em> consensus of ¥190bn. Because management reaffirmed an unchanged FY3/31 target and announced no Cell 7/Cell 9 investment, the near-term path of least resistance for consensus FY3/28 and FY3/29 numbers is downward revision. This is the opposite of the usual &quot;conservative guidance = upside&quot; trade, and three of four brokers in the corpus read the briefing that way (SMBC &quot;impression is negative&quot;; Citi &quot;we see this as negative&quot;; JPM notes the share price fell sharply on a below-expectation plan revision) [doc-4062.T-brokers-views-oct-30-2026].</li>
+<li><strong>Evidence that would confirm the model's higher path:</strong> Q3 FY3/27 OP at or above ¥36.5bn with Electronics margin ≥30%; an FY3/28 Electronics margin printed above 31%; Cell 8 qualification completed on schedule; a Cell 7/Cell 9 announcement with customer-backed terms.</li>
+<li><strong>Evidence that would invalidate it:</strong> any broad return of legacy price concessions; Cell 8 qualification slipping; a third AI-GPU supplier displacing incumbent allocation (Citi explicitly warns of a &quot;temporary stock price correction&quot; from share loss even with sales growth intact); EMIB-T yield stalling.</li>
+</ul>
+<h5>8. Cash flow and balance sheet</h5>
+<p><strong>Balance sheet (30 September 2026)</strong> [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.4–6]:</p>
+<ul>
+<li>Total assets ¥1,127.6bn, up ¥167.2bn in six months. Total equity ¥610.9bn, capital adequacy 53.5%.</li>
+<li>Cash and deposits ¥420.5bn. Interest-bearing debt: current bonds ¥10.0bn, bonds payable ¥35.0bn, convertible-bond-type bonds ¥56.0bn, long-term loans ¥61.0bn, leases ¥0.05bn. <strong>Net cash roughly ¥258bn</strong> before the October CB conversion.</li>
+<li><strong>Advances received ¥199.7bn</strong>, up from ¥81.0bn — 17.7% of total assets. This is the single most important non-obvious balance-sheet item: it is customer prepayment funding the capacity build, it inflates cash and operating cash flow, and it will unwind as revenue is recognised.</li>
+<li>Construction in progress ¥126.2bn (from ¥111.8bn). PP&amp;E actually fell slightly (buildings and machinery both down on depreciation), confirming that the heavy spend is still work-in-progress, not yet in service — consistent with the &quot;large portion remaining in Construction in Progress during FY2027&quot; comment [doc-4062.T-ibiden-q2-fy3-2027-result-call, Q5].</li>
+<li>Subsequent event: ¥11.5bn face of the 2031 zero-coupon CB converted 1–21 October 2026, issuing 5,126,831 shares; remaining CB ~¥44.5bn [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.13]. Conversion price reset to ¥2,243.1 post-split [p.14], so the remaining CB is deep in the money and should be treated as equity.</li>
+</ul>
+<p><strong>Cash flow:</strong> H1 OCF ¥193.2bn; investing outflow ¥48.9bn (PP&amp;E ¥48.3bn); financing outflow ¥18.3bn (¥15.0bn bond redemption, ¥4.2bn dividends). Cash rose ¥124.8bn.</p>
+<p><strong>Free cash flow is the central analytical problem.</strong> Capex guided ~¥200bn in FY3/27, ~¥350bn in FY3/28 and &gt;¥400bn thereafter, against FY3/28 EBITDA that management guides toward a ~48% margin [doc-4062.T-ibiden-q2-fy3-2027-result-call]. On the model's 665.0 revenue, 48% EBITDA is roughly ¥319bn, giving EBITDA-capex of about −¥31bn before interest, tax and dividends. The internal note's simplified normalised FCF of −¥132bn for FY3/28 [doc-4062.T-ibiden-q2-fy2027-results-forecast] is in the right order of magnitude. <strong>The dividend is not covered by free cash flow; the dividend is covered by earnings, cash balances and customer advances.</strong> Payout ratio is ~14%/~9% of FY3/27/FY3/28 EPS, so it is small in absolute terms (yield ~0.25%).</p>
+<p><strong>Funding:</strong> net cash of ~¥258bn plus customer advances covers the FY3/28 capex step-up, but a ¥350–400bn annual capex run-rate with negative normalised FCF means the net cash position will erode quickly, and the company has repeatedly been a debt issuer in prior cycles (¥118.5bn and ¥120.0bn of debt issued in FY3/24 and FY3/23 respectively). Cell 7/Cell 9, if approved, would extend the negative-FCF period. No financial covenants are disclosed in the corpus — a genuine data gap.</p>
+<h5>9. Valuation</h5>
+<p><strong>Method:</strong> P/E on FY3/28 EPS is the primary method, with EV/EBITDA as a cross-check. This is appropriate for a high-growth, asset-heavy manufacturer whose earnings are still ramping; DCF is not usable because the corpus lacks a discount rate, a working-capital profile and any disclosure of the terminal capex/return relationship.</p>
+<p><strong>Share basis.</strong> The model uses the full-share count of 566.3m implied by company FY3/27 EPS guidance [model warning]. Current actual basic shares are lower: 567,387,652 issued less 1,859,388 treasury = 565.5m net at 30 September; adding the 5.13m shares issued on CB conversion gives ~570.6m [doc-4062.T-ibiden-co-ltd-semi-annual-tanshin p.3, p.13]. That is ~0.8% dilution the model does not capture. Fully diluted, including the ~¥44.5bn remaining CB at ¥2,243.1, is higher still (the internal note uses 592.0m fully diluted).</p>
+<p><strong>Model valuation:</strong> price 8,045, FY3/27 EPS 157.2, P/E 51.2x. Fair value band 5,501–7,858, base 7,539 (−6%), bear 5,562 (−31%), bull 12,360 (+54%). On FY3/28 EPS of 215.4 the stock is 37.3x.</p>
+<p><strong>Cross-checks:</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Measure</th>
+<th>At ¥8,045</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P/E on FY3/28 model EPS ¥215.4</td>
+<td>37.3x</td>
+</tr>
+<tr>
+<td>P/E on my FY3/28 EPS ~¥205 (OP ¥180bn)</td>
+<td>~39.2x</td>
+</tr>
+<tr>
+<td>P/E on internal-note FY3/28 diluted EPS ¥216</td>
+<td>37.2x</td>
+</tr>
+<tr>
+<td>EV/EBITDA FY3/28</td>
+<td>~16–17x (internal note)</td>
+</tr>
+<tr>
+<td>Normalised FCF yield FY3/28</td>
+<td>~−2.8% (internal note)</td>
+</tr>
+<tr>
+<td>Dividend yield (DPS ¥20)</td>
+<td>0.25%</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>My valuation view.</strong> On my FY3/28 operating profit of ¥175–185bn and ~570.6m shares, FY3/28 EPS is ¥200–210. Applying 33–37x — a defensible band for a quasi-monopoly growth asset with negative FCF and a share-loss threat — gives <strong>¥6,600–7,800, centred around ¥7,200</strong>. That is below the model's 7,539 and materially below the market price. The internal note independently lands on a ¥8,000 target at ~37x diluted EPS with a &quot;Neutral/Hold&quot; rating and an accumulation range of ¥7,000–7,500 [doc-4062.T-ibiden-q2-fy2027-results-forecast].</p>
+<p><strong>What the price requires:</strong> at ~37x forward earnings and ~16–17x EV/EBITDA with negative free cash flow, the market is already discounting a successful Cell 8 ramp, sustained premium pricing, and continued growth beyond FY3/28. There is no valuation cushion for a Cell 8 delay or a consensus downgrade toward management's ¥165bn.</p>
+<p><strong>Vendor conflict flagged:</strong> Bloomberg snapshot shows P/E 56.19x and gross margin 31.64% [get_fundamentals, 2026-11-02]. The P/E is on trailing FY3/26 EPS and the gross margin on FY3/26 (H1 FY3/27 gross margin was 37.2%); neither is a forward measure. Per the source hierarchy the verified model's forward valuation wins.</p>
+<h5>10. Catalysts within the decision horizon (to ~May 2027)</h5>
+<ol>
+<li><strong>Q3 FY3/27 results, late January 2027.</strong> Tests whether the H2 24.1% margin guide is conservative. Threshold: Q3 OP ≥¥36.5bn and gross margin ≥38.5% would support the model's FY3/27 beat potential; Q3 OP below ¥33bn would be a clear miss signal.</li>
+<li><strong>Cell 7 / Cell 9 investment decision and possible medium-term-plan revision, promised &quot;within this fiscal year&quot; (by March 2027).</strong> Management has said the FY3/31 target may be revised once pending capex is finalised; Citi names this the next catalyst. Timing is explicitly uncertain — possibly at Q3, possibly at full-year results [doc-4062.T-brokers-views-oct-30-2026].</li>
+<li><strong>FY3/27 full-year results and first FY3/28 company guidance, late April/early May 2027.</strong> This is where the ¥165bn versus ¥190bn consensus gap gets resolved. It is at the very edge of the horizon.</li>
+<li><strong>Cell 8 installation and qualification milestones.</strong> Cell 8 (Ono, ¥280bn, AI GPU substrates) starts sequentially from FY2027 [doc-4062.T-ibiden-co-ltd-company-presentation-20261030 p.13]. Any visible qualification slippage in the horizon would hit FY3/28 estimates and the multiple simultaneously.</li>
+</ol>
+<p>Explicitly <strong>not</strong> near-term catalysts: EMIB-T mass production (scheduled H2 next fiscal year, i.e. Oct 2027–Mar 2028, beyond the horizon); Cell 6 revenue (first contribution FY2030); Cell 7/9 mass production (beyond FY2030, and management says a minimum four years from decision to mass production); glass-core substrates.</p>
+<h5>11. Risks and invalidation conditions</h5>
+<p><strong>Business risk.</strong> Demand is not the risk; qualified capacity is. Two specific threats: (i) a third AI-GPU substrate supplier compressing 4062.T's allocation despite a tight market — Citi expects this to hit the multiple before it hits reported earnings; (ii) EMIB-T yields, where management openly says it is &quot;struggling significantly&quot; and which sits on the H2 FY3/28 mass-production schedule [doc-4062.T-ibiden-q2-fy3-2027-result-call, Q2/Q4].</p>
+<p><strong>Forecast risk.</strong> The model's 190.0 FY3/28 OP is ¥25bn above management. If management's conservative pricing assumption is <em>right</em> rather than conservative, FY3/28 lands at ¥165bn and consensus cuts ~13%.</p>
+<p><strong>Balance-sheet / cash-flow risk.</strong> Capex of ¥350bn in FY3/28 is below the &gt;¥400bn level thereafter, against substantially negative normalised FCF. Funding is comfortable today (net cash ~¥258bn, 53.5% capital ratio) but the trajectory is dependent on continued customer advances. A &quot;customer advance unwind&quot; — if a major customer re-timed prepayments — would hit both reported operating cash flow and the funding plan at once. Not disclosed: covenants, customer concentration, contract terms on the ¥199.7bn of advances.</p>
+<p><strong>Valuation risk.</strong> ~37x forward earnings, ~16–17x EV/EBITDA, negative FCF, 0.25% dividend yield, and 260-day volatility of ~97% (vendor). This is the largest single source of downside in a 3–6 month window.</p>
+<p><strong>Dilution risk.</strong> ~¥44.5bn of remaining 2031 CBs at a ¥2,243.1 conversion price — deep in the money — plus the 5.13m shares already issued in October. EPS growth per share runs below net profit growth.</p>
+<p><strong>Thesis invalidation (observable):</strong> FY3/28 company guidance printed below ¥165bn; Q3 FY3/27 OP below ¥33bn; Electronics margin below 28% in any quarter; Cell 8 qualification disclosed as delayed; a Cell 7/9 announcement without customer funding commitments; a broad return of legacy price concessions (management's own words: pricing pressure is &quot;inevitable&quot; mid-to-long term).</p>
+<p><strong>Thesis confirmation (observable):</strong> Q3 OP ≥¥36.5bn; FY3/27 guidance raised a second time; Cell 7/9 approved with customer-backed terms and a revised FY3/31 target above ¥300bn; Cell 8 qualification on schedule.</p>
+<h5>12. Scenario analysis</h5>
+<p>No probabilities are assigned — no documented methodology exists to support weights.</p>
+<p><strong>Bear — ¥5,562 (model), −31%.</strong> FY3/28 OP reverts to or below management's ¥165bn as the price-decline assumption proves accurate; Cell 8 slips a quarter or two; a third AI-GPU supplier triggers multiple compression to the low 30s on FY3/28 EPS. Multiple ~35x on a lower EPS base, below the model's bear to reflect share-loss risk.</p>
+<p><strong>Base — ¥7,539 (model), −6%; my own base ~¥7,200.</strong> FY3/27 hits guidance at 133.0; FY3/28 delivers ¥175–185bn, roughly half the model's Cell 8 uplift; revenue ¥650–665bn; multiple 33–37x. The operations are good, the price is full.</p>
+<p><strong>Bull — ¥12,360 (model), +54%.</strong> Cell 8 ramps on schedule, price declines do not materialise (the disclosed ¥10bn buffer is pure upside), Cell 7/9 is announced with customer funding and the FY3/31 target is raised above ¥300bn within the horizon. Multiple 50x on model FY3/28 EPS of 215.4 (12,360/215.4 = 57x including the uplift; the model frames it within its 35–50x band on a higher earnings base). This case requires an earnings revision <em>and</em> a re-rating — correctly a bull case, not a base case.</p>
+<p><strong>Note on scenario construction:</strong> the model's bear and base use the same 35x multiple and differ only on earnings, which is analytically correct; the bull uses 50x, which requires the re-rating mechanism (Cell 7/9 announcement plus FY3/31 raise) to be explicit. I accept that mechanism as stated.</p>
+<h5>13. Key monitoring indicators</h5>
+<ol>
+<li><strong>Electronics segment operating margin</strong> — 29.0% in H1; anything below 28% in Q3 breaks the mix/operating-leverage thesis.</li>
+<li><strong>Q3 FY3/27 operating profit versus ¥36.5bn</strong> — the single cleanest test of whether H2 guidance is conservative or accurate.</li>
+<li><strong>Depreciation versus the ¥90bn FY3/28 guide</strong> — the model under-charges this; a higher run-rate directly reduces FY3/28 EPS.</li>
+<li><strong>&quot;Advances received&quot; on the balance sheet</strong> (¥199.7bn at 30 Sep) — a fall would signal either revenue recognition (good) or a customer funding withdrawal (bad); the cash-flow statement alone cannot distinguish these.</li>
+<li><strong>Capex outturn versus the ¥350bn FY3/28 guide</strong> and its split between construction-in-progress and in-service assets.</li>
+<li><strong>Cell 7 / Cell 9 disclosure and the FY3/31 target revision</strong> — the next scheduled information event capable of moving the multiple.</li>
+<li><strong>Consensus FY3/28 OP revision direction</strong> from the current ¥190bn reference.</li>
+</ol>
+<h5>14. Summary table</h5>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Assessment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Instrument</td>
+<td>4062.T (IBIDEN CO., LTD. — Tokyo/Nagoya, code 4062)</td>
+</tr>
+<tr>
+<td>Analysis date</td>
+<td>2026-11-02</td>
+</tr>
+<tr>
+<td>Decision horizon</td>
+<td>3–6 months</td>
+</tr>
+<tr>
+<td>Fundamental rating</td>
+<td>Neutral (negative-skewed risk/reward)</td>
+</tr>
+<tr>
+<td>Revenue direction</td>
+<td>Rising; FY3/27 565.0 and FY3/28 665.0 vs FY3/26 416.2</td>
+</tr>
+<tr>
+<td>Earnings direction</td>
+<td>Rising; FY3/27 OP 133.0 vs 62.0, FY3/28 190.0</td>
+</tr>
+<tr>
+<td>Forecast versus guidance</td>
+<td>FY3/27 identical (no edge); FY3/28 model 190.0 vs management ¥165bn — model reverses the ~¥10bn price buffer plus Cell 8/mix upside</td>
+</tr>
+<tr>
+<td>Forecast versus consensus</td>
+<td>FY3/28 OP model 190.0 equals the sole available consensus figure; no revenue/net/EPS consensus exists</td>
+</tr>
+<tr>
+<td>Cash-flow quality</td>
+<td>Weak underneath: H1 OCF ¥193.2bn included ¥118.8bn of customer advances; normalised FCF negative and worsening</td>
+</tr>
+<tr>
+<td>Balance-sheet condition</td>
+<td>Strong: 53.5% capital ratio, ~¥258bn net cash, low pension burden; ¥199.7bn advances are a contingent liability to future delivery</td>
+</tr>
+<tr>
+<td>Valuation</td>
+<td>Expensive: 51.2x FY3/27 EPS 157.2, ~37x FY3/28 EPS; model fair value 5,501–7,858</td>
+</tr>
+<tr>
+<td>Main catalyst</td>
+<td>Q3 FY3/27 results (late Jan 2027) and Cell 7/9 decision plus MTP revision by end-FY3/27</td>
+</tr>
+<tr>
+<td>Main risk</td>
+<td>FY3/28 guidance (¥165bn) sits below consensus (¥190bn), so revisions skew down while the multiple is ~37x</td>
+</tr>
+<tr>
+<td>Positive confirmation</td>
+<td>Q3 OP ≥¥36.5bn; Electronics margin ≥30%; Cell 8 qualification on schedule; Cell 7/9 approved with customer funding</td>
+</tr>
+<tr>
+<td>Thesis invalidation</td>
+<td>Q3 OP &lt;¥33bn; FY3/28 guide below ¥165bn; Electronics margin &lt;28%; Cell 8 delay; broad return of price concessions</td>
+</tr>
+<tr>
+<td>Principal data limitation</td>
+<td>No revenue, net profit or EPS consensus; no customer-concentration, covenant or Cell 8 revenue/margin disclosure; internal-note figures partly transcription-corrupted</td>
+</tr>
+</tbody>
+</table></div>
+<h6>Documents cited</h6>
+<ul>
+<li><code>doc-4062.T-ibiden-co-ltd-semi-annual-tanshin</code> — Semi-Annual Tanshin (filing), published 2026-10-29 (English translation of Japanese original).</li>
+<li><code>doc-4062.T-ibiden-co-ltd-company-presentation-20261030</code> — Company Presentation (public), published 2026-10-30.</li>
+<li><code>doc-4062.T-brokers-views-oct-30-2026</code> — Brokers' Views (internal_only note, GS/SMBC/Citi/JPM summaries), published 2026-10-30. <strong>Private material; not company disclosure.</strong></li>
+<li><code>doc-4062.T-ibiden-q2-fy3-2027-result-call</code> — Q2 FY3/27 earnings call transcript (internal_only note, date unverified — file mtime used), published 2026-10-30. <strong>Private material; contains editorial corrections to garbled audio.</strong></li>
+<li><code>doc-4062.T-ibiden-q2-fy2027-results-forecast</code> — Internal investment note with forecasts (internal_only, date unverified), published 2026-10-30. <strong>Private material.</strong></li>
+<li>Vendor statements via <code>get_income_statement</code>, <code>get_cashflow</code>, <code>get_balance_sheet</code> (annual, curr_date 2026-11-02) and <code>get_fundamentals</code> (Bloomberg snapshot) — used only for FY3/26 trailing items and prior-year history not stated in the documents; labelled as vendor data where used.</li>
+</ul>
+<p><em>Insider transactions: the tool returned no insider transactions reported for 4062.T — no evidence either way on management conviction.</em></p>
+</section><section id="s2"><h2>Fundamental Research Package</h2><h3 id="s2-1">Fundamental Research</h3>
+<p>FUNDAMENTAL MODEL — Ibiden Co., Ltd. (4062.T) — model 1.0.0
+Units: statement figures in JPY_bn; per-share figures in JPY.</p>
+<p>Annual figures:</p>
+<ul>
+<li>FY3/26 (actual): revenue 416.2, operating profit 62.0, margin 14.9%, net profit 63.7, EPS full_share 112.5</li>
+<li>FY3/27 (forecast): revenue 565.0, operating profit 133.0, margin 23.5%, net profit 89.0, EPS full_share 157.2</li>
+<li>FY3/28 (forecast): revenue 665.0, operating profit 190.0, margin 28.6%, net profit 122.0, EPS full_share 215.4</li>
+<li>FY3/29 (forecast): revenue 800.0, operating profit 220.0, margin 27.5%, net profit 145.0, EPS full_share 256.0</li>
+</ul>
+<p>Management guidance versus the model (guidance is management's number, kept for reference — the model forecasts independently):
+Period | Metric | Guidance | Model | Variance
+FY3/27 | Revenue | 565.0 | 565.0 | +0.0%
+FY3/27 | Operating profit | 133.0 | 133.0 | +0.0%
+FY3/27 | Net profit | 89.0 | 89.0 | +0.0%
+Say in one sentence why the model differs from guidance where it does; do not copy guidance into the forecast to make the rows agree.</p>
+<p>Quarterly build (current fiscal year):</p>
+<ul>
+<li>Q1 FY3/27: revenue 123.2, operating profit 26.9, net profit 17.9</li>
+<li>Q2 FY3/27: revenue 139.3, operating profit 33.2, net profit 20.7</li>
+<li>Q3 FY3/27: revenue 141.2, operating profit 34.0, net profit 23.5</li>
+<li>Q4 FY3/27: revenue 161.2, operating profit 38.8, net profit 26.9</li>
+</ul>
+<p>External consensus (Citi broker note citing consensus (doc-4062.T-brokers-views-oct-30-2026)), model versus consensus:
+Period | Metric | Consensus | Model | Variance
+FY3/28 | Operating profit | 190.0 | 190.0 | +0.0%
+Note: the external consensus has no FY3/26 row, so that year was not checked against it. Where the model has a reported figure for the year (a filing, or the vendor's annual statement) that figure is used; a derived one is not independently verified.
+Where the model differs from consensus, say in one sentence why. Do not average the two.</p>
+<p>Revenue bridge FY3/26 → FY3/27: base 416.2
++95 Electronics AI-substrate volume [derived] (H1 FY3/27 revenue +34.3% YoY applied to FY3/26 base plus H2 run-rate; rounded to guidance)
++30 Pricing/mix [assumption] (Favorable AI substrate pricing/mix assumed within H1 record results)
++15 Ceramics and other recovery [assumption] (Ceramics DPF backup orders and other businesses slightly above plan)
++8.8 FX and rounding [derived] (565.0 - (416.2 + 95.0 + 30.0 + 15.0))
+= 565</p>
+<p>Operating Profit bridge FY3/26 → FY3/27: base 62
++50 Electronics volume/utilization [derived] (H1 OP 60.1 vs FY3/26 H1 32.6 plus H2 guided OP 72.9; operating leverage on AI substrate demand)
++18 Pricing/mix net [assumption] (Favorable pricing and mix, partly offset by product price declines)
+-8 Depreciation/startup costs [assumption] (Depreciation and new capacity startup costs rise with Cell 8/Cell 6 investment)
++6 Ceramics and other improvement [assumption] (Ceramics H2 OP forecast 2.1bn plus other business steady)
++5 SG&amp;A/other [derived] (133.0 - (62.0 + 50.0 + 18.0 - 8.0 + 6.0))
+= 133</p>
+<p>Net Profit bridge FY3/26 → FY3/27: base 63.7
++71 Operating profit increase [derived] (133.0 - 62.0)
+-28 FY3/26 one-off gain reversal [assumption] (FY3/26 net 63.7 exceeded OP 62.0; assumed non-recurring benefit does not repeat)
+-10 Tax/minority [derived] (Incremental OP 71.0 × ~14% non-operating/tax drag)
+-7.7 Other/rounding [derived] (89.0 - (63.7 + 71.0 - 28.0 - 10.0))
+= 89</p>
+<p>Revenue bridge FY3/27 → FY3/28: base 565
++70 Advanced substrate area growth [derived] (FY3/27 565.0 × ~12.4% volume growth; supported by SAP demand index 100→350 by CY30)
++20 Pricing/mix [assumption] (Tight supply supports pricing/mix above unit volume)
++15 Cell 8 ramp [derived] (¥280bn Cell 8 investment; measured first full-year revenue contribution)
+-5 FX/other [derived] (665.0 - (565.0 + 70.0 + 20.0 + 15.0))
+= 665</p>
+<p>Operating Profit bridge FY3/27 → FY3/28: base 133
++45 Volume/utilization [derived] (Incremental revenue 100.0 × ~45% incremental OP margin)
++20 Pricing/mix net of decline [derived] (Reverse ~¥10bn price-decline buffer plus mix; company guidance 165→175, plus mix upside)
+-12 Depreciation/startup [assumption] (Depreciation rises 81.0→90.0 plus new capacity startup costs)
++10 Cell 8 contribution [derived] (Cell 8 ramp revenue 15.0 × ~65% incremental margin)
+-6 SG&amp;A/other [derived] (190.0 - (133.0 + 45.0 + 20.0 - 12.0 + 10.0))
+= 190</p>
+<p>Net Profit bridge FY3/27 → FY3/28: base 89
++57 Operating profit increase [derived] (190.0 - 133.0)
+-19 Tax on incremental profit [derived] (Incremental OP 57.0 × ~33% effective tax)
+-5 Minority/other [assumption] (Non-controlling interests and other non-operating items)
+= 122</p>
+<p>Revenue bridge FY3/28 → FY3/29: base 665
++80 Cell 8 full-year ramp [assumption] (Cell 8 operations start sequentially from FY2027; assume full-year loading in FY3/29)
++25 Cell 6 initial contribution [assumption] (¥151bn Cell 6 additional investment; assume early FY3/29 contribution at ~1x revenue multiple over time)
++35 Pricing/mix [assumption] (Continued tight supply and richer AI substrate mix)
+-5 Other/currency [derived] (800.0 - (665.0 + 80.0 + 25.0 + 35.0))
+= 800</p>
+<p>Operating Profit bridge FY3/28 → FY3/29: base 190
++35 Volume/utilization [derived] (Incremental revenue 135.0 × ~26% incremental OP margin)
++15 Pricing/mix [assumption] (Mix improvement and tight supply pricing)
+-15 Depreciation/startup [assumption] (Higher depreciation and Cell 6/Cell 7/Cell 9 startup costs)
+-5 SG&amp;A/other [derived] (220.0 - (190.0 + 35.0 + 15.0 - 15.0))
+= 220</p>
+<p>Net Profit bridge FY3/28 → FY3/29: base 122
++30 Operating profit increase [derived] (220.0 - 190.0)
+-10 Tax on incremental profit [derived] (Incremental OP 30.0 × ~33% effective tax)
++3 Minority/other [assumption] (Other non-operating income and rounding)
+= 145</p>
+<p>Valuation: price 8,045 JPY, FY3/27 EPS 157.2 on full_share, P/E 51.2x, fair value 5,501-7,858 JPY.
+Scenarios: Bear 5,562 (-31%); Base 7,539 (-6%); Bull 12,360 (+54%)</p>
+<p>Model warnings:</p>
+<ul>
+<li>FY3/27 forecast coincides with management guidance because it is built as H1 actual plus the disclosed H2 guidance split; our independent view differs in FY3/28, where OP ¥190bn is above management's ¥165bn on reversal of the ~¥10bn price-decline buffer plus Cell 8/mix upside.</li>
+<li>Company documents label the year ending March 2027 as FY2026; in this model it is FY3/27. References to 'this year' mean FY3/27 and 'next year' means FY3/28.</li>
+<li>Q3/Q4 FY3/27 split uses the reported FY3/26 Q3/Q4 revenue seasonality (103.1/117.6, i.e. 46.7%/53.3%) for revenue, operating profit and net profit; this is an assumption because no explicit H2 quarterly split is disclosed.</li>
+<li>FY3/26 ordinary profit is not disclosed in the source documents, so it is left null.</li>
+<li>FY3/27 segment revenue/OP is an estimate: Electronics H1 OP ¥50.0bn at 29.0% margin is disclosed, Ceramics H2 OP ¥2.1bn is guided, and the remaining split is assumed to sum to group revenue ¥565bn and OP ¥133bn.</li>
+<li>FY3/28 quarterly OP follows the broker note's ¥38bn/¥45bn/¥51bn/¥56bn distribution; quarterly revenue and net profit are allocated by our assumed ramp and are not company guidance.</li>
+<li>FY3/29 is an extrapolation between our FY3/28 base and the company's FY3/30 target of ¥1,000bn revenue and ¥300bn OP; Cell 6 contribution is assumed to begin in FY3/29 per the disclosed sequential start from FY2029.</li>
+<li>Market-cap shares outstanding are assumed at 562.0m, derived from H1 basic EPS and net profit; treasury shares are not disclosed. EPS uses the full-share count 566.3m implied by the company's FY3/27 EPS guidance.</li>
+<li>Only an FY3/28 operating-profit consensus figure (¥190bn) is disclosed; revenue, net profit and EPS consensus are not available and are left null.</li>
+<li>The fair-value band is struck on FY3/27 full-share EPS (¥157.2) so that the Base target (¥7,539 at 35x FY3/28 EPS) sits inside it; all three scenario multiples (35x Bear/Base, 50x Bull) lie within the declared 35x–50x band.</li>
+<li>Quarterly plan has no H1 guidance row: H1 rebuilt from reported Q1 FY3/27 + Q2 FY3/27, so the Q2 line is definitional; H2 = FY3/27 guidance - H1 still checks the reported Q3/Q4.</li>
+<li>FY3/27 capex is 35% of revenue; check the unit (a Japanese filing's 億円 is 0.1bn, not 1bn).</li>
+</ul>
+<p>Do not recalculate these figures. Where the model depends on an assumption, state the assumption and cite the document or meeting note behind it.</p>
+</section><section id="s3"><h2>Number Audit</h2><h3 id="s3-1">Figures Not In The Model</h3>
+<p>All 143 figure(s) the report marks as the model's were found in the verified model. Figures checked by section: Fundamentals Analyst 130, Research Manager 7, Trader 6, Portfolio Manager 0. 3 mark(s) were plain reference numbers (a bare single digit, as the number 6) and were not treated as figures.</p>
+</section><section id="s4"><h2>Case Comparison</h2><h3 id="s4-1">Cases Recomputed On The Model</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Probability</th>
+<th>Revenue</th>
+<th>Operating profit</th>
+<th>EPS</th>
+<th>Multiple</th>
+<th>Target</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>base (fair-value mid)</td>
+<td>61%</td>
+<td>565.0</td>
+<td>133.0</td>
+<td>157.2</td>
+<td>42.5x</td>
+<td>6,679 JPY</td>
+<td>—</td>
+</tr>
+<tr>
+<td>aggressive</td>
+<td>15%</td>
+<td>576.3</td>
+<td>137.0</td>
+<td>161.9</td>
+<td>42.5x</td>
+<td>6,880 JPY</td>
+<td>multiple raised to the base 42.5x: a bull case cannot argue</td>
+</tr>
+<tr>
+<td>bearish</td>
+<td>24%</td>
+<td>553.7</td>
+<td>127.0</td>
+<td>150.1</td>
+<td>34.0x</td>
+<td>5,103 JPY</td>
+<td>multiple limited to 34.0x (proposed 30.0x, base 42.5x ±20%)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Base here is the model's fair-value midpoint (midpoint EPS x the multiple that reproduces it); each case is that row moved by its capped deltas. The research package's Base <em>scenario</em> target is a separate model line, so the two can differ; compare cases against this row, and scenarios against that one.</p>
+</section><section id="s5"><h2>II. Research Team Decision</h2><h3 id="s5-1">Adversarial Investment Review</h3>
+<h5>1. Strongest positive challenge</h5>
+<p>The note describes the area/layer mechanism in §2 and then does not carry it into the forecast. Management's own series — GPU/ASIC units 1.8x CY26→CY30 against required SAP demand 5.4x; server CPU units 1.3x against 2.5x area demand; die size from 3.5 reticle in CY25 to 9+ by CY30; layers from 9-X-9 to 14-X-14, with the binding constraint being qualified equipment hours rather than construction — describes revenue per constrained tool-hour rising structurally, not a cyclical price spike [doc-4062.T-ibiden-co-ltd-company-presentation-20261030 p.12, p.14]. That is a mix-driven uplift that survives unit-price deflation. It is visible in reported numbers: Electronics H1 margin 29.0% against a FY3/28 guide of 31%. Yet the model prices it as a single +¥20bn line in FY3/28 and then has group margin <em>falling</em> from 28.6% to 27.5% in FY3/29 despite the Cell 8 full-year ramp — an internal contradiction the note does not address.</p>
+<p>Strongest earnings-revision mechanism: Q3 FY3/27 (late January 2027), inside the horizon. H2 guidance implies OP ¥72.9bn on revenue ¥302.5bn, a 24.1% margin only 0.3ppt above Q2's 23.8%, while H1's sequential margin gain was 2.0ppt. Management has already raised once (¥127bn/¥550bn to ¥133bn/¥565bn). A Q3 print at or above ¥36.5bn with Electronics margin ≥30% makes a second raise the default and lifts the FY3/28 base with no Cell 8 assumption at all.</p>
+<p>Most credible rerating mechanism: a Cell 7/Cell 9 decision with customer funding, promised within FY3/27 (by March 2027). It can rerate rather than merely add earnings because the FY3/31 ¥1,000bn/¥300bn+ target explicitly excludes Cell 6, the unused Cell 8 space and Cell 7/9; an approved, customer-backed expansion converts the target from aspiration to floor. Note, though, that the model's own bull cannot be reached on earnings alone: ¥12,360 is 57.4x the ¥215.4 EPS it is struck against, so it is a re-rating case wearing an earnings label.</p>
+<p>Evidence required within the horizon: Q3 OP ≥¥36.5bn; Electronics margin ≥30%; a Cell 7/9 disclosure naming customer funding; FY3/28 revenue guidance ≥¥650bn.</p>
+<h5>2. Strongest negative challenge</h5>
+<p>The most overestimated assumption is not Cell 8 — it is reversal of the ¥10bn price-decline buffer. That figure is a GS estimate quoted in a broker note [doc-4062.T-brokers-views-oct-30-2026], not company disclosure; management's own language is that pricing pressure is &quot;inevitable&quot; and that it does not assume current conditions roll forward [doc-4062.T-ibiden-q2-fy3-2027-result-call]. The FY3/28 bridge then adds +¥20bn &quot;pricing/mix net of decline&quot; on top of +¥45bn computed as 45% of the ¥100bn of incremental revenue — and that ¥100bn already contains the +¥20bn price and the +¥15bn Cell 8. Price is counted twice (~¥9bn) and Cell 8 twice (~¥7bn); the drivers sum to ¥196bn against a stated ¥190bn, closed by a −¥6bn plug. A bridge that closes on a plug decomposes a number, it does not evidence it — and the number was set equal to consensus.</p>
+<p>I also disagree with the analyst's own add-back. The −¥12bn depreciation charge is ¥9bn of guided depreciation (¥81.0bn to ¥90.0bn) plus ¥3bn of startup. Charging a further ¥3–5bn assumes management under-guides a line that is among the least likely in a Japanese filing to be under-guided, while ¥350bn of FY3/28 capex sits largely in construction in progress (¥126.2bn at 30 September 2026, from ¥111.8bn) and depreciates with a lag. Stripping only the Cell 8 overstatement gives ¥180bn, not ¥175bn.</p>
+<p>Clearest downgrade mechanism: management guides FY3/28 to ¥650bn/¥165bn; the model prints ¥665bn/¥190bn, +15.2% on OP and +2.3% on revenue against the company's own plan. If the buffer is accurate rather than conservative, OP is ¥165bn, net profit ≈¥105.3bn (33% tax on the ¥32bn delta from ¥133bn, less ¥5bn minority), EPS ≈¥184.5 on 570.6m shares, and ¥6,460 at the model's own 35x — 19.7% below ¥8,045 and below the note's ¥7,200 base.</p>
+<p>Most material valuation and cash-flow risk is the funding arithmetic, not the cash-quality optics. FY3/28 capex ¥350bn against depreciation ¥90.0bn; at management's ~48% EBITDA margin target on ¥665bn revenue, EBITDA is ~¥319bn, so EBITDA less capex is ≈−¥31bn before tax, interest and the ¥20 DPS. Net cash of ~¥258bn covers that shortfall; it does not cover a sustained &gt;¥400bn run-rate without new debt or further advances. The ¥199.7bn advance book is 57.1% of the FY3/28 programme — it is the funding, not a footnote. Dilution is also understated: ¥122.0bn on the internal note's 592.0m fully diluted shares is ¥206.1, 4.5% below the ¥215.4 used.</p>
+<p>Confirming evidence: Q3 OP below ¥33bn; gross margin below 37% (H1 37.2%, and price declines hit gross margin before OP); FY3/28 guidance below ¥165bn; advances received at 31 March 2027 below ¥199.7bn; FY3/27 depreciation above ¥81.0bn.</p>
+<p>On labelling: a model base of ¥7,539 is −6.3% and the analyst's own ¥7,200 is −10.5% against ¥8,045. A &quot;Neutral&quot; with a stated negative skew and fair value 6–10% below spot is an Underweight under a softer name.</p>
+<h5>3. Common assumptions both sides may be missing</h5>
+<p>Both treat the ¥10bn buffer as discrete and reversible; at ¥565bn of FY3/27 revenue a 2ppt deeper decline is ¥11bn — the same size as the entire disputed item — so neither side has tested the sensitivity.</p>
+<p>Neither asks what the ¥199.7bn of advances contractually is. If refundable or qualification-contingent, the bull's &quot;customer-funded&quot; rerating weakens; if a non-refundable capacity reservation, the bear's &quot;contingent liability&quot; is overstated. The corpus discloses neither.</p>
+<p>Both ignore Ceramics: H2 segment OP guided to ¥2.1bn against ¥5.4bn in H1, a ¥3.3bn headwind named in neither bridge.</p>
+<p>Both carry the FY3/29 row as decision-relevant. The model's own warning dates Cell 6 revenue to FY3/29 while the company dates Cell 6 to FY2030, and EMIB-T mass production sits in H2 FY3/28 — Oct 2027 to Mar 2028 — beyond the horizon.</p>
+<p>Neither allows that the 41.5% drawdown from ¥13,750 to ¥8,045 has already partly discounted the ¥165bn-versus-¥190bn gap.</p>
+<h5>4. Evidence that would resolve the disagreement</h5>
+<ul>
+<li>Q3 FY3/27 OP versus ¥36.5bn, and Electronics margin versus 30%.</li>
+<li>FY3/28 company guidance at full-year results versus ¥165bn — the only direct test of the ¥25bn gap, and it falls at the edge of the horizon.</li>
+<li>A Cell 7/9 disclosure by March 2027, with or without named customer funding.</li>
+<li>Advances received at 31 March 2027 versus ¥199.7bn at 30 September 2026 — distinguishes revenue recognition from funding withdrawal.</li>
+<li>FY3/27 depreciation outturn versus the ¥81.0bn guide.</li>
+<li>Gross margin versus H1's 37.2%.</li>
+</ul>
+<h5>5. Adversarial conclusion</h5>
+<p>The direction survives; the label and the precision do not. The FY3/27 forecast is guidance by construction (+0.0% on revenue, OP and net profit) and the FY3/28 forecast is consensus by construction (+0.0% on the only consensus figure in the corpus), so the model carries no forecast edge in either year inside the horizon — the rating rests entirely on the 35x multiple and on revisions skewing down. That claim is supported: ¥190bn consensus against ¥165bn guidance, 37.3x FY3/28 EPS, negative normalised free cash flow, 4.5% fully diluted dilution. But the negative side over-reaches twice: the depreciation add-back contradicts a company guide more likely to hold than to be beaten, and the note leaves no room for a downgrade the drawdown has begun to price. The technical read is correctly subordinated to valuation and supplies only a timing caution — price 3.4% above a rising 200-day SMA at ¥7,779.40, RSI 37.2, MACD histogram −152.14 and widening, no base — not a directional signal, and the VWMA/ATR/Bollinger figures are precise but not decision-grade given two −13% to −15% gaps in five weeks and a 200-day average distorted by the 2026 ramp. The single assumption most likely to change the decision is whether the price-decline buffer is conservative or accurate; it resolves at Q3, before the horizon's other evidence arrives. Note also that the ¥165bn outcome sits outside the ±5% band the case table below is permitted to express — the disagreement that matters is larger than the table can encode.</p>
+<p>{&quot;stance&quot;: &quot;aggressive&quot;, &quot;probability&quot;: 0.30, &quot;revenue_pct&quot;: 3.0, &quot;operating_profit_pct&quot;: 5.0, &quot;multiple&quot;: 41.0, &quot;momentum&quot;: &quot;price 3.4% above a rising 200-day SMA at 7,779.40 after a 41.5% drawdown; a reclaim of 9,026-9,126 is needed to end the immediate downtrend&quot;, &quot;sentiment&quot;: &quot;FY3/28 consensus OP already 190 against management's 165; a Q3 print at or above 36.5bn is required to lift guidance a second time&quot;, &quot;evidence&quot;: [&quot;doc-4062.T-ibiden-co-ltd-company-presentation-20261030&quot;, &quot;doc-4062.T-ibiden-co-ltd-semi-annual-tanshin&quot;, &quot;doc-4062.T-ibiden-q2-fy3-2027-result-call&quot;]}
+{&quot;stance&quot;: &quot;bearish&quot;, &quot;probability&quot;: 0.40, &quot;revenue_pct&quot;: -3.0, &quot;operating_profit_pct&quot;: -5.0, &quot;multiple&quot;: 28.5, &quot;momentum&quot;: &quot;MACD histogram widened to -152.14; price 20.9% below the 50-day SMA at 10,168.07; the 19.5% rally to 9,859 failed below the 10,280 pivot&quot;, &quot;sentiment&quot;: &quot;consensus FY3/28 OP of 190 is 15.2% above management's 165 while the stock trades 37.3x FY3/28 EPS&quot;, &quot;evidence&quot;: [&quot;doc-4062.T-brokers-views-oct-30-2026&quot;, &quot;doc-4062.T-ibiden-q2-fy3-2027-result-call&quot;, &quot;doc-4062.T-ibiden-co-ltd-semi-annual-tanshin&quot;]}</p>
+<h5>1. Strongest positive challenge</h5>
+<ul>
+<li><strong>Most underappreciated operating driver:</strong> revenue per qualified tool-hour, not unit volume. Management’s own series has GPU/ASIC units at 1.8x CY26–CY30 against required SAP demand of 5.4x, server CPU units at 1.3x against 2.5x area demand, die size rising from 3.5 reticle in CY25 to 9+ by CY30 and layers from 9-X-9 to 14-X-14 [doc-4062.T-ibiden-co-ltd-company-presentation-20261030 p.12, p.14]. That is a structural mix uplift that survives unit-price deflation. Electronics H1 margin was 29.0% (¥50.0bn on ¥172.5bn) against a FY3/28 segment guide of 31%. The model nonetheless has group margin falling from 28.6% in FY3/28 to 27.5% in FY3/29 despite a Cell 8 full-year ramp — an internal contradiction it does not address.</li>
+<li><strong>Strongest potential earnings-revision mechanism:</strong> Q3 FY3/27, late January 2027, inside the horizon. H2 guidance implies OP of ¥72.9bn on ¥302.5bn revenue, a 24.1% margin only 0.3ppt above Q2’s 23.8%, while H1’s sequential margin gain was 2.0ppt (Q1 21.8%, Q2 23.8%). A Q3 print at or above ¥36.5bn with Electronics margin ≥30% makes a second FY3/27 raise the default and lifts the FY3/28 base without any Cell 8 assumption.</li>
+<li><strong>Most credible rerating mechanism:</strong> a Cell 7/Cell 9 decision with customer funding by March 2027. The FY3/31 ¥1,000bn/¥300bn+ target explicitly excludes Cell 6, unused Cell 8 space and Cell 7/9, so an approved, customer-backed expansion converts the target from aspiration to floor. But the model’s bull cannot be reached on earnings alone: ¥12,360 divided by ¥215.4 is 57.4x, above the 50x top of its declared 35–50x band. It is a re-rating case wearing an earnings label.</li>
+<li><strong>Evidence required within the horizon:</strong> Q3 OP ≥¥36.5bn; Electronics margin ≥30%; a Cell 7/9 disclosure naming customer funding; FY3/28 revenue guidance ≥¥650bn.</li>
+</ul>
+<h5>2. Strongest negative challenge</h5>
+<ul>
+<li><strong>Most overestimated assumption:</strong> reversal of the roughly ¥10bn price-decline buffer. That figure is a GS estimate quoted in a broker note [doc-4062.T-brokers-views-oct-30-2026], not company disclosure; management says pricing pressure is “inevitable” and that it does not assume current conditions roll forward [doc-4062.T-ibiden-q2-fy3-2027-result-call]. The FY3/28 OP bridge then adds +¥20bn “pricing/mix net of decline” on top of +¥45bn computed as 45% of the ¥100bn of incremental revenue — revenue that already contains the +¥20bn price and +¥15bn Cell 8. Price is counted twice by about ¥9bn (45% × ¥20bn) and Cell 8 by about ¥7bn (45% × ¥15bn). The drivers sum to ¥196bn before a −¥6bn plug closes to ¥190bn. A bridge that closes on a plug decomposes a number; it does not evidence it, and the number was set equal to the sole consensus figure.</li>
+<li><strong>Clearest earnings-downgrade mechanism:</strong> management guides FY3/28 to ¥650bn revenue and ¥165bn OP; the model prints ¥665bn and ¥190bn, +2.3% on revenue and +15.2% on OP against the company’s own plan. If the buffer is accurate rather than conservative, OP is ¥165bn; net profit is approximately ¥105.4bn (¥89.0bn + ¥32bn × 0.67 − ¥5bn minority); EPS on 570.6m shares is ¥184.8; at the model’s own 35x that is ¥6,468, 19.6% below ¥8,045 and below the note’s ¥7,200 base.</li>
+<li><strong>Most material valuation/cash-flow risk:</strong> the funding arithmetic, not the cash-quality optics. FY3/28 capex is ¥350bn against ¥90bn depreciation; at management’s ~48% EBITDA margin on ¥665bn revenue, EBITDA is ~¥319bn, so EBITDA less capex is ~−¥31bn before tax, interest and the ¥20 DPS. Net cash of ~¥258bn covers one year; it does not cover a sustained &gt;¥400bn run-rate without new debt or further advances. The ¥199.7bn advance book is 57.1% of the ¥350bn FY3/28 programme. Dilution is also understated: ¥122.0bn on the internal note’s 592.0m fully diluted shares is ¥206.1, 4.3% below the ¥215.4 used.</li>
+<li><strong>Evidence that would confirm deterioration:</strong> Q3 OP below ¥33bn; gross margin below 37% (H1 was 37.2%, and price declines hit gross margin before OP); FY3/28 guidance below ¥165bn; advances received at 31 March 2027 below ¥199.7bn; FY3/27 depreciation above ¥81.0bn.</li>
+</ul>
+<h5>3. Common assumptions both sides may be missing</h5>
+<ul>
+<li>Both treat the ¥10bn buffer as discrete and reversible; at ¥565bn of FY3/27 revenue a 2ppt deeper decline is ¥11.3bn — the same size as the entire disputed item — so neither side has tested the sensitivity.</li>
+<li>Neither knows what the ¥199.7bn of advances contractually is. If refundable or qualification-contingent, the “customer-funded” rerating weakens; if a non-refundable capacity reservation, the “contingent liability” is overstated. The corpus discloses neither, and that is a gap, not evidence in either direction.</li>
+<li>Both ignore Ceramics: H2 segment OP is guided to ¥2.1bn against ¥5.4bn in H1, a ¥3.3bn headwind named in neither bridge.</li>
+<li>Neither allows that the 41.5% drawdown from ¥13,750 to ¥8,045 has already partly discounted the ¥165bn-versus-¥190bn gap.</li>
+</ul>
+<h5>4. Evidence that would resolve the disagreement</h5>
+<ul>
+<li>Q3 FY3/27 OP versus ¥36.5bn, and Electronics margin versus 30%.</li>
+<li>FY3/28 company guidance at full-year results versus ¥165bn — the only direct test of the ¥25bn gap, and it falls at the edge of the horizon.</li>
+<li>A Cell 7/9 disclosure by March 2027, with or without named customer funding.</li>
+<li>Advances received at 31 March 2027 versus ¥199.7bn at 30 September 2026 — distinguishes revenue recognition from funding withdrawal.</li>
+<li>FY3/27 depreciation outturn versus the ¥81.0bn guide.</li>
+<li>Gross margin versus H1’s 37.2%.</li>
+</ul>
+<h5>5. Adversarial conclusion</h5>
+<p>The direction survives; the label and the precision do not. The base case merely matches guidance and consensus: FY3/27 variance is +0.0% on revenue, OP and net profit, and FY3/28 OP variance is +0.0% against the only consensus figure in the corpus. There is no forecast edge in either year inside the horizon; the rating rests entirely on the 35x multiple and on revisions skewing down. That claim is supported by ¥190bn consensus against ¥165bn guidance, 37.3x FY3/28 EPS, negative normalised free cash flow and 4.3% fully diluted dilution. But the negative side over-reaches twice: the depreciation add-back contradicts a company guide more likely to hold than to be beaten, and the note leaves no room for a downgrade the drawdown has begun to price.</p>
+<p>The technical read is correctly subordinated to valuation and supplies only a timing caution — price 3.4% above a rising 200-day SMA at ¥7,779.40, RSI 37.2, MACD histogram −152.14 and widening, no base. The VWMA/ATR/Bollinger figures are precise but not decision-grade given two −12.8% and −15.2% gaps in five weeks and a 200-day average distorted by the 2026 ramp. The single assumption most likely to change the decision is whether the price-decline buffer is conservative or accurate; it resolves at Q3, before the horizon’s other evidence arrives. The ¥165bn outcome sits outside the ±5% band the case table can express, so the disagreement that matters is larger than the table can encode.</p>
+<p>{&quot;stance&quot;: &quot;aggressive&quot;, &quot;probability&quot;: 0.30, &quot;revenue_pct&quot;: 2.0, &quot;operating_profit_pct&quot;: 3.0, &quot;multiple&quot;: 40.0, &quot;momentum&quot;: &quot;Q3 OP at or above ¥36.5bn with Electronics margin ≥30% would force a second FY3/27 raise and lift the FY3/28 base without Cell 8.&quot;, &quot;sentiment&quot;: &quot;Positioning washed out after a 41.5% drawdown; a base above 9,026 would mark repair.&quot;, &quot;evidence&quot;: [&quot;doc-4062.T-ibiden-co-ltd-company-presentation-20261030&quot;, &quot;doc-4062.T-ibiden-q2-fy3-2027-result-call&quot;, &quot;doc-4062.T-ibiden-co-ltd-semi-annual-tanshin&quot;]}
+{&quot;stance&quot;: &quot;bearish&quot;, &quot;probability&quot;: 0.38, &quot;revenue_pct&quot;: -2.0, &quot;operating_profit_pct&quot;: -3.0, &quot;multiple&quot;: 30.0, &quot;momentum&quot;: &quot;MACD histogram −152.14 and widening; price below 10 EMA 9,026 and VWMA 9,126; no base.&quot;, &quot;sentiment&quot;: &quot;Brokers read the plan revision as negative; consensus FY3/28 OP 190 sits above management 165.&quot;, &quot;evidence&quot;: [&quot;doc-4062.T-brokers-views-oct-30-2026&quot;, &quot;doc-4062.T-ibiden-q2-fy2027-results-forecast&quot;, &quot;doc-4062.T-ibiden-q2-fy3-2027-result-call&quot;, &quot;doc-4062.T-ibiden-co-ltd-semi-annual-tanshin&quot;]}</p>
+<h5>1. Strongest positive challenge</h5>
+<ul>
+<li><strong>Underappreciated operating driver:</strong> revenue per qualified tool-hour, from larger die area and layer count, not unit volume. Management’s series has GPU/ASIC units at 1.8x CY26–CY30 against required SAP demand of 5.4x, and server CPU units at 1.3x against 2.5x area demand [doc-4062.T-ibiden-co-ltd-company-presentation-20261030 p.12, p.14]. Electronics H1 margin was 29.0%, below the FY3/28 segment guide of 31%, so the model’s FY3/29 group margin falling to 27.5% despite a Cell 8 full-year ramp is an unexplained contradiction.</li>
+<li><strong>Strongest earnings-revision mechanism:</strong> Q3 FY3/27 results in late January 2027. H2 guidance implies OP of ¥72.9bn on ¥302.5bn revenue, a 24.1% margin only 0.3ppt above Q2’s 23.8%, while H1’s sequential gain was 2.0ppt from Q1 to Q2. A Q3 OP at or above ¥36.5bn with Electronics margin ≥30% would make a second FY3/27 raise the default and lift the FY3/28 base without assuming Cell 8.</li>
+<li><strong>Most credible rerating mechanism:</strong> a Cell 7/Cell 9 decision with customer funding by March 2027. The FY3/31 ¥1,000bn revenue / ¥300bn+ OP target explicitly excludes Cell 6, unused Cell 8 space and Cell 7/9, so approval with customer backing would turn the target into a floor.</li>
+<li><strong>Evidence required within the horizon:</strong> Q3 OP ≥¥36.5bn; Electronics margin ≥30%; a Cell 7/9 disclosure naming customer funding; FY3/28 revenue guidance ≥¥650bn.</li>
+</ul>
+<h5>2. Strongest negative challenge</h5>
+<ul>
+<li><strong>Most overestimated assumption:</strong> reversal of the roughly ¥10bn price-decline buffer. That is a GS estimate quoted in a broker note, not company disclosure [doc-4062.T-brokers-views-oct-30-2026]; management says pricing pressure is “inevitable” and does not assume current conditions roll forward [doc-4062.T-ibiden-q2-fy3-2027-result-call].</li>
+<li><strong>Pricing/mix double count:</strong> the FY3/28 OP bridge adds +¥20bn pricing/mix on top of +¥45bn volume/utilisation computed as 45% of ¥100bn incremental revenue, but that ¥100bn already contains +¥20bn pricing and +¥15bn Cell 8. Price is overcounted by about ¥9bn and Cell 8 by about ¥7bn; the drivers sum to ¥196bn before a −¥6bn plug closes to ¥190bn.</li>
+<li><strong>Capacity/product timing too early:</strong> the model books Cell 8 contribution in FY3/28, while the company describes the main operational ramp from FY2028 onward, and the model’s FY3/29 Cell 6 revenue precedes the company’s FY2030 dating.</li>
+<li><strong>Clearest downgrade mechanism:</strong> if the price buffer is accurate rather than conservative, FY3/28 OP is ¥165bn versus the model’s ¥190bn. Net profit would be approximately ¥105.4bn, EPS about ¥184.8 on 570.6m shares, and at the model’s own 35x a value near ¥6,468, below ¥8,045.</li>
+<li><strong>Most material valuation/cash-flow risk:</strong> FY3/28 capex is ¥350bn against ¥90bn depreciation; at a 48% EBITDA margin on ¥665bn revenue, EBITDA is about ¥319bn, so EBITDA less capex is roughly −¥31bn before tax, interest and dividends. The ¥199.7bn advance book is 57.1% of the FY3/28 programme, and net cash of about ¥258bn covers one year, not a sustained &gt;¥400bn run-rate without new debt or further advances. Fully diluted EPS is also lower: ¥122.0bn on 592.0m shares is ¥206.1 versus the ¥215.4 used.</li>
+<li><strong>Deterioration evidence:</strong> Q3 OP below ¥33bn; gross margin below 37% versus H1’s 37.2%; FY3/28 guidance below ¥165bn; advances at 31 March 2027 below ¥199.7bn; FY3/27 depreciation above ¥81.0bn.</li>
+</ul>
+<h5>3. Common assumptions both sides may be missing</h5>
+<ul>
+<li>Both treat the ¥10bn buffer as discrete and reversible; at ¥565bn FY3/27 revenue, a 2ppt deeper price decline is ¥11.3bn, the same size as the disputed item.</li>
+<li>Neither knows the contractual nature of the ¥199.7bn advances — refundable, qualification-contingent or non-refundable capacity reservation. Missing terms are a gap, not evidence for either side.</li>
+<li>Both ignore Ceramics: H2 segment OP is guided to ¥2.1bn against ¥5.4bn in H1, a ¥3.3bn headwind named in neither bridge.</li>
+<li>Neither allows that the 41.5% drawdown from ¥13,750 to ¥8,045 has already partly discounted the ¥165bn-versus-¥190bn gap.</li>
+</ul>
+<h5>4. Evidence that would resolve the disagreement</h5>
+<ul>
+<li>Q3 FY3/27 OP versus ¥36.5bn and Electronics margin versus 30%.</li>
+<li>FY3/28 company guidance versus ¥165bn — the only direct test of the ¥25bn gap, though at the horizon’s edge.</li>
+<li>A Cell 7/9 disclosure by March 2027, with or without named customer funding.</li>
+<li>Advances received at 31 March 2027 versus ¥199.7bn at 30 September 2026.</li>
+<li>FY3/27 depreciation outturn versus ¥81.0bn, and gross margin versus 37.2%.</li>
+</ul>
+<h5>5. Adversarial conclusion</h5>
+<p>The direction survives; the label and the precision do not. The base case has no forecast edge inside the horizon: FY3/27 equals guidance on revenue, OP and net profit, and FY3/28 OP equals the sole consensus figure. The rating therefore rests on the 35x multiple and on revisions skewing down, supported by ¥165bn guidance against ¥190bn consensus, a ~37x FY3/28 P/E, negative normalised free cash flow and fully diluted dilution. But the negative side overreaches where it adds depreciation beyond a company guide more likely to hold than be beaten, and it should not read the technical downtrend as fundamental deterioration. The chart is only a timing caution — price is 3.4% above the 200-day SMA at ¥7,779.40, RSI 37.2, MACD histogram −152.14 and widening — and the VWMA/ATR/Bollinger figures are not decision-grade after −12.8% and −15.2% gaps in five weeks. The single assumption most likely to change the decision is whether the price-decline buffer is conservative or accurate; it resolves at Q3, before the other evidence arrives. The ¥165bn bear outcome is outside the ±5% OP cap the case table can encode.</p>
+<p>{&quot;stance&quot;: &quot;aggressive&quot;, &quot;probability&quot;: 0.25, &quot;revenue_pct&quot;: 2.0, &quot;operating_profit_pct&quot;: 3.0, &quot;multiple&quot;: 38.0, &quot;momentum&quot;: &quot;Catalyst-dependent; a close above 9,026-9,126 would end the immediate downtrend, but no base has formed.&quot;, &quot;sentiment&quot;: &quot;Positive only if Q3 beats and Cell 7/9 is customer-backed; not the base case.&quot;, &quot;evidence&quot;: [&quot;doc-4062.T-ibiden-co-ltd-company-presentation-20261030&quot;, &quot;doc-4062.T-ibiden-q2-fy3-2027-result-call&quot;]}
+{&quot;stance&quot;: &quot;bearish&quot;, &quot;probability&quot;: 0.4, &quot;revenue_pct&quot;: -2.0, &quot;operating_profit_pct&quot;: -4.5, &quot;multiple&quot;: 30.0, &quot;momentum&quot;: &quot;Downtrend intact; MACD histogram widening negative and price below VWMA, with 7,695 the key break level.&quot;, &quot;sentiment&quot;: &quot;Negative skew from FY3/28 consensus above guidance and a full forward multiple.&quot;, &quot;evidence&quot;: [&quot;doc-4062.T-brokers-views-oct-30-2026&quot;, &quot;doc-4062.T-ibiden-q2-fy3-2027-result-call&quot;, &quot;doc-4062.T-ibiden-co-ltd-semi-annual-tanshin&quot;]}</p>
+<h3 id="s5-2">Research Manager</h3>
+<p><strong>Recommendation</strong>: Underweight (4062.T)</p>
+<p><strong>Rationale</strong>: The bearish side wins on near-horizon evidence, not because both agents agree. The verified model has no forecast edge: FY3/27 revenue 565.0, operating profit 133.0 and net profit 89.0 carry +0.0% variance to guidance, and the model’s FY3/28 operating profit 190.0 equals the sole consensus figure with +0.0% variance; where the model differs from guidance it does not—there is no independent uplift to explain. The bear’s core downgrade mechanism is credible: management’s FY3/28 plan of ¥650bn/¥165bn sits below the model’s 665.0 revenue and 190.0 operating profit. At ¥8,045, 4062.T trades about 37.3x FY3/28 EPS 215.4; the model’s own 35x gives ~¥7,539, and bear 30x gives ~¥6,183–6,468. Even the aggressive 38x case on the model EPS gives only ~¥8,185, about 1.7% above spot, so the bull case needs a Q3 beat (OP ≥¥36.5bn, Electronics margin ≥30%) and/or customer-funded Cell 7/9 by March 2027 that is not yet evidenced. The bear’s cash-flow point is material: FY3/28 capex of ¥350bn against ¥90bn depreciation implies EBITDA-capex around −¥31bn before tax, interest and dividends, with ¥199.7bn advances and ~¥258bn net cash covering one year rather than a sustained &gt;¥400bn run-rate. I stop short of Sell because the bear overreaches by adding depreciation beyond a company guide and because the 41.5% drawdown has already discounted part of the 165-vs-190 gap; the chart is a timing caution—price 3.4% above the 200-day SMA at ¥7,779.40, RSI 37.2, MACD histogram −152.14—not fundamental proof. One bridge check: the FY3/28 operating-profit drivers in the debate sum to about ¥196bn against the stated model OP line, closed by a roughly −¥6bn plug, so the bridge does not independently validate the forecast.</p>
+<p><strong>Strategic Actions</strong>:</p>
+<ul>
+<li>Treat 4062.T as underweight against a standard 100bp single-name allocation: run 40–60bp, or roughly 0.4–0.6x neutral weight. If currently at full neutral weight, trim one-third to one-half now; if flat, do not initiate except a tactical position capped at 25bp.</li>
+<li>Use rallies into 9,026–9,126 to trim further rather than chase. Put a hard review on a close below 7,695; if broken, reduce 4062.T to 0–25bp.</li>
+<li>Event plan for Q3 FY3/27: if OP ≥¥36.5bn and Electronics margin ≥30%, or FY3/28 revenue guidance ≥¥650bn, move 4062.T to Hold and only consider adding after a base forms above 9,126. If Q3 OP &lt;¥33bn, gross margin &lt;37.2%, FY3/28 guidance &lt;¥165bn, advances fall below ¥199.7bn, or FY3/27 depreciation exceeds ¥81.0bn, move toward Sell/minimum weight.</li>
+<li>Keep 4062.T underweight unless a Cell 7/9 disclosure with named customer funding appears by March 2027. The contractual nature of the ¥199.7bn advances is undisclosed; treat that as a gap, not as support for either side. No external tools were used.</li>
+</ul>
+</section><section id="s6"><h2>III. Trading Team Plan</h2><h3 id="s6-1">Trader</h3>
+<p><strong>Action</strong>: Sell</p>
+<p><strong>Reasoning</strong>: The research plan is Underweight and the price structure corroborates it rather than contradicting it, so this is a reduce-to-underweight instruction, not a Hold. 4062.T closed 2026-11-02 at 8,045, 41.5% below the 52-week high of 13,750 and 35.1% below the 12,400 close of 2026-10-06; it sits below the 10 EMA at 9,026.10, below the 50 SMA at 10,168.07 and below the one-month VWMA at 9,125.99, with MACD histogram widening from −88.59 to −152.14 and RSI at 37.2 — momentum re-accelerating lower, and the 10-29 rebound (+19.5%) fully erased in one session. There is no base: the 08-04/08-05 gap zone (8,285–9,577) now caps price, and the 200 SMA at 7,779.40 is only 0.32 ATR below spot, so it is a test zone, not a floor; a close below 7,695 would break the 200-day line and the November low together. Valuation gives no cushion either: at 8,045 the stock is roughly 37.3x the model's FY3/28 EPS 215.4, while the plan's own 35x frame implies ~7,539 and a 30x frame ~6,460, and even 38x only reaches ~8,185 — about 1.7% above spot. The verified model offers no independent forecast edge: FY3/27 revenue 565.0, operating profit 133.0 and net profit 89.0 all carry +0.0% variance to guidance, and FY3/28 operating profit 190.0 matches the sole consensus figure at +0.0%, so the recommendation rests on the technical breakdown and the capex/depreciation math (FY3/28 capex ¥350bn vs ¥90bn depreciation implies EBITDA-capex around −¥31bn before tax, interest and dividends), not on a model-versus-guidance divergence. Two gaps are stated rather than read as evidence: the sum of the FY3/28 operating-profit bridge drivers is about ¥196bn against the stated 190.0 line, closed by roughly a −¥6bn plug, so the bridge does not independently validate the forecast; and the ¥199.7bn of advances has undisclosed contractual status. Execution caveat: the recent −12.8% and −15.2% gaps show a stop cannot be relied on for protection, which is why the position is cut now rather than held with a tight stop, and why the invalidation level is a review trigger rather than assumed insurance.</p>
+<p><strong>Entry Price</strong>: 8,045 (execute the reduction at market at the 2026-11-02 close; if price first rallies into 9,026–9,126, trim there instead of chasing weakness)</p>
+<p><strong>Stop Loss</strong>: 9,126 (invalidation of the bearish stance — a sustained reclaim of the 10 EMA/VWMA zone at 9,026–9,126 ends the immediate downtrend and argues for moving back toward Hold; a close below 7,695 is the downside confirmation that takes 4062.T to 0–25bp)</p>
+<p><strong>Position Sizing</strong>: Against a 100bp neutral single-name allocation, run 40–60bp (0.4–0.6x neutral): trim one-third to one-half of any full neutral weight now, and if flat, do not initiate — a tactical position, if taken at all, capped at 25bp. Sizing is deliberately small because ATR is 820.40, or 10.2% of price, per day and gap risk is demonstrated, not hypothetical.</p>
+</section><section id="s7"><h2>IV. Risk Management Team Decision</h2><h3 id="s7-1">Aggressive Analyst</h3>
+<p>Aggressive Analyst: Let me just say the quiet part first: I'm the one in this room who is supposed to argue for swinging for the fences, and I am here to tell you that the trader's sell is the aggressive call, not the timid one. This is the distinction the other two chairs will almost certainly mangle. They'll treat &quot;reduce to underweight&quot; as a retreat, as risk-off handwriting, and then they'll talk themselves into holding a 37x forward multiple through a negative revision cycle because the business is a quasi-monopoly. That is not conviction. That is inertia wearing conviction's jacket.</p>
+<p>Neither of them has spoken yet, so let me pre-empt what's coming.</p>
+<p>The neutral case will be: the fundamentals are superb, capacity is sold out into CY2030, SAP demand grows 5.4x from CY26 to CY30, dies go to 9+ reticle, layers go to 14-X-14, H1 operating profit was a record, net cash is 258 billion yen, and the stock has returned 260% over twelve months. Therefore hold at neutral and let the compounding do the work.</p>
+<p>Here's the problem with that: every single one of those facts is already in the 8,045 print. That's what a 37.3x multiple on FY3/28 EPS of 215.4 is <em>for</em>. I ran the trader's own valuation frame against it and the ceiling is embarrassing — at 38x, which is already a generous multiple for a company with negative normalized free cash flow and a third AI-GPU substrate supplier entering, you get roughly 8,185. That is 1.7% above spot. So the neutral analyst is asking you to carry a 10.2% daily ATR, demonstrated one-session gaps of minus 15.2% and minus 12.8%, and a model bear case of 5,562, down 31%, in exchange for 1.7% of theoretical upside in the <em>best</em> multiple case. Tell me how that is anything other than an unpriced short volatility position. The business can be magnificent and the stock still be a bad hold — those are not the same claim, and the neutral view collapses them.</p>
+<p>And I want to be brutal about the &quot;management guidance is conservative, so upside&quot; reflex, because that's the tell that someone is pattern-matching instead of reading. Management's FY3/28 target is 165 billion yen of operating profit against consensus of 190 billion. Guidance is below the street, not above it. The verified model shows FY3/27 at exactly plus 0.0% variance to guidance and FY3/28 operating profit matching the sole consensus figure at plus 0.0%. There is no forecast edge here. None. Three of four brokers in the corpus read the October briefing as negative — SMBC negative, Citi explicitly negative, JPM flagging the sharp fall. So the neutral analyst would be holding a 37x asset against the disclosed direction of revisions. That's not a growth thesis, that's a hope thesis.</p>
+<p>Now the conservative case, which I suspect will come in two flavors. Flavor one: sell more, get out entirely, why keep any of it. Flavor two, and this is the one that will actually get said: hold fire, wait for confirmation — wait for the close below 7,695, wait for Q3 in late January, wait for a base.</p>
+<p>Flavor one I partly respect but it's sloppy. The trader's invalidation level at 9,026 to 9,126 is doing real work. A sustained reclaim of the 10 EMA and VWMA zone means the immediate downtrend is dead and the stance should move back toward hold. That is a two-sided plan. A blanket &quot;sell it all and never look back&quot; throws away the re-entry trigger that makes this a trade rather than a grudge.</p>
+<p>Flavor two — the waiting game — is the genuinely dangerous one, and I want to be very direct about why. Waiting is not free. The 200-day sits at 7,779 and change, and spot is 0.32 ATR above it. ATR is 820 points. You are talking about a decision point that is less than a third of one day's average range away. &quot;Wait for confirmation&quot; in a name that has already printed minus 12.8% and minus 15.2% single-session gaps means you are volunteering to eat the confirmation gap. And notice what the trader actually did: they said the stop cannot be relied on for protection, which is why you cut now rather than hold with a tight stop. That is the correct read of gap risk. A stop at 9,126 is not insurance in a stock that gaps 15% — it's an aspiration. The conservative analyst who says &quot;hold with a stop&quot; is running a risk process that the price history has already falsified.</p>
+<p>I'll also take the &quot;200-day is rising, plus 260% twelve-month return&quot; argument head-on, because someone will make it. The 200-day is distorted by holiday gaps and an extreme price ramp, and the chat itself concedes it's a test zone, not a floor. A 41.5% drawdown is not automatically a discount when the multiple is 37x forward, capex is guided to 350 billion yen against 90 billion of depreciation, normalized FCF is roughly minus 132 billion, and the dividend is being funded by cash balances and 199.7 billion of customer advances rather than by free cash flow. That's a wonderful business to own at the right price. It is a bad business to <em>overpay</em> for. And on the aggressive side of the ledger — the thing I actually care about — the 6,490 to 6,825 zone from the prior 53% correction and the Bollinger lower band at 7,071.69 are where the asymmetry inverts. A decisive break of 7,695 opens those levels. That's where the high-reward money gets made: buying the identical structural shortage story 20 to 35% cheaper, with the same SAP 5.4x demand curve intact, and the Cell 7/Cell 9 decision plus a possible medium-term plan revision as the re-rating catalyst. Cutting now is what funds that. Holding now is what gets you carried out before you can.</p>
+<p>One more thing nobody has flagged: there is no sentiment report and no news report in this run. That's a real limitation, and I'm not going to pretend it isn't — but it cuts against the hold case, not for it. In a violent de-rating with no crowd narrative to lean on, there is no sentiment floor underneath you and no news flow to mark the bottom. You don't be the hero in that vacuum. You take the reduction the trader is asking for and you keep dry powder.</p>
+<p>So my position is unambiguous: the direction is reduce toward underweight, and the reasoning holds up better than either alternative on offer. How far any given caller takes that reduction, and where protection is expressed, has to scale to their own exposure and risk budget — the trader's framing of a small tactical footprint against neutral weight is the right shape given a 10.2% daily ATR, but the magnitude is theirs to calibrate, not mine to dictate. What I will insist on is the discipline of the invalidation level being two-sided: reclaim 9,026 to 9,126 and you stop being bearish, no ego. Then, when this breaks 7,695 and the panic shows up, I want to be the loudest person in the room arguing to buy 4062.T with both hands. That's the aggressive trade. Selling here is what buys the ticket.
+Aggressive Analyst: I’m the Aggressive Risk Analyst, and I’ll say it plainly: the trader’s sell on 4062.T is not the timid call. It is the aggressive call because it refuses to warehouse a 37.3x FY3/28 EPS multiple, negative normalized free cash flow, and a 10.2% daily ATR just because the business is superb. The business can be a structural winner and the equity can still be a bad risk at 8,045. My whole argument is that 4062.T is worth owning aggressively — just not at this price while the tape is broken and the revision skew is down.</p>
+<p>Conservative chair, you say you don’t care about labels. Fine. But the capital allocation issue is not labeling. Holding 4062.T here is not protecting assets; it is volunteering to carry gap risk the market is not paying you for. You and I agree on the direction, but you are still too close to treating any residual as indefensible. The trader’s plan is already small, conditional, and two-sided: reduce toward underweight, do not initiate if flat, and treat 9,026–9,126 as a review trigger rather than insurance. That is not a lockdown. That is dry powder with discipline. I am not going to prescribe a universal trim percentage or a stop distance because we do not know the caller’s book, but qualitatively the trader’s shape is right: cut the exposure now unless strength appears, and keep any residual small enough that another 15% gap does not force a decision.</p>
+<p>Your strongest point is that 4062.T is not a margin-of-safety trade at 8,045. I agree completely. At 8,045 it is roughly 37.3x FY3/28 model EPS of 215.4, the model’s own base fair value is 7,539, the bear case is 5,562, and the best multiple case in the trader’s frame — 38x on the model EPS — only gets you about 8,185, roughly 1.7% above spot. That is not an investment; that is an unpriced short-volatility position. But where you sound too absolute is in treating the residual as the problem. The residual is not the problem if it is small, optional, and sized for gap risk. The problem is full neutral exposure. The trader is not asking anyone to short the structural story; the trader is cutting the position so the caller is not forced to sell into the next gap.</p>
+<p>Your re-entry standard — evidence of a base, stabilization in estimates, funding clarity — sounds prudent, but it risks becoming a formula for buying after the re-rating. The high-reward path is staged, not perfect-information. You do not need every answer on the 199.7 billion yen of advances before you take a small, conditional look at 4062.T again. You need price that compensates for the unknowns, and catalysts that can change the distribution. Q3 FY3/27 in late January and the Cell 7/Cell 9 decision plus possible medium-term-plan revision by end-FY3/27 are exactly the kind of events that can re-rate this name before your three all-clears are visible. The aggressive answer is not “buy blindly at 7,695”; the neutral chair is right that a blind panic-break entry would be a second reckless trade. The aggressive answer is “be prepared to stage risk when price reaches the 7,071 or 6,490–6,825 zones and the structural shortage story is intact.” That is where the asymmetry inverts. That is where the high-reward money gets made — buying the same SAP 5.4x demand curve, the same sold-out capacity into CY2030, the same 9-plus reticle and 14-X-14 layer migration, and the same Cell 7/Cell 9 optionality at a price that does not already capitalize perfection.</p>
+<p>On the missing sentiment and news reports, you say the vacuum cuts against the hold case. I agree, and I will not pretend it does not cut against my future buy case too. But it cuts hardest against holding 4062.T right now. There is no sentiment floor, no news catalyst to stop a gap, no crowd narrative to lean on, and the stock is still below the 10 EMA at 9,026.10, below the 50 SMA at 10,168.07, below the one-month VWMA at 9,125.99, with MACD histogram widening from minus 88.59 to minus 152.14 and RSI at 37.2. The 10-29 rebound of 19.5% was erased in one session. The August gap zone at 8,285–9,577 now caps price. The 200 SMA at 7,779.40 is only 0.32 ATR below spot, and ATR is 820.40, or 10.2% of price. Recent single-session gaps of minus 12.8% and minus 15.2% have already falsified the idea that a stop at 9,126 is reliable protection. In that setup, the absence of information is not a reason to be a hero. It is a reason to reduce exposure before the gap, not after.</p>
+<p>Now the neutral chair. You say both aggressive and conservative are partly right, and that the trader’s plan is closer to a balanced answer. I agree with the direction, but your adjustment is too soft where it matters. The trader is not calling for a bearish crusade; the trader is calling for a reduce-to-underweight instruction. If full neutral is the benchmark, the plan’s small tactical footprint and do-not-initiate-if-flat stance already answer your “not maximum underweight” concern. The real question is whether holding full neutral at 8,045 is defensible. It is not. The best multiple case is about 1.7% above spot, the model bear case is minus 31%, and the guidance setup is negative: management’s FY3/28 operating profit target is 165 billion yen against consensus of 190 billion, so the near-term revision path is more likely down than up. The verified model matches FY3/27 guidance at plus 0.0% variance and matches the sole FY3/28 consensus figure at plus 0.0%. There is no forecast edge here. So when you say multiples can expand if Q3 beats and Cell 8 qualifies and Cell 7/Cell 9 is announced, I agree — but that is exactly why the trader’s 9,026–9,126 review trigger is two-sided. If 4062.T reclaims that zone, the immediate downtrend is dead and the stance should move back toward hold. That is not ego; that is respecting the tape.</p>
+<p>Where I push back on you is the idea that the aggressive chair is “too confident” about the next leg lower. I am not saying every lower tick is a gift. I am saying 8,045 is not a price where the high-reward investor gets paid. The bull case at 12,360 is real, but it requires Cell 8 on schedule, no materialization of the disclosed price-decline buffer, a Cell 7/Cell 9 announcement with customer funding, and a re-rating. That is a confluence, not a base case. You are right that it is not zero probability. But you do not hold a full neutral position through a 10.2% daily ATR because a 54% bull case exists. You keep a small residual, respect the review triggers, and preserve capital for the higher-probability version of that bull case — the one where the market has already discounted the bad news.</p>
+<p>You also say my “buy with both hands” line at 7,695 was too aggressive and that gap risk makes panic-break entry unreliable. I accept the correction. The aggressive trade is not a blind market order at 7,695. The aggressive trade is pre-committing to investigate and stage risk when 4062.T trades into the 7,071 Bollinger lower band or the 6,490–6,825 prior-correction zone, with size small enough to survive being early. The same gap risk that makes 9,126 unreliable as a stop makes a single all-in entry unreliable. So the right expression is staged, conditional, and price-driven, not heroic. That is exactly the trader’s logic: cut now rather than hold with a stop that cannot be relied on; keep the invalidation level as a review trigger, not assumed insurance; and keep dry powder for the zone where the asymmetry actually flips.</p>
+<p>On the fundamentals, the conservative chair is right that the cash-flow quality is not as clean as the headline. H1 operating cash flow of 193.2 billion yen included a 118.8 billion yen increase in customer advances. The 199.7 billion yen of advances is demand validation — I like that a lot, because it shows customers are funding capacity — but it is not free equity and it has undisclosed contractual status. Capital expenditure is guided to 350 billion yen in FY3/28 against 90 billion yen of depreciation, implying EBITDA-capex around minus 31 billion before tax, interest, and dividends. Normalized free cash flow is negative. Net cash of roughly 258 billion yen is only about 5.6% of the roughly 4.6 trillion yen market cap. That supports the business; it does not protect the stock at a 37x forward multiple. The structural story is excellent. That is precisely why I want to own 4062.T at a better price, not why I want to hold it through a de-rating.</p>
+<p>So my position is unambiguous. I support the trader’s decision on 4062.T: reduce toward underweight and do not initiate if flat. I support the two-sided structure: a sustained reclaim of 9,026–9,126 ends the immediate downtrend and should move the stance back toward hold, while a close below 7,695 is downside confirmation that the long-term trend test has failed and opens 7,071 and then 6,490–6,825. I do not support turning this into a permanent bearish grudge, and I do not support the conservative chair’s implicit demand for perfect information before re-risking. The high-reward path is to sell the overvaluation now, keep the residual small and optional, and be ready to buy the same structural shortage story when the market prices it with a margin of safety. Selling 4062.T here is what funds that trade. Holding full neutral is what gets you carried out before you can make it.
+Aggressive Analyst: Let me start with the thing all three of us actually agree on, because it matters: nobody in this room is arguing that 4062.T is a bad business. The aggressive case I’m making is not “sell the structural shortage story.” It’s “stop paying a full price for it while the tape is broken, the revision skew is down, and the gap risk is real.” That is the trader’s decision, and it is the right one. The conservative chair says selling isn’t aggressive because it doesn’t care about labels. Fine. I don’t care about labels either. What I care about is that holding full neutral exposure in 4062.T at 8,045 is not a neutral act. At 37.3x FY3/28 model EPS of 215.4, with the model’s own base fair value at 7,539 below spot and the bear case at 5,562, and with the best multiple case in the trader’s own frame—38x on that model EPS—only getting you to roughly 8,185, about 1.7% above spot, full neutral is an unpriced short-volatility position. The business is magnificent. The equity is not paid to take that risk here.</p>
+<p>Conservative chair, your strongest point is the one I want to amplify, not dodge: there is no independent forecast edge in 4062.T. FY3/27 matches guidance at plus 0.0% variance, FY3/28 operating profit matches the sole consensus figure at plus 0.0%, management’s FY3/28 target is 165 billion yen against consensus of 190 billion, and the near-term revision skew is down, not up. You also correctly point out that H1 operating cash flow of 193.2 billion yen included 118.8 billion yen of customer advances, that the 199.7 billion yen of advances has undisclosed contractual status, that capex of 350 billion yen against 90 billion yen of depreciation implies EBITDA-capex around minus 31 billion before tax, interest and dividends, and that normalized free cash flow is negative. Net cash of roughly 258 billion yen is only about 5.6% of the roughly 4.6 trillion yen market cap. That supports the operating build; it does not protect the equity at a 37x forward multiple. Where I break with you is your treatment of any residual as indefensible. A small, mandate-permitted residual in 4062.T is not automatically a “behavioral placeholder for hope” if it is sized so another 15% gap does not force action. It is optionality on a sold-out structural leader with SAP demand growing 5.4x from CY26 to CY30, 9-plus reticle dies and 14-X-14 layer migration, and Cell 8 plus Cell 7/Cell 9 optionality. But I will not demand that residual from every caller. If the mandate cannot tolerate it, zero is fine. What I will not accept is full neutral exposure being called neutral risk management.</p>
+<p>And conservative chair, I have to push back hard on your rejection of any staged response to lower prices. You say the same gap risk that makes 9,126 unreliable as a stop makes a support-level entry unreliable as an entry. I agree that a blind market order at 7,695 would be reckless, and I already corrected the “both hands” line. But refusing to pre-plan any response to 7,071 or 6,490 to 6,825 is not conservatism; it is guaranteeing you buy after the re-rating. A close below 7,695 would break the 200-day line at 7,779.40 and the November low together, so yes, that is a regime-change review, not an automatic buy. But the aggressive answer is not “stand frozen until every question about the 199.7 billion yen of advances, customer concentration, covenants, Cell 8 qualification, and funding trajectory is answered.” By the time all of that is obvious, 4062.T could easily be 20% to 40% higher, and the conservative chair will have “preserved capital” by missing the entire high-reward re-entry. Missing upside is not automatically a risk failure for your mandate, but paying for downside when the model’s base is below spot and the bear case is minus 31% is a risk failure for mine. The high-reward path is to sell the overvaluation now, keep dry powder, and be prepared to stage risk when price and evidence align—not to pretend a chart level is a risk process, but also not to pretend that refusing to look at lower prices is discipline.</p>
+<p>Neutral chair, you are closer to the right shape, but you are too soft where it matters. You say the trader’s plan is balanced, and I agree with the direction. But your “if strength comes into 9,026–9,126, that is a better place to trim” leaves open the possibility that a caller at full neutral sits through the next gap waiting for strength that may not come. In 4062.T, spot is below the 10 EMA at 9,026.10, below the 50 SMA at 10,168.07, below the one-month VWMA at 9,125.99, with MACD histogram widening from minus 88.59 to minus 152.14 and RSI at 37.2, not oversold. The 10-29 rebound of 19.5% was erased in one session. The August gap zone at 8,285 to 9,577 now caps price. ATR is 820.40, or 10.2% of price, and the 200 SMA at 7,779.40 is only 0.32 ATR below spot. Recent single-session gaps of minus 12.8% and minus 15.2% have already falsified the idea that a 9,126 stop is reliable protection. That is why the trader says cut now rather than hold with a tight stop. If the existing position is too large for that gap risk, reducing now is not “chasing weakness”; it is refusing to warehouse negative asymmetry. If the caller is already underweight, fine, do not chase the 8,045 print. But do not call full neutral defensible because the bull case at 12,360 is not zero probability. The bull case requires Cell 8 on schedule, no materialization of the disclosed price-decline buffer, a Cell 7/Cell 9 announcement with customer funding, and a re-rating. That is a confluence, not a base case. You do not hold full neutral through a 10.2% daily ATR because a 54% bull case exists.</p>
+<p>You also say my 38x ceiling is too precise because multiples can expand if Q3 operating profit beats 36.5 billion yen, Electronics margin holds above 30%, Cell 8 qualifies on schedule, and Cell 7/Cell 9 is announced with customer funding. I agree. Multiples are not static. But that is exactly why the trader’s 9,026–9,126 zone is a two-sided review trigger, not a stop-loss and not a permanent bearish grudge. If 4062.T reclaims that zone on a sustained basis, the immediate downtrend is dead and the stance should move back toward hold. I have no ego about that. But using a possible re-rating to justify holding full neutral today is conflating an upside scenario with a risk process. The trader’s plan already gives you the two-sided structure: reduce toward underweight now, do not initiate if flat, and respect the review triggers. That is not a bearish crusade. It is the aggressive call because it refuses to overpay for a story that is already in the price.</p>
+<p>On the missing sentiment and news reports, conservative chair, you are right that there is no crowd narrative to lean on and no news flow to mark a bottom. Neutral chair, you are right that lower confidence should show up in smaller size and more conditional triggers. But I will go one step further: in a violent de-rating with no sentiment report and no news report, there is no sentiment floor underneath a full neutral position and no catalyst calendar to stop a gap. That cuts hardest against holding 4062.T at 8,045 right now. It does not cut against being prepared to investigate 4062.T at lower prices when the same structural shortage story is intact and the market is finally paying you for the unknowns. It cuts against being a hero in a vacuum. Selling now is how you avoid being the hero who gets carried out before the opportunity arrives.</p>
+<p>So my position is unambiguous. I support the trader’s decision on 4062.T: sell/reduce toward underweight, and do not initiate if flat. I support the two-sided review structure: a sustained reclaim of 9,026–9,126 ends the immediate downtrend and moves the stance back toward hold, while a close below 7,695 is downside confirmation that triggers a fresh risk review, not an automatic buy. I support keeping any residual small, mandate-justified, and sized so another 15% gap does not force action—but the exact size is the caller’s decision, not mine to prescribe. The conservative chair is right that capital preservation comes first; the neutral chair is right that the plan should stay conditional. But both of them are still too willing to let a 37x forward multiple, negative normalized free cash flow, downward revision skew, and demonstrated 15% gap risk sit in the book because the business is excellent. The business can be excellent and the equity can still be a bad hold at this price. The aggressive trade is to sell 4062.T here, keep the dry powder, and be ready to own the same structural winner when the market prices it with a margin of safety. Selling here is what funds that trade. Holding full neutral is what gets you carried out before you can make it.</p>
+<h3 id="s7-2">Conservative Analyst</h3>
+<p>Conservative Analyst: I’m the Conservative Risk Analyst, and I want to start by correcting the framing. The aggressive chair says selling 4062.T is “the aggressive call.” I don’t care what we label it. My job is not to be aggressive or timid; my job is to protect the firm’s assets and avoid uncompensated downside. On 4062.T, the trader’s reduction is not a bet on a collapse. It is an admission that the current price offers a poor margin of safety while the evidence is deteriorating and the information set is incomplete. That is the conservative case.</p>
+<p>The neutral chair hasn’t spoken yet, so let me pre-but the obvious neutral argument. Yes, 4062.T is a strong business: high-end IC package substrates, sold-out capacity, SAP demand growth, record H1 operating profit of ¥60.1bn, net cash of roughly ¥258bn, and a 260% twelve-month return. None of that is disputed. But none of that is a margin of safety at ¥8,045. At that price, 4062.T is about 37.3x FY3/28 model EPS of ¥215.4 and 51.2x FY3/27 EPS of ¥157.2. The model’s own fair-value base is ¥7,539, below spot, and its bear case is ¥5,562. The fundamental report itself calls the rating Neutral with negative-skewed risk/reward. A conservative mandate cannot hold a 37x forward multiple, negative normalized free cash flow, and a 10.2% daily ATR simply because the business is excellent. The business can be magnificent and the equity can still be a bad risk at this price. The neutral view collapses those two claims.</p>
+<p>The neutral case will also lean on “management guidance is conservative, so upside.” I would push back hard. Management’s FY3/28 operating profit target is ¥165bn against consensus of ¥190bn. Guidance is below the street, not above it. The verified model matches FY3/27 guidance at plus 0.0% variance and matches the sole FY3/28 consensus figure at plus 0.0%. There is no independent forecast edge here. The model’s FY3/28 bridge has a roughly −¥6bn plug, the ¥199.7bn of customer advances has undisclosed contractual status, and capex of ¥350bn against ¥90bn of depreciation implies EBITDA-capex of roughly −¥31bn before tax, interest, and dividends. Normalized free cash flow is negative, and the dividend is covered by earnings, cash balances, and customer advances, not by free cash flow. That is not a steady, reliable growth profile for a conservative book. It is a capital-intensive capacity build with a favorable operating story and a lot of execution and financing risk underneath it.</p>
+<p>The aggressive chair and I agree on the direction, but I do not accept his rationale or his destination. He says the 38x ceiling is only about ¥8,185, roughly 1.7% above spot, so holding is an unpriced short-volatility position. I agree that the asymmetry is poor, but I would not hang risk management on a single multiple times a single EPS estimate. The stronger conservative point is simpler: the downside path is wide and gap-prone. 4062.T closed at ¥8,045, down 41.5% from its 52-week high and 35.1% from the October 6 close in about nineteen sessions. It sits below the 10 EMA at ¥9,026, below the 50 SMA at ¥10,168, and below the one-month VWMA at ¥9,126. The 10-29 rebound of 19.5% was erased in one session. MACD histogram widened from −88.59 to −152.14. RSI is 37.2, not oversold. There is no base. The August gap zone at ¥8,285–¥9,577 now caps price, and the 200-day SMA at ¥7,779.40 is only 0.32 ATR below spot. That is a test zone, not a floor. A single ordinary session can test it, and the recent −12.8% and −15.2% gaps prove that a stop at ¥9,126 is not reliable protection. The aggressive chair is right that waiting for confirmation is not free, but his proposed alternative—buying a break of ¥7,695 “with both hands”—is the mirror image of the same error. You cannot say stops are unreliable because of gap risk and then assume you can execute a heroic entry into a panic break. The conservative version of dry powder is optionality with no obligation. Re-entry should require evidence of a base, stabilization in estimates, and funding clarity, not simply a lower price.</p>
+<p>The aggressive chair also says the 200-day is distorted and the 41.5% drawdown is not automatically a discount. I agree, and I would go further. The 200-day is rising, but it is only 3.4% below spot and distorted by holiday gaps and an extreme price ramp. The twelve-month return of 260% is a lagging statistic, not a cushion. The stock is still above the 200-day, but the medium-term structure has rolled over, and a close below ¥7,695 would break the 200-day and the November low together. That would shift the long-term trend assessment and open the Bollinger lower band near ¥7,071 and the prior correction zone around ¥6,490–¥6,825. For a conservative mandate, a model bear case of −31% is not acceptable when the best multiple case in the trader’s own frame is roughly 1.7% above spot. Even if the bull case is real at ¥12,360, it requires Cell 8 on schedule, no price-decline materialization, and a Cell 7/Cell 9 announcement with customer funding and a re-rating. That is not a base case. It is a hope case, and hope is not a risk process.</p>
+<p>On the aggressive chair’s two-sided invalidation point: I agree that a sustained reclaim of the ¥9,026–¥9,126 zone would end the immediate downtrend and should force a review. But I would not call that a stop-loss, and I would not treat it as an automatic invitation to re-risk to neutral or overweight. At best, a reclaim moves the stance from underweight back toward neutral, because the valuation cushion is still thin, free cash flow is still negative, and the consensus revision risk is still downward. The ¥9,126 level is a review trigger, not insurance. The trader is right to cut now rather than hold with a tight stop, precisely because the gap history has falsified the stop. That is the conservative execution logic.</p>
+<p>The neutral chair will also point to the strong balance sheet. Yes, capital adequacy is 53.5%, net cash is roughly ¥258bn, and the company can fund the near-term build. But net cash of ¥258bn against a market capitalization of roughly ¥4.6tn is only about 5.6% of equity value. It supports the business; it does not protect the stock at a 37x forward multiple. The ¥199.7bn of advances received is customer prepayment, not free equity. It inflates reported operating cash flow and cash balances, and it will unwind as revenue is recognized. If a major customer re-times prepayments, both reported cash flow and the funding plan come under pressure at once. The corpus does not disclose customer concentration, covenants, or the contractual terms on those advances. That is exactly the kind of information gap that should make a conservative analyst reduce exposure, not add it.</p>
+<p>And I want to address the missing sentiment and news reports directly. The aggressive chair says the vacuum cuts against the hold case. I agree. In a violent de-rating with no sentiment report and no news report, there is no crowd narrative to lean on and no news flow to mark a bottom. That is not a reason to be a hero. It is a reason to keep exposure small and require evidence before re-risking. The absence of information is not the same as the absence of bad news.</p>
+<p>So my conclusion is this. I support the trader’s direction on 4062.T: reduce toward underweight, and do not initiate if flat. Apply that to your own book; I do not know your holdings, cost basis, or mandate, so I will not prescribe an exact trim percentage, a specific stop distance, or an exact position change. Directionally, gross exposure should come down, any residual should be sized so that another 15% gap does not force action, and protection should come from lower exposure rather than from a stop level that the price history has already shown cannot be relied on. The ¥9,026–¥9,126 zone is a review trigger, not a stop. A close below ¥7,695 is downside confirmation that should trigger a fresh risk review, not an automatic buy. If 4062.T later builds a base and the fundamental evidence stabilizes, the conservative path is to re-risk gradually with evidence, not to catch the falling knife because the story is still intact. That is how we protect assets and avoid turning a wonderful business into an avoidable drawdown.
+Conservative Analyst: I’ll take both of you head-on, because the label “aggressive” or “neutral” is not the issue. My mandate is capital preservation and steady, reliable growth, and on 4062.T the evidence says the current price does not offer a margin of safety while the near-term distribution of outcomes is wide and gap-prone. I support the trader’s direction to reduce toward underweight and not initiate if flat, but I do not accept the aggressive chair’s “optional residual” framing or the neutral chair’s softer version of the same idea. The conservative adjustment is to make the reduction about risk removal first and leave re-risking as an evidence-gated decision, not a price-driven invitation.</p>
+<p>Aggressive chair, you say selling 4062.T is the aggressive call. I don’t care what we call it. The conservative point is simpler: at 8,045, 4062.T is roughly 37.3x FY3/28 model EPS of 215.4 and 51.2x FY3/27 EPS of 157.2, the model’s own base fair value of 7,539 is below spot, and the bear case is 5,562. You lean on the 38x ceiling of roughly 8,185 as the killer point. I agree it is a useful warning, but I would not rest the whole risk case on one multiple times one EPS estimate. The stronger point is that there is no independent forecast edge in the verified model: FY3/27 matches guidance at plus 0.0% variance and FY3/28 operating profit matches the sole consensus figure at plus 0.0%. Management’s FY3/28 target is 165 billion yen against consensus of 190 billion, so the near-term revision skew is down, not up. That is not a setup where a conservative book should warehouse full neutral exposure and call the residual “optional.”</p>
+<p>Where you are too optimistic is the residual and the re-entry plan. You say the residual is not the problem if it is small, optional, and sized for gap risk. Small is necessary, but it is not sufficient. An optional residual in 4062.T is still exposure to a 10.2% daily ATR, demonstrated single-session gaps of minus 12.8% and minus 15.2%, and a stock below the 10 EMA at 9,026.10, below the 50 SMA at 10,168.07, below the one-month VWMA at 9,125.99, with the MACD histogram widening from minus 88.59 to minus 152.14 and RSI at 37.2, not oversold. There is no base. The August gap zone at 8,285 to 9,577 caps price. The 200 SMA at 7,779.40 is only 0.32 ATR below spot, so it is a test zone, not a floor. If the residual has negative expected asymmetry, “optional” does not make it safe; it makes it a behavioral placeholder for hope.</p>
+<p>Your staged re-entry at 7,071 or 6,490 to 6,825 is the part I reject most strongly for a conservative mandate. You say you accept the correction that a blind buy at 7,695 would be reckless, and then you pre-commit to investigating and staging risk at lower support. That is still an optimistic pre-commitment. The same gap risk that makes 9,126 unreliable as a stop makes a support-level entry unreliable as an entry. A close below 7,695 would break the 200-day line and the November low together; that is a regime change, not a clean capitulation signal. The conservative version of dry powder is optionality with no obligation. It is not a standing plan to buy 4062.T because the structural shortage story is intact. The story can be intact and the equity can still fall another 20% while the market reprices the multiple and the revision path. I would rather buy later, with evidence of a base and stabilizing estimates, than early into a regime break. Missing part of the upside is not a risk failure for this mandate. Buying too early into a falling knife is.</p>
+<p>Neutral chair, you are closer to the right shape, but too soft where it matters. You say the model base of 7,539 is only about 6% below spot and not catastrophic. That understates the problem. The model base is below spot, which means the model’s expected return is negative before we even get to the bear case. The fundamental report’s own sensitivity on a lower FY3/28 operating profit gives roughly 6,600 to 7,200, centred near 7,200, which is materially below 8,045. The bear case of 5,562 is not the base case, but it requires an earnings miss and multiple compression, and those two are correlated: management’s FY3/28 target of 165 billion yen is already below consensus of 190 billion, so the revision direction is down while the stock carries a 37x forward multiple. You say multiples can expand if Q3 beats and Cell 8 qualifies and Cell 7/Cell 9 is announced with customer funding. I agree. But that is an upside scenario, not a risk process. The conservative response to a possible re-rating is to keep a review trigger, not to hold a residual because the bull case is not zero probability.</p>
+<p>You say the conservative chair is too absolute in treating the equity as unholdable at any residual. I am not demanding zero exposure as a universal portfolio instruction, and I do not know the caller’s holdings, cost basis, risk budget or mandate. But I am saying a residual has to be justified by the caller’s mandate and risk budget, not by the story. If the caller is already underweight and the residual is small enough that another 15% gap does not force action, fine. But that residual should not be treated as a free option on the structural shortage. It is still exposed to the same negative revision skew, the same negative normalized free cash flow, and the same information gaps. Your “staged, conditional re-risk” is right in spirit, but it must not become a series of pre-planned buys at support levels. Re-risking 4062.T should require a multi-session base, stabilization in Electronics margin and estimates, and clarity on the advances and capex trajectory. Until then, the conservative action is lower gross exposure, not a small placeholder position.</p>
+<p>Both of you are also too relaxed about the cash-flow and balance-sheet details. H1 operating cash flow of 193.2 billion yen included a 118.8 billion yen increase in customer advances. The 199.7 billion yen of advances received is demand validation, yes, but it is not free equity, it inflates reported operating cash flow and cash balances, it will unwind as revenue is recognized, and its contractual status and customer concentration are undisclosed. Capex is guided to 350 billion yen in FY3/28 against 90 billion yen of depreciation, implying EBITDA-capex of roughly minus 31 billion before tax, interest and dividends. Normalized free cash flow is negative. Net cash of roughly 258 billion yen is only about 5.6% of the roughly 4.6 trillion yen market cap. That supports the business; it does not protect the stock at a 37x forward multiple. The dividend is covered by earnings, cash balances and customer advances, not by free cash flow. The FY3/28 operating-profit bridge also has a roughly minus 6 billion yen plug, and the model’s FY3/28 line is above management’s own target. These are exactly the kinds of information gaps that should make a conservative analyst reduce exposure, not add it or keep a casual residual.</p>
+<p>The missing sentiment and news reports cut the same way. The aggressive chair says the vacuum cuts against the hold case, and I agree. The neutral chair says it lowers confidence and should show up in smaller size. I agree, but I would go further: in a violent de-rating with no sentiment report and no news report, there is no crowd narrative to lean on and no news flow to mark a bottom. The absence of information is not the same as the presence of bad news, but it is a reason not to be a hero. It is also a reason not to pre-commit to buying 7,071 or 6,490 to 6,825 simply because those levels exist. A chart level is not a risk process.</p>
+<p>So my conclusion is this. I support the trader’s direction on 4062.T: reduce toward underweight and do not initiate if flat. The exact size has to be the caller’s decision, scaled to their exposure, cost basis, risk budget and mandate; I will not prescribe a fixed trim percentage, a specific stop distance, or an exact position change. Qualitatively, gross exposure should come down enough that another 15% gap in 4062.T does not force action, and any residual should be small, explicitly justified by the mandate, and not treated as a free option on the structural story. The 9,026 to 9,126 zone is a review trigger that would end the immediate downtrend and move the stance back toward neutral, not a stop-loss and not an automatic invitation to re-risk. A close below 7,695 is downside confirmation that should trigger a fresh risk review, not an automatic buy. Re-risking 4062.T should require evidence of a base, stabilization in Electronics margin and estimates, and clarity on the advances and capex trajectory. That is the low-risk path: protect the assets first, keep the optionality, and do not turn a wonderful business into an avoidable drawdown.
+Conservative Analyst: I’ll take the aggressive chair first, because his framing is seductive and that makes it more dangerous, not less. He says selling 4062.T is the “aggressive call” because it refuses to warehouse a 37.3x FY3/28 multiple, negative normalized free cash flow, and a 10.2% daily ATR. I agree with the diagnosis. I reject the conclusion that this makes the residual “optional” in any meaningful risk sense. An optional residual in 4062.T is still exposure to a stock that closed at 8,045, below the 10 EMA at 9,026.10, below the 50 SMA at 10,168.07, and below the one-month VWMA at 9,125.99, with the MACD histogram widening from minus 88.59 to minus 152.14, RSI at 37.2 and not oversold, and the 10-29 rebound of 19.5% erased in one session. The August gap zone at 8,285 to 9,577 caps price. The 200 SMA at 7,779.40 is only 0.32 ATR below spot, and ATR is 820.40, or 10.2% of price. Recent single-session gaps of minus 12.8% and minus 15.2% have already proved that a 9,126 stop is a review trigger, not insurance. Calling a small position “optional” does not make it safe. It makes it a behavioral placeholder for hope unless the caller’s mandate and risk budget explicitly justify it and it is sized so another 15% gap does not force action. I am not demanding universal zero exposure; I am saying a residual in 4062.T cannot be justified by the story or by a chart level. It has to be justified by the caller’s risk budget, and absent that, lower gross exposure is the safer path.</p>
+<p>The aggressive chair’s staged re-entry plan is where I push back hardest. He says he has corrected “both hands” and now wants to investigate and stage risk at 7,071 or 6,490 to 6,825. That is still a price-only pre-commitment, and it is optimistic. A close below 7,695 would break the 200-day line and the November low together. That is a regime change, not a clean capitulation signal. The same gap risk that makes 9,126 unreliable as a stop makes a support-level entry unreliable as an entry. He says refusing to pre-plan any response to lower prices guarantees buying after the re-rating. That is not an argument for pre-committing to support levels; it is an argument for keeping dry powder and requiring evidence. Missing part of the upside is not a risk failure for a conservative mandate. Buying too early into a falling knife is. And the missing sentiment and news reports cut against his future buy case too. In a violent de-rating with no crowd narrative and no news flow to mark a bottom, there is no sentiment floor underneath 4062.T and no catalyst calendar to stop a gap. That is not a reason to be a hero at 7,071 or at 6,490 to 6,825. It is a reason to keep exposure small and require evidence before re-risking.</p>
+<p>The aggressive chair also leans on the 38x ceiling of roughly 8,185 being only about 1.7% above spot. He is right that this is a warning. But I agree with the neutral chair that it is too precise to carry the whole risk case. The stronger point is not one multiple times one EPS estimate. The stronger point is that there is no independent forecast edge in the verified model for 4062.T. FY3/27 matches guidance at plus 0.0% variance, and FY3/28 operating profit matches the sole consensus figure at plus 0.0%. Management’s FY3/28 operating profit target is 165 billion yen against consensus of 190 billion. The revision skew is down, not up. H1 operating cash flow of 193.2 billion yen included 118.8 billion yen of customer advances. The 199.7 billion yen of advances received has undisclosed contractual status. Capex of 350 billion yen against 90 billion yen of depreciation implies EBITDA-capex of roughly minus 31 billion before tax, interest and dividends. Normalized free cash flow is negative. Net cash of roughly 258 billion yen is only about 5.6% of the roughly 4.6 trillion yen market cap. That supports the business; it does not protect the equity at a 37x forward multiple. The dividend is covered by earnings, cash balances and customer advances, not by free cash flow. The FY3/28 bridge also has a roughly minus 6 billion yen plug. Those are not details to wave away. They are exactly why a conservative book should reduce exposure first and leave re-risking as an evidence-gated decision.</p>
+<p>Now the neutral chair. He says the trader’s plan is already the balanced answer, and I agree with the direction. But he is too soft where it matters. He says the model base of 7,539 is only about 6% below spot, not a catastrophic overvaluation. That understates the problem. A base fair value below spot means the model’s expected return is negative before we even get to the bear case of 5,562. The fundamental report’s own sensitivity on a lower FY3/28 operating profit gives roughly 6,600 to 7,200, centred near 7,200, which is materially below 8,045. So the issue is not whether 4062.T is “catastrophically” overvalued. The issue is whether there is a margin of safety. At 37.3x FY3/28 model EPS of 215.4 and 51.2x FY3/27 EPS of 157.2, with negative normalized free cash flow and downward revision skew, there is not. The neutral chair says a small residual can be justified if the caller’s mandate and risk budget support it and it is sized so another 15% gap does not force action. I accept that in principle, but I would add a hard qualification: that residual must not be treated as a free option on the structural shortage story. It is still exposed to the same negative revision skew, the same negative normalized free cash flow, the same information gaps, and the same gap risk. If the caller’s mandate cannot tolerate that, zero is fine. What I will not accept is calling full neutral exposure defensible because the bull case at 12,360 is not zero probability. The bull case requires Cell 8 on schedule, no materialization of the disclosed price-decline buffer, a Cell 7/Cell 9 announcement with customer funding, and a re-rating. That is a confluence, not a base case. You do not hold full neutral through a 10.2% daily ATR because a 54% bull case exists.</p>
+<p>The neutral chair also says the conservative chair is too absolute in treating any residual as indefensible and demands a base, estimate stabilization and funding clarity all at once. I am not demanding perfect information, and I am not prescribing a universal zero. I am saying re-risking 4062.T should require evidence, not a chart level. The neutral chair’s “staged, conditional re-risk” is right in spirit, but it must not become a series of pre-planned buys at support levels. A chart level is not a risk process. The 9,026 to 9,126 zone is a review trigger that would end the immediate downtrend and move the stance back toward neutral, not a stop-loss and not an automatic invitation to re-risk. A close below 7,695 is downside confirmation that should trigger a fresh risk review, not an automatic buy. That distinction matters. The neutral chair says if strength comes into 9,026 to 9,126, that is a better place to trim. Fine. But if the existing position is too large for the gap risk, reducing now is not chasing weakness. It is refusing to warehouse negative asymmetry. And in 4062.T, spot is already below that zone, below the 10 EMA, below the 50 SMA, below the VWMA, with momentum re-accelerating lower and no base. Waiting for strength that may not come is not a risk process. It is a hope process.</p>
+<p>So my conclusion is unchanged. I support the trader’s direction on 4062.T: reduce toward underweight and do not initiate if flat. I will not prescribe a fixed trim percentage, a specific stop distance or an exact position change, because I do not know the caller’s holdings, cost basis, risk budget or mandate. Qualitatively, gross exposure should come down enough that another 15% gap in 4062.T does not force action, and any residual should be small, explicitly justified by the mandate, and not treated as a free option on the structural story. The 9,026 to 9,126 zone is a review trigger, not insurance. A close below 7,695 is downside confirmation that requires a fresh risk review, not an automatic buy. Re-risking 4062.T should require evidence of a base, stabilization in Electronics margin and estimates, and clarity on the advances and capex trajectory. The aggressive chair is right that 4062.T is worth owning aggressively at a better price, but wrong to turn that into a support-level buying plan before the tape and estimates stabilize. The neutral chair is right that the plan should stay conditional, but wrong to treat a small residual as neutral risk management when the information gaps and negative revision skew are this large. The low-risk path is to protect the assets first, keep the optionality, and not turn a wonderful business into an avoidable drawdown in 4062.T.</p>
+<h3 id="s7-3">Neutral Analyst</h3>
+<p>Neutral Analyst: I’m the Neutral Risk Analyst, and I’ve listened to both chairs. They agree on direction but for different reasons, and both are partly right and partly too clean. The aggressive chair is right that 4062.T offers poor near-term asymmetry at 8,045, but he is too confident that the next leg lower is a gift you can buy with both hands. The conservative chair is right that a 37x forward multiple with negative normalized free cash flow and demonstrated gap risk is not a margin of safety, but he is too close to treating any residual exposure as indefensible. The trader’s plan is actually closer to a balanced answer than either chair admits: reduce toward underweight, keep the footprint small, do not initiate if flat, and use two-sided review triggers. My adjustment is to keep that plan conditional and evidence-based rather than turning it into either a bearish crusade or a defensive lockdown.</p>
+<p>The aggressive chair’s strongest point is that the upside case at 38x is thin. At 8,045, 4062.T is about 37.3x FY3/28 model EPS of 215.4, and the model’s own base fair value of 7,539 is below spot, with a bear case of 5,562. The technical picture is hostile: 4062.T is below the 10 EMA at 9,026, below the 50 SMA at 10,168, below the one-month VWMA at 9,126, MACD histogram has widened to −152.14, RSI is 37.2 and not oversold, and the 200 SMA at 7,779 is only 0.32 ATR below spot. ATR is 820 points, or 10.2% of price, and the recent −12.8% and −15.2% gaps prove that a stop at 9,126 is a review trigger, not insurance. So I agree with the aggressive chair that holding a full neutral position through this is not neutral risk management. It is an unpriced short-volatility position.</p>
+<p>But the aggressive chair overreaches when he says a break of 7,695 is where he wants to buy 4062.T “with both hands.” That is not a moderate strategy; it is a second aggressive trade. The same gap risk that makes 9,126 unreliable as a stop makes a panic break unreliable as an entry. A close below 7,695 would break the 200-day line and the November low together, and that is a regime change, not a clean capitulation signal. The aggressive chair also leans too hard on the 38x ceiling of roughly 8,185. That is a useful warning, but it is too precise. Multiples are not static. If Q3 operating profit beats, Electronics margin holds above 30%, Cell 8 qualifies on schedule, and Cell 7/Cell 9 is announced with customer funding, the multiple can expand. The bull case at 12,360 is not the base case, but it is not zero probability. A neutral view should not pretend the only path is down.</p>
+<p>The conservative chair’s strongest point is that the business can be magnificent and the equity can still be a bad risk at this price. I agree. The FY3/28 model operating profit of 190.0 is above management’s 165.0 target, the sole consensus figure is 190.0, and the verified model has no independent forecast edge: FY3/27 matches guidance at plus 0.0% variance and FY3/28 matches the sole consensus figure at plus 0.0%. The FY3/28 bridge has a roughly −6bn plug, the 199.7bn of advances has undisclosed contractual status, capex of 350bn against 90bn of depreciation implies EBITDA-capex of roughly −31bn before tax, interest and dividends, and normalized free cash flow is negative. Net cash of roughly 258bn is only about 5.6% of the roughly 4.6tn market cap, so it supports the business but does not protect the stock at a 37x forward multiple. The conservative chair is right that the dividend is covered by earnings, cash balances and customer advances, not by free cash flow.</p>
+<p>But the conservative chair is too absolute when he treats the equity as unholdable at any residual. The model base of 7,539 is only about 6% below spot, not a catastrophic overvaluation. The bear case of 5,562 requires both an earnings miss and multiple compression. The business has sold-out capacity, record H1 operating profit of 60.1bn, a 53.5% capital adequacy ratio, and customer advances that are a funding dependency but also demand validation. A zero-or-near-zero stance throws away the two-sided nature of the trader’s plan. The conservative chair says re-entry should require evidence of a base, stabilization in estimates and funding clarity. That is right in spirit, but if taken literally it can become paralysis. By the time all three are obvious, 4062.T may already be higher. The balanced version is staged, conditional re-risk, not an all-or-nothing demand for perfect information.</p>
+<p>The missing sentiment and news reports matter here. The aggressive chair says the vacuum cuts against the hold case. I agree, but it cuts against his heroic buy case too. In a violent de-rating with no crowd narrative and no news flow to mark a bottom, there is no sentiment floor and no catalyst calendar to lean on. That is a reason to keep exposure small and require evidence, not a reason to be maximally bearish or to plan a dramatic catch of the falling knife. The absence of information is not the same as the presence of bad news, but it does lower confidence, and lower confidence should show up in smaller size and more conditional triggers.</p>
+<p>So my neutral adjustment to the trader’s decision is this. For 4062.T, I would keep the direction: reduce toward underweight, and do not initiate if flat. But I would not turn that into a maximum underweight or a zero-exposure call. If the caller is already underweight, there is no need to chase the 8,045 print; if strength comes into the 9,026–9,126 zone, that is a better place to trim, but if the existing position is too large for the gap risk, reducing now is still defensible. If the caller is at full neutral, reduce enough that another 15% gap does not force action. Keep any residual small and optional. The trader’s own small tactical footprint is the right shape, but the exact size has to depend on the caller’s exposure, cost basis and risk budget, not on a universal instruction.</p>
+<p>I would treat 9,026–9,126 as a review trigger that ends the immediate downtrend and moves the stance back toward neutral, not as a stop-loss. I would treat 7,695 as downside confirmation that requires a fresh risk review, not as an automatic buy. Re-risking 4062.T should require a multi-session base, stabilization in Electronics margin and estimates, and clarity on the advances and capex trajectory. That is the moderate path: it respects the aggressive chair’s warning that the near-term asymmetry is poor, and the conservative chair’s warning that capital preservation comes first, without pretending we know the next 15% move. The trader’s direction is sound; the execution should stay conditional, small and two-sided.
+Neutral Analyst: I’m the Neutral Risk Analyst, and I’ve heard both chairs. They agree on direction, but both are trying to turn a risk-reduction instruction into a stronger claim than the evidence supports. The trader’s plan for 4062.T is already the balanced answer: reduce toward underweight, do not initiate if flat, keep the tactical footprint small, and treat 9,026–9,126 as a review trigger rather than a stop and 7,695 as downside confirmation rather than an automatic buy. My adjustment is to keep that plan conditional and evidence-based, not to make it a bearish crusade or a defensive lockdown.</p>
+<p>Aggressive chair, your strongest point is right: at 8,045, 4062.T is about 37.3x FY3/28 EPS of 215.4, the model base is 7,539, the bear case is 5,562, and the 38x case only gets you roughly 8,185. Holding full neutral exposure through a 10.2% daily ATR and demonstrated minus 15.2% and minus 12.8% gaps is not neutral risk management. But you are too optimistic when you say the next leg lower is where you want to stage risk. You corrected “both hands” to staged support buys at 7,071 or 6,490–6,825, but that is still a price-only pre-commitment. A close below 7,695 breaks the 200-day line and the November low together; that is a regime change, not a clean capitulation signal. The same gap risk that makes 9,126 unreliable as a stop makes a support-level entry unreliable as an entry. And your 38x ceiling is too precise. If Q3 operating profit beats 36.5 billion yen, Electronics margin holds above 30%, Cell 8 qualifies on schedule, and Cell 7/Cell 9 is announced with customer funding, the multiple can expand. The bull case at 12,360 is not the base case, but it is not zero. So I agree with your direction, not your confidence.</p>
+<p>Conservative chair, your strongest point is also right: 4062.T is not a margin-of-safety trade at 8,045. The verified model has no independent forecast edge, FY3/27 matches guidance at plus 0.0% variance, and FY3/28 operating profit matches the sole consensus figure at 190 billion yen while management targets 165 billion. The revision skew is down, not up. H1 operating cash flow of 193.2 billion yen included 118.8 billion of customer advances, capex of 350 billion against 90 billion of depreciation implies EBITDA-capex around minus 31 billion before tax, interest and dividends, normalized free cash flow is negative, and net cash of roughly 258 billion yen is only about 5.6% of the roughly 4.6 trillion yen market cap. That supports the business; it does not protect the stock at a 37x forward multiple. But you are too cautious when you treat any residual as indefensible and demand a base, estimate stabilization, and funding clarity all at once. The model base is only about 6% below spot, not a catastrophic overvaluation, and the business has sold-out capacity, record H1 operating profit of 60.1 billion yen, a 53.5% capital adequacy ratio, and customer advances that are both a funding dependency and demand validation. A small residual can be justified if the caller’s mandate and risk budget support it and it is sized so another 15% gap does not force action. Your evidence-gated re-entry is right in spirit, but if it becomes a demand for perfect information, it turns into buying after the re-rating. The balanced version is staged, conditional re-risk, not zero exposure and not a standing buy order at support.</p>
+<p>So my neutral adjustment to the trader’s decision on 4062.T is this. Keep the direction: reduce toward underweight and do not initiate if flat. If the caller is at full neutral, reduce enough that another 15% gap does not force action. If the caller is already underweight, do not chase the 8,045 print; if strength comes into 9,026–9,126, that is a better place to trim, but if the existing position is too large for the gap risk, reducing now is still defensible. Keep any residual small and optional, and only if the mandate allows it. Do not treat the residual as a free option on the structural shortage story; it is still exposed to the same negative revision skew, negative normalized free cash flow, and information gaps.</p>
+<p>Treat 9,026–9,126 as a review trigger that ends the immediate downtrend and moves the stance back toward neutral, not as a stop-loss. Treat 7,695 as downside confirmation that requires a fresh risk review, not an automatic buy. Re-risking 4062.T should require a multi-session base, stabilization in Electronics margin and estimates, and clarity on the advances and capex trajectory. Q3 FY3/27 in late January and the Cell 7/Cell 9 decision plus possible medium-term-plan revision by end-FY3/27 are real catalysts, but they are reasons to be prepared, not reasons to pre-commit. The missing sentiment and news reports lower confidence; that should show up in smaller size and more conditional triggers, not in maximal bearishness or a heroic catch of the falling knife.</p>
+<p>The aggressive chair is right that 4062.T is worth owning aggressively at a better price, but wrong to turn that into a support-level buying plan before the tape and estimates stabilize. The conservative chair is right that capital preservation comes first, but wrong to treat a small, mandate-justified residual as indefensible. The trader’s plan is the moderate path: reduce the overvaluation and gap risk now, keep the footprint small, keep the review triggers two-sided, and preserve dry powder for evidence, not for a chart level. That is how a balanced strategy gets the best of both worlds for 4062.T: it protects against extreme volatility without throwing away the growth potential if the structural story reasserts itself.
+Neutral Analyst: I’m the Neutral Risk Analyst, and I want to start by saying the trader’s 4062.T plan is already closer to the right answer than either chair is willing to admit. The aggressive chair is right that holding full neutral exposure at 8,045 is not neutral risk management. The conservative chair is right that 4062.T is not a margin-of-safety trade at 37.3x FY3/28 model EPS of 215.4 with negative normalized free cash flow and demonstrated gap risk. But both are trying to turn a reduce-to-underweight instruction into a stronger claim than the evidence supports. My adjustment is to keep the direction, keep it conditional, keep the residual small and mandate-justified, and keep the review triggers two-sided rather than turning 4062.T into either a bearish crusade or a defensive lockdown.</p>
+<p>Aggressive chair, your strongest point is the asymmetry. At 8,045, 4062.T is about 37.3x FY3/28 model EPS of 215.4, the model base is 7,539, the bear case is 5,562, and the 38x case only gets you roughly 8,185. Full neutral exposure through a 10.2% daily ATR, with recent single-session gaps of minus 12.8% and minus 15.2%, is an unpriced short-volatility position. I agree. But you are too confident that the next leg lower is where you want to stage risk. You corrected “both hands” to staged support buys at 7,071 or 6,490 to 6,825, but that is still a price-only pre-commitment. A close below 7,695 would break the 200-day line at 7,779.40 and the November low together; that is a regime change, not a clean capitulation signal. The same gap risk that makes 9,126 unreliable as a stop makes a support-level entry unreliable as an entry. Your 38x ceiling is also too precise. If Q3 operating profit beats 36.5 billion yen, Electronics margin holds above 30%, Cell 8 qualifies on schedule, and Cell 7/Cell 9 is announced with customer funding, the multiple can expand. The bull case at 12,360 is not the base case, but it is not zero. So I agree with your direction, not your confidence. A small, mandate-permitted residual in 4062.T is not automatically a “behavioral placeholder for hope” if it is sized so another 15% gap does not force action, but it is also not a free option on the structural shortage story. It is still exposed to the same negative revision skew, negative normalized free cash flow, and information gaps.</p>
+<p>Conservative chair, your strongest point is that 4062.T is not a margin-of-safety trade at 8,045. The verified model has no independent forecast edge: FY3/27 matches guidance at plus 0.0% variance, and FY3/28 operating profit matches the sole consensus figure at 190 billion yen while management targets 165 billion. The revision skew is down, not up. H1 operating cash flow of 193.2 billion yen included 118.8 billion yen of customer advances, the 199.7 billion yen of advances has undisclosed contractual status, capex of 350 billion yen against 90 billion yen of depreciation implies EBITDA-capex around minus 31 billion before tax, interest and dividends, normalized free cash flow is negative, and net cash of roughly 258 billion yen is only about 5.6% of the roughly 4.6 trillion yen market cap. That supports the business; it does not protect the stock at a 37x forward multiple. But you are too absolute when you treat any residual as indefensible and demand a base, estimate stabilization, and funding clarity all at once. The model base is only about 6% below spot, not a catastrophic overvaluation, and the business has sold-out capacity, record H1 operating profit of 60.1 billion yen, a 53.5% capital adequacy ratio, and customer advances that are both a funding dependency and demand validation. A small residual can be justified if the caller’s mandate and risk budget support it and it is sized so another 15% gap does not force action. Your evidence-gated re-entry is right in spirit, but if it becomes a demand for perfect information, it turns into buying after the re-rating. The balanced version is staged, conditional re-risk, not zero exposure and not a standing buy order at support.</p>
+<p>So my neutral adjustment to the trader’s decision on 4062.T is this. Keep the direction: reduce toward underweight and do not initiate if flat. If the caller is at full neutral, reduce enough that another 15% gap does not force action. If the caller is already underweight, do not chase the 8,045 print; if strength comes into 9,026 to 9,126, that is a better place to trim, but if the existing position is too large for the gap risk, reducing now is still defensible. Keep any residual small and optional, and only if the mandate allows it. Do not treat the residual as a free option on the structural shortage story; it is still exposed to the same negative revision skew, negative normalized free cash flow, and information gaps.</p>
+<p>Treat 9,026 to 9,126 as a review trigger that ends the immediate downtrend and moves the stance back toward neutral, not as a stop-loss. Treat 7,695 as downside confirmation that requires a fresh risk review, not an automatic buy. Re-risking 4062.T should require a multi-session base, stabilization in Electronics margin and estimates, and clarity on the advances and capex trajectory. Q3 FY3/27 in late January and the Cell 7/Cell 9 decision plus possible medium-term-plan revision by end-FY3/27 are real catalysts, but they are reasons to be prepared, not reasons to pre-commit. The missing sentiment and news reports lower confidence; that should show up in smaller size and more conditional triggers, not in maximal bearishness or a heroic catch of the falling knife.</p>
+<p>The aggressive chair is right that 4062.T is worth owning aggressively at a better price, but wrong to turn that into a support-level buying plan before the tape and estimates stabilize. The conservative chair is right that capital preservation comes first, but wrong to treat a small, mandate-justified residual as indefensible. The trader’s plan is the moderate path: reduce the overvaluation and gap risk now, keep the footprint small, keep the review triggers two-sided, and preserve dry powder for evidence, not for a chart level. That is how a balanced strategy gets the best of both worlds for 4062.T: it protects against extreme volatility without throwing away the growth potential if the structural story reasserts itself.</p>
+</section><section id="s8"><h2>V. Portfolio Manager Decision</h2><h3 id="s8-1">Portfolio Manager</h3>
+<p><strong>Rating</strong>: Underweight</p>
+<p><strong>Executive Summary</strong>: Reduce 4062.T to an underweight stance (roughly half a neutral single-name footprint) and do not initiate at ¥8,045; use any strength into the ¥9,026–9,126 zone (10 EMA / one-month VWMA) to trim further rather than to chase. Hold a hard review at a close below ¥7,695, which would break the 200-day SMA at ¥7,779 and the November low together and open ¥7,072 then ¥6,490–6,825. Time horizon 3–6 months; the decisive resolution event is Q3 FY3/27 results in late January 2027, with the Cell 7/Cell 9 decision by March 2027 as the re-rating optionality.</p>
+<p><strong>Investment Thesis</strong>: <strong>The price already pays for the good news, and the forecast carries no edge.</strong> The business case is genuinely strong — record H1 FY3/27 operating profit of ¥60.1bn, Electronics segment margin of 29.0%, effectively sold-out qualified high-end IC-substrate capacity, and management's own SAP demand index of 100→350 from CY26 to CY30 — but none of that is a variant perception. The verified model is guidance by construction in FY3/27 (revenue ¥565.0, OP ¥133.0, net ¥89.0, all +0.0% versus guidance) and consensus by construction in FY3/28 (OP ¥190.0 = the only consensus figure in the corpus, +0.0%). At ¥8,045 the stock is ~37.3x FY3/28 model EPS ¥215.4 and 51.2x FY3/27 EPS ¥157.2, above the model's own base fair value of ¥7,539, with a bear case of ¥5,562.</p>
+<p><strong>The revision skew is down, not up, and the model's above-guidance FY3/28 is not evidenced.</strong> Management's FY3/28 plan is ¥650bn revenue / ¥165bn OP; the model prints ¥665.0 / ¥190.0 — +2.3% revenue and +15.2% OP against the company's own plan — by reversing a ~¥10bn price-decline buffer that is a GS estimate in a broker note rather than company disclosure, plus an unevidenced ¥10bn Cell 8 contribution (65% incremental margin on revenue management has never quantified). The FY3/28 OP bridge drivers sum to ~¥196bn against a ¥190.0 line closed by a ~−¥6bn plug, so the bridge decomposes the number rather than validating it. On my FY3/28 OP of ¥175–185bn and ~570.6m shares (post-CB), FY3/28 EPS is ¥200–210; at 33–37x that is roughly ¥6,600–7,800.</p>
+<p><strong>Capital intensity and cash quality cap the multiple.</strong> H1 operating cash flow of ¥193.2bn included a ¥118.8bn increase in customer advances; against FY3/28 capex guided at ¥350bn and depreciation of ¥90bn, 48% EBITDA margin on ¥665bn revenue gives EBITDA less capex of roughly −¥31bn before tax, interest and the ¥20 DPS. Net cash of ~¥258bn is only ~5.6% of market cap and covers one year of that arithmetic, not a &gt;¥400bn run-rate. Fully diluted EPS is lower still (~¥206 on 592m shares vs the ¥215.4 used). With ATR at 10.2% of price and single-session gaps of −12.8% and −15.2% in five weeks, price volatility is an uncompensated risk, not a buying opportunity to pre-commit to.</p>
+<p><strong>Price Target</strong>: 7300.0</p>
+<p><strong>Time Horizon</strong>: not provided</p>
+</section>
+</main>
+<footer class="credit"><a href="https://github.com/TauricResearch/TradingAgents" rel="noopener">TradingAgents</a> powered by <a class="brand" href="https://github.com/TauricResearch" rel="noopener">Tauric Research</a></footer>
+</div>
+<a class="to-top" href="#top">Top</a>
+</body>
+</html>

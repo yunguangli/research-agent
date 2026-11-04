@@ -6,7 +6,7 @@ forbids any fetch. Report text is rendered as CommonMark with raw HTML and image
 off, so nothing a model wrote can inject markup or load a remote asset.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 from importlib.resources import files
 
@@ -223,7 +223,7 @@ def _group(name: str, values_html: str) -> str:
 
 def _run_details(final_state: dict, settings: dict | None) -> list[tuple[str, str]]:
     """The run details as (label, value HTML); every value from the run is escaped."""
-    details = [("Generated", escape(datetime.now().strftime("%Y-%m-%d %H:%M")))]
+    details = [("Generated", escape(datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")))]
     if settings:
         s = settings.get
         for tier in ("deep", "quick"):
@@ -240,16 +240,38 @@ def _run_details(final_state: dict, settings: dict | None) -> list[tuple[str, st
                 _group(_CATEGORY.get(k, k), _chain(v)) for k, v in vendors.items()
             )))
         details.append(("Version", escape(f"TradingAgents {s('version', '?')}")))
+        if s("run_purpose") not in (None, "production"):
+            details.append(("Authority", escape(
+                f"diagnostic (run purpose: {s('run_purpose')}); not a production decision"
+            )))
     if final_state.get("memory_note"):
         details.append(("Memory log", escape(final_state["memory_note"])))
+    # The Markdown header carries these; without them the page can show a plain
+    # rating for a decision the Markdown calls provisional.
+    integrity = str(final_state.get("decision_integrity") or "").strip()
+    if integrity:
+        details.append(("Decision integrity", escape(integrity)))
+    fallbacks = final_state.get("structured_fallbacks") or {}
+    if fallbacks:
+        details.append(("Structured output", escape("; ".join(
+            f"{agent}: {str(reason)[:120]}" for agent, reason in fallbacks.items()
+        ))))
     return details
 
 
 def render_report(ticker: str, final_state: dict, settings: dict | None, parts) -> str:
     """The report page: title and rating, what produced the run, contents, sections."""
     md = _markdown()
-    rating = run_rating(final_state) if final_state.get("final_trade_decision") else ""
-    tone = _TONE.get(rating, "review")
+    base_rating = run_rating(final_state) if final_state.get("final_trade_decision") else ""
+    if base_rating and str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
+        rating = "Not Rated (provisional)"
+        tone = "review"
+    else:
+        tone = _TONE.get(base_rating, "review")
+        rating = base_rating
+        if base_rating and str(final_state.get("decision_integrity") or "").startswith("DEGRADED"):
+            # Same qualifier as the Markdown header: degraded inputs, same direction.
+            rating = f"{base_rating} (provisional)"
     date = final_state.get("trade_date", "")
 
     title = f'<span class="ticker">{escape(ticker)}</span>'

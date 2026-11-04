@@ -111,7 +111,8 @@ class GraphSetup:
         self.max_tool_rounds = max_tool_rounds
 
     def setup_graph(
-        self, selected_analysts=("market", "social", "news", "fundamentals"), memory_node=None
+        self, selected_analysts=("market", "social", "news", "fundamentals"), memory_node=None,
+        repair_hook=None,
     ):
         """Set up and compile the agent workflow graph.
 
@@ -141,6 +142,18 @@ class GraphSetup:
         }
 
         adversarial_reviewer_node = create_adversarial_reviewer(self.quick_thinking_llm)
+        if repair_hook is not None:
+            # The repair gate runs at the reviewer's entry, so the graph keeps its
+            # nodes and edges: the reviewer sees the repaired package, and the
+            # repair's state updates are returned alongside the review.
+            reviewer_node = adversarial_reviewer_node
+
+            def reviewer_with_repair(state):
+                updates = repair_hook(state) or {}
+                result = reviewer_node({**state, **updates}) or {}
+                return {**updates, **result}
+
+            adversarial_reviewer_node = reviewer_with_repair
         research_manager_node = create_research_manager(self.deep_thinking_llm)
         trader_node = create_trader(self.quick_thinking_llm)
 

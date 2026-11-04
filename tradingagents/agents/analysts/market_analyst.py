@@ -250,6 +250,11 @@ OUTPUT
 
 Write a concise, decision-focused report, normally 400-700 words.
 
+Without an execution mandate, do not recommend buying a specific support retest, an exact
+entry, a stop or a position size. Classify trend, stabilization, support and resistance as
+zones, and say what a close or a failure would change. A retest that "holds" is not an
+instruction.
+
 Use these sections:
 
 1. Technical conclusion

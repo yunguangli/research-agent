@@ -61,9 +61,102 @@ def test_a_marked_negative_figure_matches_its_negative_value():
     assert audit.audit_text("| FX headwind | [[−5]] |", "F", values) == []
 
 
-def test_a_marked_percentage_is_ignored():
+def test_a_percentage_above_the_price_is_recomputed():
+    """The 4062.T market report published this sentence; it is wrong by 5.5pp."""
+    text = ("The 50-day SMA 10,168.07 (falling from 10,409.45 on 20 Oct) sits "
+            "20.9% above price.")
+    findings = audit.percentage_findings(text, "Market Analyst", 8045.0)
+    assert [finding.number for finding in findings] == [20.9]
+
+
+def test_a_correct_percentage_passes():
+    text = "The 10-EMA 9,026.10 is 12.2% above price."
+    assert audit.percentage_findings(text, "Market Analyst", 8045.0) == []
+
+
+def test_a_percentage_against_a_level_is_not_a_price_claim():
+    text = "Price sits 3.4% above the 200-day SMA."
+    assert audit.percentage_findings(text, "Market Analyst", 8045.0) == []
+
+
+def test_a_repair_that_fixes_the_percentage_is_accepted():
+    model = kernel.run(spec())
+    wrong = "The 50-day SMA 25.28 sits 20.9% above price."
+    state = {"market_report": wrong}
+    findings = audit.percentage_findings(wrong, "Market Analyst", model.spec.valuation.price)
+    assert findings
+    # No model call is needed: the percentage is arithmetic on two printed numbers.
+    assert audit.repair_relations(state, findings, lambda prompt: wrong, model=model) == [
+        "Market Analyst"
+    ]
+    assert state["market_report"] == "The 50-day SMA 25.28 sits 26.4% above price."
+
+
+def test_a_percentage_on_the_wrong_side_of_the_price_is_flipped():
+    text = "The 50-day SMA 25.28 sits 20.9% above price."
+    fixed, count = audit.fix_percentage_claims(text, 20.0)
+    assert count == 1
+    assert "26.4% above" in fixed
+
+
+def test_a_percentage_for_a_level_below_the_price_reads_below():
+    text = "The 200-day SMA 15.00 sits 20.0% above price."
+    fixed, count = audit.fix_percentage_claims(text, 20.0)
+    assert count == 1
+    assert "25.0% below" in fixed
+
+
+def test_a_plus_signed_bridge_delta_is_checked():
+    """`[[+16]]` is a model figure; the audit used to skip it as a label."""
     _model, _valuation, values = known()
-    assert audit.audit_text("Margin rose [[10.3%]].", "F", values) == []
+    assert audit.audit_text("add +[[1.0]] to revenue", "F", values) == []
+    findings = audit.audit_text("add +[[42.0]] to revenue", "F", values)
+    assert [finding.number for finding in findings] == [42.0]
+
+
+def test_a_period_label_across_a_comma_does_not_claim_the_figure():
+    """The 4062.T PM sentence paired net profit ~118 with FY3/29's 150.7 via a capex clause."""
+    model = kernel.run(spec())
+    sentence = (
+        "At 20 the stock is 35.9x FY26 EPS 1.0, with net profit ~0.8, capex above JPY5bn "
+        "in FY24."
+    )
+    findings = audit.relational_findings(
+        sentence, "S", audit._period_table(model), model.spec.unit
+    )
+    assert findings == []
+
+
+def test_the_relation_table_shows_both_operands_and_the_truth():
+    finding = audit.Finding(
+        "Portfolio Manager", 118.0, "net profit ~118 versus FY3/29", kind="relation",
+        subject=118.0, object=150.7, expected="118 is below 150.7",
+    )
+    text = audit.render([finding])
+    assert "118 vs 150.7" in text
+    assert "118 is below 150.7" in text
+
+
+def test_the_percentage_table_shows_the_level_the_price_and_the_recomputed_value():
+    finding = audit.Finding(
+        "Market Analyst", 20.9, "the SMA sits 20.9% above price", kind="percentage",
+        subject=10168.07, object=8045.0, expected="+26.4%",
+    )
+    text = audit.render([finding])
+    assert "10,168 vs 8,045" in text
+    assert "+26.4%" in text
+
+
+def test_a_marked_percentage_is_checked_like_any_other_figure():
+    """A margin the model produced passes; a different one is a finding.
+
+    The old check skipped any mark on a line that already showed the same digits
+    with a percent sign, which could hide a misquote. The mark is now the unit.
+    """
+    _model, _valuation, values = known()
+    assert audit.audit_text("Margin rose to [[12.5%]].", "F", values) == []
+    findings = audit.audit_text("Margin rose to [[10.3%]].", "F", values)
+    assert [finding.number for finding in findings] == [10.3]
 
 
 def test_a_marked_price_inside_the_fair_value_band_is_a_choice():
@@ -102,7 +195,8 @@ def test_guidance_values_are_known_even_when_the_forecast_overrides_them():
     )
     model_spec.periods[1].basis = "forecast"
     model_spec.scenarios[0].multiple = 10.0    # FY25 anchors the fair value (EPS 0.9):
-                                               # keep the Base target inside its band
+    model_spec.scenarios[0].eps = 0.9          # keep the Base target inside its band
+    model_spec.scenarios[0].period = "FY25"
     model = kernel.run(model_spec)
     values = audit.known_values(model, value(model), [])
     assert 120.0 in values                        # guidance, not in any row
@@ -151,7 +245,7 @@ def test_a_state_audit_checks_the_four_written_sections():
 
 def test_render_says_so_when_everything_matches():
     text = audit.render([], stats={"marked": 3, "sections": {"Fundamentals Analyst": 3}})
-    assert "All 3 figure(s)" in text
+    assert "All 3 checked figure(s)" in text
     assert "Fundamentals Analyst 3" in text
 
 
@@ -200,7 +294,7 @@ def test_a_two_digit_mark_is_still_checked():
 
 def test_the_audit_says_what_it_did_not_check():
     text = audit.render([], stats={"marked": 4, "references": 3, "sections": {"F": 4}})
-    assert "All 1 figure(s)" in text
+    assert "All 1 checked figure(s)" in text
     assert "reference numbers" in text
 
 
@@ -473,6 +567,17 @@ def test_a_repair_that_still_contradicts_the_figures_is_rejected():
     assert state["fundamentals_report"] == C_CLAIM
 
 
+def test_a_participle_opens_a_new_clause_so_the_figure_is_not_its_subject():
+    """'Capex of 350bn ... rising above 400bn thereafter' compares no two figures.
+
+    The 4062.T report published this sentence; the checker paired 350 with 400
+    and would have rewritten a correct claim.
+    """
+    claim = ("Capex of ¥350bn in FY3/28 rising above ¥400bn thereafter, against "
+             "substantially negative normalised FCF.")
+    assert _relations(claim) == []
+
+
 def test_a_failed_or_stub_repair_leaves_the_text_alone():
     model = kernel.run(spec())
     state = {"fundamentals_report": C_CLAIM}
@@ -486,3 +591,63 @@ def test_a_failed_or_stub_repair_leaves_the_text_alone():
     assert audit.repair_relations(state, findings, boom, model=model) == []
     assert audit.repair_relations(state, findings, lambda prompt: "Report.", model=model) == []
     assert state["fundamentals_report"] == C_CLAIM
+
+
+# --- what "checked" means ----------------------------------------------------
+
+
+def test_a_wrong_margin_is_checked_even_beside_another_percentage():
+    """The line used to be the unit, so a percentage elsewhere shielded the mark.
+
+    The model's FY25 operating margin is 12.5; the marked 42.0 must fail even
+    though the same table row prints 12.5% next to it.
+    """
+    _model, _valuation, values = known()
+    text = "| Operating margin | 12.5% | [[42.0]]% |"
+    findings = audit.audit_text(text, "F", values)
+    assert [finding.number for finding in findings] == [42.0]
+
+
+def test_a_label_mark_is_skipped_not_checked():
+    _model, _valuation, values = known()
+    stats: dict = {}
+    audit.audit_text("Source [[doc-5803.T-x]] and EPS [[1.0]].", "F", values, stats=stats)
+    assert stats["marked"] == 2
+    assert stats["checked"] == 1
+    assert stats["skipped"] == 1
+
+
+def test_the_rendered_audit_separates_skipped_from_checked():
+    text = audit.render(
+        [], stats={"marked": 5, "references": 1, "skipped": 2, "sections": {"F": 2}}
+    )
+    assert "Independently checked: 2" in text
+    assert "Skipped: 2" in text
+    assert "Reference-only: 1" in text
+    assert "Failed: 0" in text
+
+
+def test_a_numerical_review_sentence_without_a_tag_is_a_warning():
+    review = (
+        "## Strongest Bear Case\n"
+        "Electronics operating profit grew 97% and the backlog is 350 index points. "
+        "[fundamental] Revenue grew 34.3% in H1."
+    )
+    findings = audit.grounding_findings(review)
+    assert len(findings) == 1
+    assert findings[0].kind == "grounding"
+    assert "97%" in findings[0].context
+
+
+def test_a_marked_figure_needs_no_evidence_tag():
+    review = "## Strongest Bull Case\nOperating profit is [[185.0]], a real improvement."
+    assert audit.grounding_findings(review) == []
+
+
+def test_a_grounding_warning_is_rendered_but_not_counted_as_a_failed_figure():
+    text = audit.render(
+        [audit.Finding("Adversarial Reviewer", 97.0, "grew 97%", kind="grounding")],
+        stats={"marked": 3, "references": 0, "skipped": 0, "sections": {"F": 3}},
+    )
+    assert "no evidence-class tag" in text
+    assert "Failed: 0" in text

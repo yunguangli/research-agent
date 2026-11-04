@@ -20,8 +20,11 @@ from .kernel import ModelResult
 from .schemas import ModelError
 from .valuation import Valuation
 
-CAP_FORECAST_PCT = 5.0     # revenue or operating profit, relative to the base
-CAP_MULTIPLE_PCT = 20.0    # the P/E a case is allowed to argue for
+# A case may argue a wide move when the evidence supports it; the ceiling is a
+# guard against arithmetic drift, not a target. The reviewer's prompt uses the
+# same numbers, and a case beyond a cap is still rejected.
+CAP_FORECAST_PCT = 25.0  # revenue or operating profit, relative to the base
+CAP_MULTIPLE_PCT = 20.0  # the P/E a case is allowed to argue for
 STANCES = ("aggressive", "neutral", "bearish")
 
 
@@ -289,7 +292,7 @@ def render_proposals(cases: list[dict]) -> str:
     if not cases:
         return ""
     lines = [
-        "| Case | Probability | Revenue Δ | Operating profit Δ | Multiple | Momentum | Sentiment |",
+        "| Case | Confidence | Revenue Δ | Operating profit Δ | Multiple | Momentum | Sentiment |",
         "|---|---|---|---|---|---|---|",
     ]
     for raw in cases:
@@ -320,14 +323,14 @@ def render_results(model: ModelResult, valuation: Valuation, cases: list[dict]) 
     currency = model.spec.currency
 
     lines = [
-        "| Case | Probability | Revenue | Operating profit | EPS | Multiple | Target | Notes |",
+        "| Case | Weight (agent confidence) | Revenue | Operating profit | EPS | Multiple | Target | Notes |",
         "|---|---|---|---|---|---|---|---|",
         f"| base (fair-value mid) | {base_probability:.0%} | {row.revenue:,.1f} | {row.operating_profit:,.1f} | "
         f"{row.eps.get(valuation.basis, 0):,.1f} | {base_multiple(valuation):,.1f}x | "
         f"{base_multiple(valuation) * row.eps.get(valuation.basis, 0):,.0f} {currency} | — |",
     ]
     for result in results:
-        notes = "; ".join(result.notes)[:60] or "—"
+        notes = "; ".join(result.notes).replace("|", "\\|") or "—"
         lines.append(
             f"| {result.stance} | {result.probability:.0%} | {result.revenue:,.1f} | "
             f"{result.operating_profit:,.1f} | {result.eps:,.1f} | {result.multiple:,.1f}x | "
@@ -338,6 +341,7 @@ def render_results(model: ModelResult, valuation: Valuation, cases: list[dict]) 
         "Base here is the model's fair-value midpoint (midpoint EPS x the multiple that "
         "reproduces it); each case is that row moved by its capped deltas. The research "
         "package's Base *scenario* target is a separate model line, so the two can differ; "
-        "compare cases against this row, and scenarios against that one."
+        "compare cases against this row, and scenarios against that one. Weights are agent "
+        "confidence, not calibrated probabilities: no expected value is computed from them."
     )
     return "\n".join(lines)

@@ -5,7 +5,14 @@ import re
 from pathlib import Path
 
 from tradingagents.agents.rating import parse_rating
-from tradingagents.dataflows.files import locked
+from tradingagents.dataflows.files import locked, replace_file
+
+
+def _decision_text(block: str) -> str:
+    """The decision text of one log block, or "" when it has none."""
+    if "DECISION:\n" not in block:
+        return ""
+    return block.split("DECISION:\n", 1)[1].split("REFLECTION:", 1)[0].strip()
 
 
 class TradingMemoryLog:
@@ -40,24 +47,39 @@ class TradingMemoryLog:
 
         ``rating`` is the decision's own rating when the caller has it; without
         one it is read from the decision text.
+
+        An entry already recorded for this ticker and date blocks another: a
+        re-run after the outcome landed would otherwise count the same decision
+        twice in past context and in every aggregate over the log. An entry with
+        no decision text is not "recorded" — a blank placeholder left by an
+        interrupted run used to suppress the real decision forever, so it is
+        replaced instead of honoured.
         """
         if not self._log_path:
             return
+        if not (final_trade_decision or "").strip():
+            return
         with locked(self._log_path):
-            # Idempotency guard: fast raw-text scan instead of full parse. Any entry
-            # for this ticker and date blocks another, pending or settled: a re-run
-            # after the outcome landed would otherwise count the same decision twice
-            # in past context and in every aggregate over the log.
-            if self._log_path.exists():
-                raw = self._log_path.read_text(encoding="utf-8")
-                for line in raw.splitlines():
-                    if line.startswith(f"[{trade_date} | {ticker} |") and line.endswith("]"):
-                        return
+            raw = self._log_path.read_text(encoding="utf-8") if self._log_path.exists() else ""
+            blocks = [block for block in raw.split(self._SEPARATOR) if block.strip()]
+            kept: list[str] = []
+            prefix = f"[{trade_date} | {ticker} |"
+            for block in blocks:
+                first = block.strip().splitlines()[0] if block.strip() else ""
+                if not (first.startswith(prefix) and first.endswith("]")):
+                    kept.append(block)
+                    continue
+                if _decision_text(block):
+                    return       # this run was already recorded
+                # A placeholder with nothing to reflect on does not block a real entry.
             rating = rating or parse_rating(final_trade_decision)
             tag = f"[{trade_date} | {ticker} | {rating} | pending]"
-            entry = f"{tag}\n\nDECISION:\n{final_trade_decision}{self._SEPARATOR}"
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(entry)
+            kept.append(f"{tag}\n\nDECISION:\n{final_trade_decision}")
+            text = self._SEPARATOR.join(kept) + self._SEPARATOR
+            replace_file(
+                self._log_path,
+                lambda temp: Path(temp).write_text(text, encoding="utf-8"),
+            )
 
     def settling(self, wait: bool = True):
         """Hold the log for one settlement pass at a time, across threads and processes.
@@ -87,8 +109,17 @@ class TradingMemoryLog:
         return entries
 
     def get_pending_entries(self) -> list[dict]:
-        """Return entries with outcome:pending, for settlement."""
-        return [e for e in self.load_entries() if e.get("pending")]
+        """Return pending entries with a decision to settle.
+
+        An entry with no decision text is a placeholder from an interrupted
+        write, not a decision: settling it would ask the model to reflect on
+        nothing and record the result as a lesson.
+        """
+        return [
+            entry
+            for entry in self.load_entries()
+            if entry.get("pending") and (entry.get("decision") or "").strip()
+        ]
 
     def get_past_context(
         self, ticker: str, n_same: int = 5, n_cross: int = 3, as_of: str | None = None

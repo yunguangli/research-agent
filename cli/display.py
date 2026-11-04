@@ -58,6 +58,7 @@ class MessageBuffer:
         self.tool_calls = deque(maxlen=max_length)
         self.current_report = None
         self.agent_status = {}
+        self.agent_started_at = {}
         self.report_sections = {}
         self.selected_analysts = []
         self._processed_message_ids = set()
@@ -71,6 +72,7 @@ class MessageBuffer:
         self.selected_analysts = [a.lower() for a in selected_analysts]
 
         self.agent_status = {}
+        self.agent_started_at = {}
 
         for analyst_key in self.selected_analysts:
             if analyst_key in self.ANALYST_MAPPING:
@@ -122,6 +124,10 @@ class MessageBuffer:
 
     def update_agent_status(self, agent, status):
         if agent in self.agent_status:
+            if status == "in_progress" and self.agent_status.get(agent) != "in_progress":
+                self.agent_started_at[agent] = datetime.datetime.now()
+            elif status != "in_progress":
+                self.agent_started_at.pop(agent, None)
             self.agent_status[agent] = status
 
     def update_report_section(self, section_name, content):
@@ -180,6 +186,24 @@ def format_tokens(n):
     return str(n)
 
 
+def _status_cell(message_buffer, agent):
+    """The status cell, with elapsed seconds while an agent is working."""
+    status = message_buffer.agent_status.get(agent, "pending")
+    if status == "in_progress":
+        started = message_buffer.agent_started_at.get(agent)
+        elapsed = (
+            int((datetime.datetime.now() - started).total_seconds()) if started else 0
+        )
+        text = "[blue]in_progress[/blue]"
+        if elapsed >= 5:
+            text += f" [dim]{elapsed}s[/dim]"
+        return Spinner("dots", text=text, style="bold cyan")
+    status_color = {"pending": "yellow", "completed": "green", "error": "red"}.get(
+        status, "white"
+    )
+    return f"[{status_color}]{status}[/{status_color}]"
+
+
 def update_display(layout, spinner_text=None, stats_handler=None, start_time=None):
     # Header with welcome message
     layout["header"].update(
@@ -229,36 +253,12 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
 
     for team, agents in teams.items():
         first_agent = agents[0]
-        status = message_buffer.agent_status.get(first_agent, "pending")
-        if status == "in_progress":
-            spinner = Spinner(
-                "dots", text="[blue]in_progress[/blue]", style="bold cyan"
-            )
-            status_cell = spinner
-        else:
-            status_color = {
-                "pending": "yellow",
-                "completed": "green",
-                "error": "red",
-            }.get(status, "white")
-            status_cell = f"[{status_color}]{status}[/{status_color}]"
-        progress_table.add_row(team, first_agent, status_cell)
+        progress_table.add_row(
+            team, first_agent, _status_cell(message_buffer, first_agent)
+        )
 
         for agent in agents[1:]:
-            status = message_buffer.agent_status.get(agent, "pending")
-            if status == "in_progress":
-                spinner = Spinner(
-                    "dots", text="[blue]in_progress[/blue]", style="bold cyan"
-                )
-                status_cell = spinner
-            else:
-                status_color = {
-                    "pending": "yellow",
-                    "completed": "green",
-                    "error": "red",
-                }.get(status, "white")
-                status_cell = f"[{status_color}]{status}[/{status_color}]"
-            progress_table.add_row("", agent, status_cell)
+            progress_table.add_row("", agent, _status_cell(message_buffer, agent))
 
         progress_table.add_row("─" * 20, "─" * 20, "─" * 20, style="dim")
 
@@ -378,6 +378,8 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
 
 def display_complete_report(final_state):
     """Display the complete analysis report sequentially (avoids truncation)."""
+    from tradingagents.research.audit import strip_marks
+
     console.print()
     console.print(Rule("Complete Analysis Report", style="bold green"))
 
@@ -394,7 +396,7 @@ def display_complete_report(final_state):
     if analysts:
         console.print(Panel("[bold]I. Analyst Team Reports[/bold]", border_style="cyan"))
         for title, content in analysts:
-            console.print(Panel(Markdown(content), title=title, border_style="blue", padding=(1, 2)))
+            console.print(Panel(Markdown(strip_marks(content)), title=title, border_style="blue", padding=(1, 2)))
 
     # II. Research Team Reports
     if final_state.get("investment_debate_state"):
@@ -407,12 +409,12 @@ def display_complete_report(final_state):
         if research:
             console.print(Panel("[bold]II. Research Team Decision[/bold]", border_style="magenta"))
             for title, content in research:
-                console.print(Panel(Markdown(content), title=title, border_style="blue", padding=(1, 2)))
+                console.print(Panel(Markdown(strip_marks(content)), title=title, border_style="blue", padding=(1, 2)))
 
     # III. Trading Team
     if final_state.get("trader_investment_plan"):
         console.print(Panel("[bold]III. Trading Team Plan[/bold]", border_style="yellow"))
-        console.print(Panel(Markdown(final_state["trader_investment_plan"]), title="Trader", border_style="blue", padding=(1, 2)))
+        console.print(Panel(Markdown(strip_marks(final_state["trader_investment_plan"])), title="Trader", border_style="blue", padding=(1, 2)))
 
     # IV. Risk Management Team
     if final_state.get("risk_debate_state"):
@@ -427,12 +429,12 @@ def display_complete_report(final_state):
         if risk_reports:
             console.print(Panel("[bold]IV. Risk Management Team Decision[/bold]", border_style="red"))
             for title, content in risk_reports:
-                console.print(Panel(Markdown(content), title=title, border_style="blue", padding=(1, 2)))
+                console.print(Panel(Markdown(strip_marks(content)), title=title, border_style="blue", padding=(1, 2)))
 
     # V. Portfolio Manager Decision
     if final_state.get("final_trade_decision"):
         console.print(Panel("[bold]V. Portfolio Manager Decision[/bold]", border_style="green"))
-        console.print(Panel(Markdown(final_state["final_trade_decision"]), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
+        console.print(Panel(Markdown(strip_marks(final_state["final_trade_decision"])), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
 
 
 def update_research_team_status(status):

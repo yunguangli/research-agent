@@ -13,6 +13,7 @@ import pytest
 
 from cli.display import (
     AnalystWallTimeTracker,
+    MessageBuffer,
     extract_content_string,
     sync_analyst_tracker_from_chunk,
 )
@@ -24,6 +25,19 @@ from tradingagents.graph.analyst_execution import build_analyst_execution_plan
 def test_a_message_that_reads_like_a_python_value_is_still_text(text):
     """These were parsed as Python and judged empty, so the message vanished."""
     assert extract_content_string(text) == text
+
+
+@pytest.mark.unit
+def test_an_in_progress_agent_records_and_clears_its_start_time():
+    """The status cell shows elapsed seconds; it needs a start time per agent."""
+    buffer = MessageBuffer()
+    buffer.init_for_analysis(["market"])
+
+    buffer.update_agent_status("Portfolio Manager", "in_progress")
+    assert "Portfolio Manager" in buffer.agent_started_at
+
+    buffer.update_agent_status("Portfolio Manager", "completed")
+    assert "Portfolio Manager" not in buffer.agent_started_at
 
 
 @pytest.mark.unit

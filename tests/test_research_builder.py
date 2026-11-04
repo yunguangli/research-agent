@@ -321,3 +321,40 @@ def test_the_prompt_carries_the_facts_and_forbids_other_sources(tmp_path):
     assert "cite only these" in prompt.lower()
     assert "20 USD" in prompt
     assert "Return JSON only" in prompt
+
+
+def test_a_bare_net_debt_number_is_refused_before_it_reaches_the_spec(tmp_path):
+    data = spec().to_dict()
+    data["net_debt"] = 258.0
+
+    with pytest.raises(ModelError) as excinfo:
+        builder._reject_bare_net_debt(data)
+
+    assert "components" in str(excinfo.value)
+    assert "gross_debt" in str(excinfo.value)
+
+
+def test_the_builder_retries_after_a_bare_net_debt_number(tmp_path):
+    bare = spec().to_dict()
+    bare["net_debt"] = 258.0
+    llm = ScriptedLLM(json.dumps(bare), _valid())
+
+    model, attempts = _build(llm, tmp_path)
+
+    assert llm.calls == 2
+    assert any("components" in attempt for attempt in attempts)
+    assert model.ticker == "TEST"
+
+
+def test_net_debt_and_the_ev_multiple_reach_the_builder_prompt():
+    prompt = builder.build_prompt(
+        ticker="TEST", company="Test Corp", as_of="2026-10-28",
+        facts_text="facts", index_text="idx", excerpts="ex", price=20.0,
+        unit="USD_m", currency="USD",
+    )
+
+    assert '"net_debt"' in prompt
+    assert "gross_debt" in prompt
+    assert "cash_and_equivalents" in prompt
+    assert "ev_ebitda_multiple" in prompt
+    assert "analyst assumption" in prompt.lower()

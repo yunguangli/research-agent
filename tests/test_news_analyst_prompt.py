@@ -23,3 +23,13 @@ def test_news_prompt_matches_get_news_signature():
     src = inspect.getsource(na)
     assert "get_news(start_date, end_date)" in src
     assert "get_news(query" not in src
+
+
+@pytest.mark.unit
+def test_the_news_analyst_is_not_offered_prediction_markets():
+    """A single-name rating must not ride on election or recession odds."""
+    names = {tool.name for tool in na.TOOLS}
+    assert "get_prediction_markets" not in names
+    src = inspect.getsource(na)
+    assert "get_prediction_markets(" not in src
+    assert "do not substitute global macro" in src.lower()

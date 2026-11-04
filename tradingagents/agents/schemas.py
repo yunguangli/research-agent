@@ -73,6 +73,52 @@ class PortfolioRating(StrEnum):
     SELL = "Sell"
 
 
+class FundamentalView(StrEnum):
+    POSITIVE = "Positive"
+    NEUTRAL = "Neutral"
+    NEGATIVE = "Negative"
+
+
+class ValuationView(StrEnum):
+    ATTRACTIVE = "Attractive"
+    FAIR = "Fair"
+    FULL = "Full"
+
+
+class TimingView(StrEnum):
+    FAVORABLE = "Favorable"
+    NEUTRAL = "Neutral"
+    UNFAVORABLE = "Unfavorable"
+
+
+class NewInvestorAction(StrEnum):
+    INITIATE = "Initiate"
+    WAIT = "Wait"
+    AVOID = "Avoid"
+
+
+class HolderAction(StrEnum):
+    ADD = "Add"
+    HOLD = "Hold"
+    REVIEW = "Review"
+    REDUCE = "Reduce"
+    EXIT = "Exit"
+
+
+class DecisionConfidence(StrEnum):
+    HIGH = "High"
+    MEDIUM = "Medium"
+    LOW = "Low"
+
+
+class ValuationStatus(StrEnum):
+    """How the decision expresses value: a point target, a range, or nothing."""
+
+    POINT_TARGET = "point_target"
+    RANGE = "range"
+    UNAVAILABLE = "unavailable"
+
+
 class TraderAction(StrEnum):
     """3-tier transaction direction used by the Trader.
 
@@ -85,6 +131,20 @@ class TraderAction(StrEnum):
     BUY = "Buy"
     HOLD = "Hold"
     SELL = "Sell"
+
+
+class TraderIntent(StrEnum):
+    """What a Sell means for the book.
+
+    A Sell against an existing long is a reduction; a Sell with no position is
+    either an avoidance or a new short, and a new short needs a mandate the
+    system does not have. Naming the intent keeps the recommendation from
+    silently becoming a short.
+    """
+
+    REDUCE_LONG = "reduce_long"
+    INITIATE_SHORT = "initiate_short"
+    HOLD = "hold"
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +187,13 @@ class ResearchPlan(BaseModel):
     )
 
 
+class ResearchPlanMinimal(BaseModel):
+    """The fallback schema for the Research Manager: the call without the plan."""
+
+    recommendation: PortfolioRating
+    rationale: str
+
+
 def render_research_plan(plan: ResearchPlan) -> str:
     """Render a ResearchPlan to markdown for storage and the trader's prompt context."""
     return "\n".join([
@@ -154,6 +221,14 @@ class TraderProposal(BaseModel):
 
     action: TraderAction = Field(
         description="The transaction direction. Exactly one of Buy / Hold / Sell.",
+    )
+    intent: TraderIntent | None = Field(
+        default=None,
+        description=(
+            "What the action means for the book. With a Sell: 'reduce_long' when the "
+            "book holds the name, 'initiate_short' only when a short mandate exists, "
+            "otherwise leave empty (an avoidance). Omit for Buy and Hold."
+        ),
     )
     reasoning: str = Field(
         description=(
@@ -194,18 +269,38 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
     The trailing ``FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**`` line is
     preserved for backward compatibility with the analyst stop-signal text
     and any external code that greps for it.
+
+    A level above the entry is not a stop for a long position: it is the
+    invalidation level that ends a bearish stance. Labelling it "Stop Loss"
+    would describe a protection the trade does not have, so it is published as
+    a reassessment level instead.
     """
-    parts = [
-        f"**Action**: {proposal.action.value}",
-        "",
-        f"**Reasoning**: {proposal.reasoning}",
-    ]
+    parts = [f"**Action**: {proposal.action.value}"]
+    if proposal.intent is not None:
+        parts.append(f"**Intent**: {proposal.intent.value.replace('_', ' ')}")
+    parts.extend(["", f"**Reasoning**: {proposal.reasoning}"])
+
+    stop_label, stop_note = "Stop Loss", ""
+    if (
+        proposal.stop_loss is not None
+        and proposal.entry_price is not None
+        and proposal.stop_loss > proposal.entry_price
+    ):
+        if proposal.action == TraderAction.BUY:
+            stop_note = " (above the entry: not a protective stop for a long)"
+        else:
+            stop_label = "Reassessment Level"
+            stop_note = " (above the entry: an invalidation level, not a protective stop)"
+
     # Named even when absent, so a reader can tell a level the trader chose not
     # to give from one the schema never asked for.
-    for label, value in (("Entry Price", proposal.entry_price),
-                         ("Stop Loss", proposal.stop_loss),
-                         ("Position Sizing", proposal.position_sizing)):
-        parts.extend(["", f"**{label}**: {value if value is not None and value != '' else 'not provided'}"])
+    for label, value, note in (
+        ("Entry Price", proposal.entry_price, ""),
+        (stop_label, proposal.stop_loss, stop_note),
+        ("Position Sizing", proposal.position_sizing, ""),
+    ):
+        shown = value if value is not None and value != "" else "not provided"
+        parts.extend(["", f"**{label}**: {shown}{note if shown != 'not provided' else ''}"])
     parts.extend([
         "",
         f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
@@ -254,15 +349,106 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional target price in the instrument's quote currency.",
     )
+    # The verified model publishes a range, not always a point. A decision that
+    # cannot pick a point still carries the value it used.
+    fair_value_low: float | None = Field(
+        default=None, description="Low end of the verified model's fair-value range."
+    )
+    fair_value_base: float | None = Field(
+        default=None, description="Base (central) fair value, when the model states one."
+    )
+    fair_value_high: float | None = Field(
+        default=None, description="High end of the verified model's fair-value range."
+    )
+    valuation_status: ValuationStatus | None = Field(
+        default=None,
+        description=(
+            "point_target when price_target is set, range when a fair-value range is "
+            "given, unavailable when the run had no verified valuation."
+        ),
+    )
     time_horizon: str | None = Field(
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    # One rating cannot carry four different decisions. These typed fields keep
+    # the fundamental view, valuation, timing and the two audiences separate.
+    fundamental_view: FundamentalView | None = None
+    valuation_view: ValuationView | None = None
+    technical_timing: TimingView | None = None
+    new_investor_action: NewInvestorAction | None = None
+    existing_holder_action: HolderAction | None = None
+    confidence: DecisionConfidence | None = None
+    # The resolution the decision owes a reader, kept separate from the prose so
+    # a missing judgement is visible as "not provided" rather than absent.
+    earnings_revision_view: str | None = Field(
+        default=None,
+        description="Rising / Stable / Falling, or '' when no view is supported.",
+    )
+    catalyst_timing: str | None = Field(
+        default=None,
+        description="When the decisive catalyst is expected, within the decision horizon.",
+    )
+    position_size_constraint: str | None = Field(
+        default=None,
+        description="What caps the position (liquidity, ATR, mandate, concentration); never a size.",
+    )
+    thesis_invalidation: list[str] = Field(default_factory=list)
+    upgrade_evidence: list[str] = Field(default_factory=list)
+    downgrade_evidence: list[str] = Field(default_factory=list)
+    # Traceability: every published bound names the source it came from, and a
+    # source that points at a rejected scenario is invalid.
+    controlling_low_source_id: str | None = None
+    controlling_base_source_id: str | None = None
+    controlling_high_source_id: str | None = None
+    controlling_model_version: str | None = None
+    rejected_scenarios: list[str] = Field(default_factory=list)
+    valuation_override: dict | None = None
+    # What the action rests on: verified fundamentals, a discrete event, verified
+    # technical evidence, or a mixture that names the controlling category.
+    decision_basis: Literal["fundamental", "event", "technical", "mixed"] | None = None
+    decision_audit: dict | None = None
 
     @field_validator("price_target", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
+
+    @field_validator("fair_value_low", "fair_value_base", "fair_value_high", mode="before")
+    @classmethod
+    def _nullish_range_to_none(cls, v):
+        return _coerce_optional_float(v)
+
+
+class PortfolioDecisionMinimal(BaseModel):
+    """The fallback schema: the decision without the optional detail.
+
+    Used when the full schema cannot be parsed. It is still a typed decision, so
+    the run does not have to reconstruct a decision-critical object from prose.
+    The fallback keeps the valuation output: a range may be given instead of a
+    point target, so a decision built on a verified model does not lose it.
+    """
+
+    rating: PortfolioRating
+    executive_summary: str
+    investment_thesis: str = ""
+    target_price: float | None = None
+    fair_value_low: float | None = None
+    fair_value_base: float | None = None
+    fair_value_high: float | None = None
+    valuation_status: ValuationStatus | None = None
+
+    @field_validator(
+        "target_price", "fair_value_low", "fair_value_base", "fair_value_high", mode="before"
+    )
+    @classmethod
+    def _nullish_float_to_none(cls, v):
+        return _coerce_optional_float(v)
+
+
+def _fmt_value(value: float) -> str:
+    """A price as a reader writes it: thousands separated, no trailing .0."""
+    return f"{value:,.0f}" if float(value).is_integer() else f"{value:,.2f}"
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -281,10 +467,64 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         f"**Investment Thesis**: {decision.investment_thesis}",
     ]
     # Named even when absent: a missing line reads as a field nobody asked for,
-    # so a reader cannot tell "no target" from "target not reported".
-    target = decision.price_target if decision.price_target is not None else "not provided"
-    parts.extend(["", f"**Price Target**: {target}"])
+    # so a reader cannot tell "no target" from "target not reported". A verified
+    # model publishes a range, so a range is a complete answer, not a missing point.
+    low, base, high = decision.fair_value_low, decision.fair_value_base, decision.fair_value_high
+    if decision.price_target is not None:
+        parts.extend(["", f"**Price Target**: {decision.price_target}"])
+    elif low is not None and high is not None:
+        centre = _fmt_value(base) if base is not None else "base not stated"
+        parts.extend(
+            ["", f"**Fair Value**: {_fmt_value(low)}–{_fmt_value(high)} (base {centre})"]
+        )
+    else:
+        parts.extend(["", "**Price Target**: not provided"])
+    status = decision.valuation_status
+    if status is None:
+        if decision.price_target is not None:
+            status = ValuationStatus.POINT_TARGET
+        elif low is not None and high is not None:
+            status = ValuationStatus.RANGE
+        else:
+            status = ValuationStatus.UNAVAILABLE
+    parts.extend(["", f"**Valuation status**: {status.value}"])
     parts.extend(["", f"**Time Horizon**: {decision.time_horizon or 'not provided'}"])
+
+    framework = [
+        ("Fundamental view", decision.fundamental_view),
+        ("Valuation", decision.valuation_view),
+        ("Earnings revision", decision.earnings_revision_view),
+        ("Technical timing", decision.technical_timing),
+        ("New investor", decision.new_investor_action),
+        ("Existing holder", decision.existing_holder_action),
+    ]
+    rows = [(label, value.value if hasattr(value, "value") else value) for label, value in framework]
+    rows.append(("Position size", decision.position_size_constraint))
+    if decision.confidence is not None:
+        rows.append(("Confidence", decision.confidence.value))
+    # Every row is printed: a decision that did not answer a question must show
+    # the gap, not omit the question. The 13:51 fallback dropped the whole table.
+    parts.extend(["", "**Decision framework**:", "", "| Item | Assessment |", "|---|---|"])
+    parts.extend(f"| {label} | {value if value else 'not provided'} |" for label, value in rows)
+    for title, items in (
+        ("Thesis invalidation", decision.thesis_invalidation),
+        ("Evidence to upgrade", decision.upgrade_evidence),
+        ("Evidence to downgrade", decision.downgrade_evidence),
+    ):
+        parts.extend(["", f"**{title}**: " + ("; ".join(items) if items else "not provided")])
+    sources = {
+        "low": decision.controlling_low_source_id,
+        "base": decision.controlling_base_source_id,
+        "high": decision.controlling_high_source_id,
+    }
+    if any(sources.values()):
+        parts.extend(
+            ["", "**Valuation sources**: " + "; ".join(
+                f"{label} {source or 'not provided'}" for label, source in sources.items()
+            )]
+        )
+    if decision.rejected_scenarios:
+        parts.extend(["", "**Rejected scenarios**: " + ", ".join(decision.rejected_scenarios)])
     return "\n".join(parts)
 
 

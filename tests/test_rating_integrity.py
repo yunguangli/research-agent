@@ -128,6 +128,9 @@ def test_the_cli_says_when_a_run_produced_no_usable_rating(monkeypatch, tmp_path
         def record_decision(self, *a, **k):
             pass
 
+        def prepare_final_state(self, *a, **k):
+            pass
+
         def get_graph_args(self, callbacks=None):
             return {}
 

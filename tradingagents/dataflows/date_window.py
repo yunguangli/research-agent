@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 def to_utc(dt: datetime) -> datetime:
@@ -32,8 +32,13 @@ def in_window(pub_dt: datetime | None, start_dt: datetime, end_dt: datetime) -> 
 
 
 def get_current_date() -> str:
-    """Today's date, YYYY-MM-DD."""
-    return date.today().strftime("%Y-%m-%d")
+    """Today's date, YYYY-MM-DD, in UTC.
+
+    One clock for the present: the window helpers already use UTC, so a local
+    ``date.today()`` made a UTC-dated run look like the future for a few hours
+    each day on a machine west of Greenwich.
+    """
+    return datetime.now(UTC).date().strftime("%Y-%m-%d")
 
 
 def is_historical(run_date) -> bool:

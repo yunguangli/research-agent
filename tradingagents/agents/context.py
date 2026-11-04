@@ -230,13 +230,17 @@ FIGURE_MARKER_RULE = (
     "The sign goes inside the brackets: [[−14]], not −[[14]]. Mark "
     "only figures you took from that model, and never a citation, a source number or a "
     "list number: [[6]] is read as the figure 6. A number you computed yourself (a PEG, a "
-    "growth rate, a margin of safety, a position size, a stop or entry level — including "
+    "growth rate, a variance, a percentage change, a margin of safety, a position size, "
+    "a stop or entry level — including "
     "a price you get as EPS × multiple: 215.4 × 50 = 10,770 is your arithmetic, not a "
     "model line) or took from a vendor, broker, filing or consensus stays unmarked. The "
     "brackets are removed before "
     "the report is shown; they let the system check your arithmetic against the model.\n"
     "Checking arithmetic is encouraged: if two figures in the package do not tie, report "
     "the discrepancy in one line rather than silently changing either number.\n"
+    "A figure you computed may be marked for checking instead of left bare: "
+    "[[computed: 130 = 13/10*100]]. The audit evaluates that arithmetic; a formula that "
+    "does not reproduce the figure is a finding.\n"
 )
 
 COMPARATIVE_CLAIM_RULE = (
@@ -259,6 +263,32 @@ SIZING_RULE = (
     "convert a tactical chart pattern into a portfolio-level action — timing and sizing "
     "stay conditional and descriptive.\n"
 )
+
+# The debate packet rule: every agent reads every input it was given, not only
+# the section named for its role. An unavailable source is a gap, never a zero.
+EVIDENCE_DISCIPLINE = (
+    "\n\nEVIDENCE DISCIPLINE\n"
+    "Use every relevant input supplied in this prompt, not only the section named for "
+    "your role. Any numerical statement must either quote a supplied figure, show a "
+    "calculation from supplied figures, or be labelled explicitly as your own "
+    "assumption. News or sentiment marked unavailable is an evidence gap: do not read "
+    "it as neutral, positive or negative.\n"
+)
+
+
+def case_availability(state: Mapping[str, Any]) -> str:
+    """One line naming which narrative inputs this run actually has."""
+    gaps = [
+        name
+        for name, key in (("news", "news_report"), ("sentiment", "sentiment_report"))
+        if not str(state.get(key) or "").strip()
+    ]
+    if not gaps:
+        return "News and sentiment reports: both available."
+    return (
+        "Missing this run: " + ", ".join(gaps) + ". That is an evidence gap, not a "
+        "neutral signal."
+    )
 
 
 def research_package_block(state: Mapping[str, Any], max_chars: int = 4000) -> str:
@@ -297,7 +327,9 @@ def case_block(state: Mapping[str, Any], max_chars: int = 3000) -> str:
         return ""
     return (
         "\n\nCASES ARGUED (deltas against the verified model; the base case is the model "
-        "itself, so do not average these):\n" + table[:max_chars] + "\n"
+        "itself, so do not average these). The confidence column is the reviewer's own "
+        "certainty, not a calibrated probability: do not compute an expected value from "
+        "it, and do not treat it as a weight.\n" + table[:max_chars] + "\n"
     )
 
 
@@ -369,6 +401,34 @@ def report_or_absent(text: str, source: str) -> str:
     if text:
         return text
     return f"(No {source} report in this run: it is not available, not an empty finding.)"
+
+
+def fundamentals_with_repair_notice(state: Mapping[str, Any]) -> str:
+    """The Fundamentals report, prefixed by the repair note when the model changed.
+
+    The debate must not read a v1 conclusion as current. The report is kept whole
+    (it is the analyst's work and the audit's basis) but the note says which
+    values and conclusions the repair replaced and forbids using them.
+
+    When the deterministic model is unverified the report is withheld entirely:
+    it was written against that model, so it can carry model EPS, multiples and a
+    manual fair value that no downstream stage may use.
+    """
+    from tradingagents.research.packets import UNVERIFIED_FUNDAMENTALS_NOTICE, model_verified
+
+    if not model_verified(dict(state)):
+        return UNVERIFIED_FUNDAMENTALS_NOTICE
+    report = report_or_absent(state.get("fundamentals_report"), "fundamentals")
+    note = str(state.get("model_repair_addendum") or "").strip()
+    if not note:
+        return report
+    return (
+        "MODEL REPAIR NOTICE — read this before the report below.\n"
+        "The deterministic model was repaired after this report was written. The "
+        "figures named as changed are superseded: do not use them, and do not repeat "
+        "a conclusion the repair replaced. Every other figure is still current.\n\n"
+        f"{note}\n\n---\n\nFUNDAMENTALS REPORT (written against model v1):\n{report}"
+    )
 
 
 def get_portfolio_context_from_state(state: Mapping[str, Any]) -> str:

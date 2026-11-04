@@ -1,0 +1,65 @@
+{
+  "ticker": "TESTBANK",
+  "company": "Test Bank",
+  "currency": "USD",
+  "unit": "USD_m",
+  "fiscal_year_end_month": 12,
+  "sector": "bank",
+  "periods": [
+    {"label": "FY25", "start": "2025-01-01", "end": "2025-12-31", "basis": "actual"},
+    {"label": "FY26", "start": "2026-01-01", "end": "2026-12-31", "basis": "forecast"}
+  ],
+  "actuals": {
+    "FY25": {"revenue": 100.0, "operating_profit": 40.0, "ordinary_profit": 38.0,
+             "net_profit": 28.0, "eps": 2.8}
+  },
+  "guidance": {},
+  "forecast": {"FY26": {"net_profit": 30.0}},
+  "bridges": [
+    {"metric": "revenue", "base_period": "FY25", "target_period": "FY26",
+     "base_value": 100.0, "declared_total": 110.0,
+     "lines": [{"label": "NIM expansion", "value": 10.0, "provenance": "assumption",
+                "driver": "net interest margin", "alternative": 14.0}]},
+    {"metric": "operating_profit", "base_period": "FY25", "target_period": "FY26",
+     "base_value": 40.0, "declared_total": 46.0,
+     "lines": [{"label": "NIM expansion", "value": 6.0, "provenance": "assumption"}]}
+  ],
+  "cashflow": {
+    "FY26": {"net_profit": 30.0, "depreciation": 4.0, "working_capital_change": 0.0,
+             "capex": 2.0}
+  },
+  "share_bases": [
+    {"name": "period_end_net", "shares_m": 10.0},
+    {"name": "diluted_average", "shares_m": 10.0},
+    {"name": "full_conversion", "shares_m": 10.5}
+  ],
+  "valuation": {
+    "price": 50.0,
+    "fair_value_multiple_low": 10.0,
+    "fair_value_multiple_high": 12.0,
+    "market_cap_basis": "period_end_net",
+    "forecast_eps_basis": "diluted_average",
+    "dilution_sensitivity_basis": "full_conversion",
+    "equity_value_share_basis": "period_end_net",
+    "ev_ebitda_multiple": 8.0
+  },
+  "eps_basis": "diluted_average",
+  "net_debt": {
+    "gross_debt": 0.0,
+    "cash_and_equivalents": 20.0,
+    "lease_liabilities": 0.0,
+    "lease_treatment": "excluded",
+    "minority_interest": 0.0,
+    "minority_treatment": "excluded",
+    "source_refs": ["doc-bank-fixture balance sheet"],
+    "verification_status": "VERIFIED"
+  },
+  "effective_tax_rate": 0.25,
+  "capital_structure": {
+    "issued_shares": 10.5,
+    "treasury_shares": 0.5,
+    "current_net_shares": 10.0,
+    "basic_weighted_average": {"FY26": 10.0},
+    "verification_status": "VERIFIED"
+  }
+}

@@ -39,18 +39,34 @@ SHAPE = """{
   "bridges": [
     {"metric": "revenue", "base_period": "FY3/27", "target_period": "FY3/28", "base_value": 0,
      "declared_total": 0,
-     "lines": [{"label": "...", "value": 0, "provenance": "derived", "formula": "...",
+     "lines": [{"label": "...", "value": 0, "provenance": "derived", "formula": "...", "driver": "advanced substrate pricing", "alternative": 0,
                 "cite": [{"document_id": "doc-...", "location": "page 4", "quote": "..."}]}]}
   ],
-  "segments":   {"FY3/27": [{"name": "...", "revenue": 0, "operating_profit": 0}]},
+  "segments":   {"FY3/27": [{"name": "...", "revenue": 0, "operating_profit": 0,
+                             "commissioning": "FY3/28"}]},
   "cashflow":   {"FY3/27": {"net_profit": 0, "depreciation": 0, "working_capital_change": 0,
                             "capex": 0, "payout_ratio": 0.4}},
-  "share_bases": [{"name": "full_share", "shares_m": 0}],
-  "scenarios":  [{"name": "Base", "assumptions": "...", "revenue": 0, "operating_profit": 0,
-                  "eps": 0, "multiple": 0}],
+  "share_bases": [{"name": "period_end_net", "shares_m": 0},
+                  {"name": "diluted_average", "shares_m": 0,
+                   "basic_weighted_average": 0, "diluted_weighted_average": 0,
+                   "potential_cb_shares": 0}],
+  "net_debt":   {"gross_debt": 0, "cash_and_equivalents": 0,
+                 "lease_liabilities": 0, "lease_treatment": "included",
+                 "minority_interest": 0, "minority_treatment": "excluded",
+                 "source_refs": ["doc-... page 12"]},
   "valuation":  {"price": 0, "fair_value_multiple_low": 0, "fair_value_multiple_high": 0,
-                 "fair_value_basis": "full_share", "sensitivity_multiples": [0],
-                 "market_cap_shares_m": 0, "method_note": "..."},
+                 "fair_value_basis": "full_share", "fair_value_period": "FY3/28",
+                 "sensitivity_multiples": [0],
+                 "market_cap_basis": "period_end_net",
+                 "forecast_eps_basis": "diluted_average",
+                 "dilution_sensitivity_basis": "diluted_average",
+                 "equity_value_share_basis": "period_end_net",
+                 "ev_ebitda_multiple": 0,
+                 "ev_ebitda_multiple_rationale": "peer median and own five-year average",
+                 "ev_ebitda_multiple_refs": ["doc-..."],
+                 "method_note": "..."},
+  "scenarios":  [{"name": "Base", "assumptions": "...", "revenue": 0, "operating_profit": 0,
+                   "eps": 0, "multiple": 0, "period": "FY3/28"}],
   "consensus":  {"source": "Bloomberg consensus", "eps_basis": "company_style",
                  "periods": {"FY3/28": {"revenue": 0, "operating_profit": 0,
                                         "net_profit": 0, "eps": 0}}},
@@ -65,6 +81,10 @@ RULES = """Rules:
   Q2 of the current year is fully determined by H1 guidance minus Q1 actual;
   Q3/Q4 split H2 guidance, and you must state that split in quarterly_plan.
 - Give annual periods for the current fiscal year and the two following years.
+- Put every guided year the documents disclose in "guidance", including a
+  next-year figure stated beside this year's. The audit checks a marked company
+  figure against this block, so a guidance number left out of it is reported as a
+  misquote even though the document stated it.
 - Management guidance is a REFERENCE, not your forecast. Build your own view for
   every guided period: put your numbers in "forecast" under the same period
   label (they replace the guidance row in the model), set that period's basis to
@@ -85,6 +105,16 @@ RULES = """Rules:
   multiples must sit inside the declared fair-value multiples (the Base target
   belongs within the fair-value range): one model cannot publish two valuations
   that cannot both be right — if they disagree, reconcile them before returning.
+- Build each scenario from operational drivers, not from an arbitrary percentage.
+  State the demand or volume, the price or ASP, utilisation or mix where relevant,
+  the margin, revenue, operating profit, EPS, the free-cash-flow effect when
+  material, the multiple and the fair value. Say which evidence would confirm the
+  case and which would invalidate it. Scenarios need not be symmetrical around the
+  base: a credible downside may be much further away than the upside.
+- Value ONE year. `fair_value_period` names the year whose EPS the fair-value
+  multiples multiply, and every scenario must price that same year (say so in its
+  `period`). A Base target built on next year's EPS while the band multiplies this
+  year's is two valuations, not one, and the validator rejects it.
 - Write cash-flow figures in the model's unit. Japanese filings quote 億円
   (100 million yen): 403億円 is JPY40.3bn, not JPY403bn. A capex figure near or
   above 20% of revenue is almost always a unit error.
@@ -105,14 +135,43 @@ RULES = """Rules:
 - Every forecast line comes from a named bridge line. Each bridge line's
   "provenance" is exactly one of: disclosed, guidance, derived, assumption,
   internal_note. Derived lines must carry a "formula" and the inputs in words.
+- Give each load-bearing bridge line a "driver" (the assumption it represents, e.g.
+  advanced substrate pricing, Cell 8 loading, premium mix) and an "alternative" value
+  the same unit could plausibly take. The sensitivity engine shocks one line at a
+  time; a line without both is reported as a research gap, not estimated.
+- Name the three share bases explicitly: `market_cap_basis` (current net shares),
+  `forecast_eps_basis` (forecast diluted weighted average), `dilution_sensitivity_basis`
+  (full conversion). `eps_basis` is the one forecast EPS and P/E use. A single
+  "full_share" base is ambiguous and suppresses per-share outputs. Name
+  `equity_value_share_basis` too: the count the EV-derived per-share value divides by
+  (usually the current net count).
+- Net debt is DERIVED, never asserted: fill "net_debt" with `gross_debt`,
+  `cash_and_equivalents`, `lease_liabilities` with `lease_treatment` ("included" or
+  "excluded"), `minority_interest` with `minority_treatment`, and `source_refs`.
+  Never write a single net figure, and never put 0 for an input the documents do not
+  give — omit the field instead. Net debt = gross debt - cash (+ leases or
+  minorities only when you said "included").
+- EV/EBITDA is a second, independent method. Its multiple is YOUR assumption:
+  set `ev_ebitda_multiple` with `ev_ebitda_multiple_rationale` (peer multiples, the
+  company's own history, the rate environment) and `ev_ebitda_multiple_refs`. It is
+  an analyst assumption, never a company-reported figure, and the report labels it
+  that way. Leave the multiple null when the documents give no basis for one.
+  If gross debt, cash, EBITDA (operating profit + depreciation) or the multiple is
+  missing, EV/EBITDA becomes UNAVAILABLE on its own — do not guess an input, and do
+  not let its absence remove the P/E.
+- On a segment, set "commissioning" to the period label it starts operating. A segment
+  that books revenue before that period is a timing error and is rejected.
+- A bridge moves from one period to a DIFFERENT one. "base_period" is the earlier
+  period and "base_value" is that period's reported figure; the lines are the
+  changes that reach the target period. Never bridge a period to itself and never
+  put the target's own value in base_value: that doubles the base.
 - Resolve relative time: when a document says "this year", "next year", "from
   next quarter" or "starting 2H", map it against the DOCUMENT'S OWN date to an
   explicit FY label, and say the mapping in warnings. A project's commencement
   is not its revenue contribution: an investment decision or a ramp start is
   not full-run-rate revenue — state the ramp you assume and when contribution
   begins.
-- Bridge each metric from its own drivers. Do not infer revenue from an
-  operating-profit estimate (a broker's OP number implies a volume you cannot
+- Bridge each metric from its own drivers. Do not infer revenue from an  operating-profit estimate (a broker's OP number implies a volume you cannot
   see), and do not infer net profit from a revenue consensus. An external
   estimate enters the metric it states, only.
 - Split H2 between Q3 and Q4 by the seasonality the documents or the reported
@@ -137,6 +196,22 @@ RULES = """Rules:
 - Do not leave a required key out. Use null only where a value is genuinely
   unknown, and say why in warnings.
 - Return JSON only. No prose, no code fence."""
+
+
+def _reject_bare_net_debt(data: dict) -> None:
+    """A single net-debt number cannot be checked and cannot be adjusted.
+
+    It also hides an absent input: a model that writes ``net_debt: 0`` has not
+    shown that the company has no debt. The components are required.
+    """
+    value = data.get("net_debt")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        raise ModelError(
+            "net_debt must be stated as components, not one number: give "
+            "gross_debt and cash_and_equivalents (plus lease_liabilities with "
+            "lease_treatment, minority_interest with minority_treatment, and "
+            "source_refs). Omit a component you cannot evidence; never write 0."
+        )
 
 
 def _extract_json(text: str) -> dict:
@@ -486,6 +561,7 @@ def build_spec(
         last_raw = raw
         try:
             data = _extract_json(raw)
+            _reject_bare_net_debt(data)
             spec = ModelSpec.from_dict(data)
             spec.ticker = spec.ticker or ticker
             spec.company = spec.company or company

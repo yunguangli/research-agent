@@ -1,0 +1,145 @@
+{
+  "version": 2,
+  "overrides": {},
+  "documents": {
+    "Brokers Views Oct 30 2026.docx": {
+      "document_id": "doc-4062.T-brokers-views-oct-30-2026",
+      "ticker": "4062.T",
+      "doc_type": "note",
+      "contains": [
+        "notes"
+      ],
+      "title": "Brokers Views Oct 30 2026",
+      "source": "local_corpus",
+      "author": "",
+      "published_at": "2026-10-30",
+      "date_precision": "day",
+      "date_source": "filename",
+      "retrieved_at": "2026-11-02",
+      "language": "en",
+      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "pages": 0,
+      "license": "internal_only",
+      "llm_use": "full_text",
+      "content_hash": "sha256:6b96c6b4b81c30b8dbe5a793203ecbab6f86011d026ad76be340feb9e7118d60",
+      "storage_path": "Brokers Views Oct 30 2026.docx",
+      "doc_quality": "ok",
+      "excluded": false,
+      "exclusion_reason": "",
+      "warnings": []
+    },
+    "Ibiden Co Ltd Company Presentation 20261030 .pdf": {
+      "document_id": "doc-4062.T-ibiden-co-ltd-company-presentation-20261030",
+      "ticker": "4062.T",
+      "doc_type": "presentation",
+      "contains": [
+        "guidance",
+        "segment_data",
+        "industry"
+      ],
+      "title": "Ibiden Co Ltd Company Presentation 20261030 ",
+      "source": "local_corpus",
+      "author": "",
+      "published_at": "2026-10-30",
+      "date_precision": "day",
+      "date_source": "filename",
+      "retrieved_at": "2026-11-02",
+      "language": "en",
+      "mime_type": "application/pdf",
+      "pages": 0,
+      "license": "public",
+      "llm_use": "full_text",
+      "content_hash": "sha256:6cbfca22626c0a04800333ed6d182fa1b6259481bcb6544951fab4c98ccc8ad2",
+      "storage_path": "Ibiden Co Ltd Company Presentation 20261030 .pdf",
+      "doc_quality": "ok",
+      "excluded": false,
+      "exclusion_reason": "",
+      "warnings": []
+    },
+    "Ibiden Co Ltd Semi-Annual Tanshin.pdf": {
+      "document_id": "doc-4062.T-ibiden-co-ltd-semi-annual-tanshin",
+      "ticker": "4062.T",
+      "doc_type": "filing",
+      "contains": [
+        "statements",
+        "guidance"
+      ],
+      "title": "Ibiden Co Ltd Semi-Annual Tanshin",
+      "source": "local_corpus",
+      "author": "",
+      "published_at": "2026-10-29",
+      "date_precision": "day",
+      "date_source": "document",
+      "retrieved_at": "2026-11-02",
+      "language": "en",
+      "mime_type": "application/pdf",
+      "pages": 0,
+      "license": "public",
+      "llm_use": "full_text",
+      "content_hash": "sha256:4ee4e0628025c255ae692c7c5fcd6c627467e165e8296e53982b85fb7e349e91",
+      "storage_path": "Ibiden Co Ltd Semi-Annual Tanshin.pdf",
+      "doc_quality": "ok",
+      "excluded": false,
+      "exclusion_reason": "",
+      "warnings": [
+        "published_at inferred from the document text; confirm it in the corpus manifest"
+      ]
+    },
+    "Ibiden Q2 FY2027 Results-forecast.docx": {
+      "document_id": "doc-4062.T-ibiden-q2-fy2027-results-forecast",
+      "ticker": "4062.T",
+      "doc_type": "note",
+      "contains": [
+        "notes"
+      ],
+      "title": "Ibiden Q2 FY2027 Results-forecast",
+      "source": "local_corpus",
+      "author": "",
+      "published_at": "2026-10-30",
+      "date_precision": "unknown",
+      "date_source": "mtime",
+      "retrieved_at": "2026-11-02",
+      "language": "en",
+      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "pages": 0,
+      "license": "internal_only",
+      "llm_use": "full_text",
+      "content_hash": "sha256:5cdef1f3221931ca1dd9485ff005d18005f74e38c43d91f6df040195831c927e",
+      "storage_path": "Ibiden Q2 FY2027 Results-forecast.docx",
+      "doc_quality": "ok",
+      "excluded": false,
+      "exclusion_reason": "",
+      "warnings": [
+        "published_at not found in filename or header; using file mtime"
+      ]
+    },
+    "Ibiden Q2 FY3-2027 result call.docx": {
+      "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+      "ticker": "4062.T",
+      "doc_type": "note",
+      "contains": [
+        "notes"
+      ],
+      "title": "Ibiden Q2 FY3-2027 result call",
+      "source": "local_corpus",
+      "author": "",
+      "published_at": "2026-10-30",
+      "date_precision": "unknown",
+      "date_source": "mtime",
+      "retrieved_at": "2026-11-02",
+      "language": "en",
+      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "pages": 0,
+      "license": "internal_only",
+      "llm_use": "full_text",
+      "content_hash": "sha256:ffe3119ef2e4925adcfd82d1008073e8600588a1e57055a9b08dbfa7a0e1dbca",
+      "storage_path": "Ibiden Q2 FY3-2027 result call.docx",
+      "doc_quality": "ok",
+      "excluded": false,
+      "exclusion_reason": "",
+      "warnings": [
+        "published_at not found in filename or header; using file mtime"
+      ]
+    }
+  }
+}

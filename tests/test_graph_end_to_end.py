@@ -123,7 +123,7 @@ def offline(monkeypatch, tmp_path):
 def _graph(tmp_path, monkeypatch, model, debug=False, **config):
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg.update(results_dir=str(tmp_path / "results"), data_cache_dir=str(tmp_path / "cache"),
-               memory_log_path=str(tmp_path / "log.md"), **config)
+               memory_log_path=str(tmp_path / "log.md"), benchmark_ticker="SPY", **config)
     monkeypatch.setattr(trading_graph, "create_tier_client", lambda config, tier, **k: _Client(model))
     return trading_graph.TradingAgentsGraph(config=cfg, debug=debug)
 
@@ -140,7 +140,7 @@ def test_a_full_run_reaches_a_logged_decision(tmp_path, monkeypatch, offline, st
                 "investment_plan", "trader_investment_plan", "final_trade_decision"):
         assert state[key].strip(), key
     tool_methods = {"get_stock_data", "get_indicators", "get_news", "get_global_news",
-                    "get_macro_indicators", "get_prediction_markets", "get_fundamentals",
+                    "get_macro_indicators", "get_fundamentals",
                     "get_balance_sheet", "get_cashflow", "get_income_statement",
                     "get_insider_transactions", "ohlcv"}
     assert offline == tool_methods

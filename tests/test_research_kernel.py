@@ -238,6 +238,8 @@ def test_a_guided_period_forecast_over_guidance_must_be_relabelled():
     # relabelling moves the fair-value anchor to FY25 (EPS 0.9): keep the Base
     # scenario inside the band so only the relabelling is under test here
     model_spec.scenarios[0].multiple = 10.0
+    model_spec.scenarios[0].eps = 0.9          # FY25 is the valuation anchor now
+    model_spec.scenarios[0].period = "FY25"
     model = run(model_spec)
     assert model.row("FY25").revenue == 130.0
     assert model.spec.guidance["FY25"].revenue == 120.0    # management's number kept
@@ -361,6 +363,8 @@ def test_a_forecast_that_equals_guidance_must_explain_the_coincidence():
     model_spec.forecast["FY25"] = Financials(revenue=120.0, operating_profit=15.0, net_profit=9.0)
     model_spec.periods[1].basis = "forecast"
     model_spec.scenarios[0].multiple = 10.0      # keep the Base target in its band
+    model_spec.scenarios[0].eps = 0.9            # and on FY25, the valuation period
+    model_spec.scenarios[0].period = "FY25"
     with pytest.raises(ModelError, match="adoption"):
         run(model_spec)
 
@@ -375,3 +379,114 @@ def test_spec_round_trips_through_json():
     original = spec()
     restored = ModelSpec.from_dict(json.loads(json.dumps(original.to_dict())))
     assert restored.to_dict() == original.to_dict()
+
+
+# --- disclosed figures are checked, not re-derived ---------------------------
+
+
+def test_a_bridge_from_a_period_to_itself_is_rejected():
+    model_spec = spec(
+        bridges=[
+            Bridge("revenue", "FY25", "FY25", 120.0,
+                   [Line("Guidance plus a beat", 5.0)], declared_total=120.0),
+        ],
+        segments={},
+    )
+    with pytest.raises(ModelError, match="to itself"):
+        run(model_spec)
+
+
+def test_a_stated_eps_that_contradicts_net_profit_fails():
+    """0.6 is net profit 6.0 over 10m shares; a stated 0.9 is one input wrong."""
+    model_spec = spec(
+        actuals={"FY24": Financials(
+            revenue=100.0, operating_profit=10.0, net_profit=6.0, eps=0.9
+        )}
+    )
+    with pytest.raises(ModelError, match="states EPS"):
+        run(model_spec)
+
+
+def test_a_stated_eps_within_the_declared_tolerance_is_accepted():
+    model_spec = spec(
+        actuals={"FY24": Financials(
+            revenue=100.0, operating_profit=10.0, net_profit=6.0, eps=0.65
+        )}
+    )
+    model = run(model_spec)
+    check = next(c for c in model.checks if c.name == "FY24 stated EPS (basic)")
+    assert check.passed
+
+
+def test_a_scenario_target_that_is_not_eps_times_multiple_fails():
+    model_spec = spec(
+        scenarios=[
+            Scenario("Base", "steady", eps=1.0, multiple=12.0, target_price=15.0),
+            Scenario("Bear", "weak demand", eps=0.8, multiple=10.0),
+        ]
+    )
+    with pytest.raises(ModelError, match="scenario Base states a target"):
+        run(model_spec)
+
+
+def test_a_scenario_without_a_target_derives_it_and_says_so():
+    model = run(spec())
+    assert model.spec.scenarios[0].target_price is None
+    assert model.spec.scenarios[0].resolved_target == pytest.approx(12.0)
+    assert any("derived" in check.name for check in model.checks)
+
+
+# --- one valuation period ----------------------------------------------------
+
+
+def test_a_scenario_built_on_another_years_eps_fails():
+    """The 4062.T shape: the band multiplies FY26 EPS while Base prices FY25."""
+    model_spec = spec(
+        scenarios=[
+            Scenario("Base", "steady", eps=0.9, multiple=10.0),    # FY25 net 9 / 10 shares
+            Scenario("Bear", "weak demand", eps=0.8, multiple=10.0),
+        ]
+    )
+    with pytest.raises(ModelError, match="FY25's EPS"):
+        run(model_spec)
+
+
+def test_a_scenario_declaring_another_period_fails():
+    model_spec = spec()
+    model_spec.scenarios[0].period = "FY25"
+    with pytest.raises(ModelError, match="one model, one valuation period"):
+        run(model_spec)
+
+
+def test_a_scenario_declaring_the_valuation_period_passes():
+    model_spec = spec()
+    model_spec.scenarios[0].period = "FY26"
+    run(model_spec)
+
+
+def test_fair_value_period_moves_the_band_to_that_year():
+    from tradingagents.research.valuation import value
+
+    model_spec = spec(valuation=ValuationSpec(
+        price=20.0, fair_value_multiple_low=10.0, fair_value_multiple_high=12.0,
+        sensitivity_multiples=[8.0, 10.0, 12.0], fair_value_period="FY25",
+    ))
+    model_spec.scenarios = [
+        Scenario("Base", "steady", eps=0.9, multiple=10.0, period="FY25"),
+        Scenario("Bear", "weak demand", eps=0.8, multiple=10.0, period="FY25"),
+    ]
+    model = run(model_spec)
+    valuation = value(model)
+    assert valuation.period == "FY25"
+    assert valuation.eps == pytest.approx(0.9)
+    assert valuation.fair_value_low == pytest.approx(9.0)
+
+
+def test_a_historical_replay_keeps_the_published_mix_as_a_warning():
+    """A replay reproduces the archived report; it does not correct it."""
+    model_spec = spec(scenarios=[
+        Scenario("Base", "steady", eps=0.9, multiple=12.0),      # FY25 EPS, FY26 band
+        Scenario("Bear", "weak demand", eps=0.8, multiple=10.0),
+    ])
+    model = run(model_spec, strict=False)
+    assert any("historical replay" in warning for warning in model.spec.warnings)

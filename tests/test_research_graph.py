@@ -260,9 +260,15 @@ def _spec(path, revenue_op=410.0):
                 "lines": [{"label": "New business", "value": 1.0}],
             },
         ],
-        "share_bases": [{"name": "basic", "shares_m": 10.0}],
+        "share_bases": [
+            {"name": "basic", "shares_m": 10.0},
+            {"name": "diluted", "shares_m": 10.5,
+             "basic_weighted_average": 10.0, "diluted_weighted_average": 10.5},
+        ],
         "valuation": {
             "price": 20.0, "fair_value_multiple_low": 10.0, "fair_value_multiple_high": 12.0,
+            "market_cap_basis": "basic", "forecast_eps_basis": "diluted",
+            "dilution_sensitivity_basis": "diluted",
         },
         "eps_basis": "basic",
         "_op_override": revenue_op,
@@ -270,8 +276,14 @@ def _spec(path, revenue_op=410.0):
 
 
 def _graph():
-    """A graph instance without the LLM clients: these methods only read the env."""
-    return TradingAgentsGraph.__new__(TradingAgentsGraph)
+    """A graph instance without the LLM clients: these methods only read the env.
+
+    Comparison purpose: a spec without a manifest is reusable for a diagnostic
+    read; a production run would rebuild it first.
+    """
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"run_purpose": "comparison"}
+    return graph
 
 
 def test_research_package_is_empty_without_a_corpus(monkeypatch, tmp_path):
@@ -350,13 +362,15 @@ def test_save_reports_adds_a_number_audit_when_a_model_is_used(monkeypatch, tmp_
     assert "complete_report.md" in [p.name for p in out.iterdir()]
 
 
-def test_save_reports_has_no_audit_without_a_model(tmp_path):
+def test_save_reports_says_why_the_audit_did_not_run_without_a_model(tmp_path):
     graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
     graph.config = {}
     graph.selected_analysts = ("fundamentals",)
     out = tmp_path / "out"
     graph.save_reports({"fundamentals_report": "FY26 revenue 999.0"}, "TEST", save_path=out, html=False)
-    assert not (out / "1c_audit").exists()
+    audit = (out / "1c_audit" / "numbers.md").read_text(encoding="utf-8")
+    assert "no research corpus is configured" in audit
+    assert "999" not in audit
 
 
 def test_a_locked_file_returns_a_sentinel_instead_of_crashing_the_run(monkeypatch, tmp_path):
@@ -474,6 +488,272 @@ def test_corpus_root_resolves_both_layouts(tmp_path, ticker):
     assert resolve_corpus_root(tmp_path, ticker) == tmp_path  # single-company folder
     (tmp_path / ticker).mkdir()
     assert resolve_corpus_root(tmp_path, ticker) == tmp_path / ticker
+
+
+def test_the_audit_section_says_it_did_not_run_when_no_model_is_usable(
+    monkeypatch, tmp_path
+):
+    """A missing audit file reads like a clean audit; the section must say why."""
+    from tradingagents.graph.trading_graph import _ModelUnavailable
+
+    monkeypatch.setenv("TRADINGAGENTS_RESEARCH_DIR", str(tmp_path))
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"data_cache_dir": str(tmp_path)}
+    graph.quick_thinking_llm = None
+
+    def no_model(*args, **kwargs):
+        raise _ModelUnavailable(
+            "MODEL UNAVAILABLE: the spec at 4062.T.json failed its checks "
+            "(scenario Base is on another year)"
+        )
+
+    monkeypatch.setattr(graph, "_research_model", no_model)
+    text = graph.report_audit({"trade_date": "2026-11-02"}, "4062.T")
+
+    assert "did not run" in text
+    assert "no usable research model" in text
+    assert "failed its checks" in text
+    assert "\n" not in text          # one line: it is a report section, not a stack trace
+
+
+def test_prepare_final_state_marks_the_unavailable_model_in_the_header(
+    monkeypatch, tmp_path
+):
+    """The audit section and the header must not disagree about the model."""
+    from tradingagents.graph.trading_graph import _ModelUnavailable
+
+    monkeypatch.setenv("TRADINGAGENTS_RESEARCH_DIR", str(tmp_path))
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"data_cache_dir": str(tmp_path)}
+
+    def no_model(*args, **kwargs):
+        raise _ModelUnavailable("MODEL UNAVAILABLE: the spec failed its checks")
+
+    monkeypatch.setattr(graph, "_research_model", no_model)
+    state = {"trade_date": "2026-11-02", "research_model_path": ""}
+
+    graph.prepare_final_state(state, "4062.T")
+
+    assert state["research_model_source"] == "unavailable"
+    assert state["spec_compatibility"] == "unavailable"
+    assert "1c_audit" in state["spec_compatibility_reason"]
+
+
+def test_the_case_table_can_be_rebuilt_from_the_review_transcript(monkeypatch, tmp_path):
+    """A state without debate_cases still publishes the cases its review appended."""
+    from tradingagents.research import kernel
+    from tradingagents.research.schemas import (
+        Financials,
+        ModelSpec,
+        Period,
+        Scenario,
+        ShareBase,
+        ValuationSpec,
+    )
+    from tradingagents.research.valuation import value
+
+    spec = ModelSpec(
+        ticker="TEST", company="Test", currency="USD", unit="USD_m",
+        fiscal_year_end_month=12,
+        periods=[Period("FY24", "2024-01-01", "2024-12-31", "actual"),
+                 Period("FY25", "2025-01-01", "2025-12-31", "forecast")],
+        actuals={"FY24": Financials(revenue=100.0, operating_profit=10.0, net_profit=6.0)},
+        guidance={},
+        forecast={"FY25": Financials(revenue=120.0, operating_profit=15.0, net_profit=9.0)},
+        bridges=[],
+        share_bases=[ShareBase("basic", 10.0)],
+        scenarios=[Scenario("Base", "steady", eps=0.9, multiple=10.0, period="FY25"),
+                   Scenario("Bear", "weak", eps=0.8, multiple=10.0, period="FY25")],
+        valuation=ValuationSpec(price=9.0, fair_value_multiple_low=10.0,
+                                fair_value_multiple_high=12.0, fair_value_period="FY25"),
+    )
+    model = kernel.run(spec)
+    valuation = value(model)
+
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"data_cache_dir": str(tmp_path)}
+    monkeypatch.setattr(graph, "_research_model", lambda *a, **k: (model, valuation, "spec.json"))
+    state = {
+        "investment_debate_state": {
+            "challenge_history": (
+                'review\n{"stance": "aggressive", "probability": 0.3, "revenue_pct": 1.0, '
+                '"operating_profit_pct": 1.0, "multiple": 11.0}'
+            )
+        }
+    }
+
+    graph.prepare_final_state(state, "TEST")
+
+    assert "aggressive" in state["case_table"]
+    assert state["debate_cases"]
+
+
+def test_prepare_final_state_builds_the_compact_debate_summary():
+    """Round 1 for the reader, later rounds only as material deltas."""
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {}
+    state = {
+        "investment_debate_state": {
+            "first_review": "ROUND ONE",
+            "last_review": "DELTA",
+            "count": 2,
+            "unresolved_issue": "Q3 operating profit",
+        }
+    }
+
+    graph.prepare_final_state(state, "TEST")
+
+    summary = state["debate_summary"]
+    assert summary.startswith("### Round 1")
+    assert "ROUND ONE" in summary
+    assert "### Subsequent Material Update" in summary
+    assert "DELTA" in summary
+    assert "### Remaining Unresolved Issue" in summary
+    assert "Q3 operating profit" in summary
+    assert state["research_rounds_used"] == 2
+
+
+def test_a_no_material_update_delta_is_not_published_as_a_subsequent_update():
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {}
+    state = {
+        "investment_debate_state": {
+            "first_review": "ROUND ONE",
+            "last_review": "NO MATERIAL UPDATE",
+            "count": 2,
+            "unresolved_issue": "Q3",
+        }
+    }
+
+    graph.prepare_final_state(state, "TEST")
+
+    assert "Subsequent Material Update" not in state["debate_summary"]
+
+
+def test_a_missing_case_table_is_reported_not_silently_omitted():
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {}
+    state = {
+        "investment_debate_state": {"first_review": "ROUND ONE"},
+        "research_model_source": "built",
+    }
+
+    graph.prepare_final_state(state, "TEST")
+
+    assert "No case table" in state["case_table"]
+
+
+def test_the_audit_does_not_run_when_no_model_was_used(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADINGAGENTS_RESEARCH_DIR", str(tmp_path))
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"data_cache_dir": str(tmp_path)}
+    called = []
+    monkeypatch.setattr(graph, "_research_model", lambda *a, **k: called.append(1))
+    state = {"research_model_source": "unavailable", "trade_date": "2026-11-03"}
+
+    graph.prepare_final_state(state, "TEST")
+
+    assert called == []                       # no old spec is opened for the audit
+    assert "did not run" in state["report_audit"]
+    assert "no research model was used" in state["report_audit"]
+
+
+def test_conflicting_intermediate_decisions_are_named():
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {}
+    state = {
+        "final_rating": "Hold",
+        "final_trade_decision": "**Rating**: Hold\n\n| New investor | Wait |",
+        "investment_plan": "**Recommendation**: Buy\n\nBull case.",
+        "trader_investment_plan": "**Action**: Buy\n\nBuy now.",
+        "portfolio_context": "",
+    }
+
+    graph.prepare_final_state(state, "TEST")
+
+    assert any("Research Manager" in item for item in state["decision_conflicts"])
+    assert any("Trader proposed Buy" in item for item in state["decision_conflicts"])
+    assert "**Superseded intermediate decisions**" in state["final_trade_decision"]
+    assert state["stage_status"] == {
+        "research_manager": "completed_appendix_only",
+        "trader": "completed_appendix_only",
+        "portfolio_manager": "completed_main_report",
+    }
+    assert state["controlling_decision"] == "portfolio_manager"
+
+
+def test_the_stale_model_is_rendered_for_comparison_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRADINGAGENTS_RESEARCH_DIR", str(tmp_path))
+    (tmp_path / "model.json").write_text(json.dumps(_spec(tmp_path)), encoding="utf-8")
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"data_cache_dir": str(tmp_path / "cache")}
+
+    path, package = graph._stale_model_reference("TEST", "2026-11-03")
+
+    assert path.endswith("model.json")
+    assert "STALE MODEL" in package
+    assert "NOT USED" in package
+
+
+def test_a_used_model_keeps_its_provenance_when_the_audit_cannot_run(monkeypatch, tmp_path):
+    """The model was loaded and its figures used; a later audit failure is not an outage."""
+    monkeypatch.setenv("TRADINGAGENTS_RESEARCH_DIR", str(tmp_path))
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {"data_cache_dir": str(tmp_path)}
+    monkeypatch.setattr(
+        graph,
+        "report_audit",
+        lambda *a, **k: "The number audit did not run: no usable research model was available.",
+    )
+    state = {
+        "trade_date": "2026-11-03",
+        "research_model_source": "reused",
+        "spec_compatibility": "compatible",
+        "research_model_path": "C:/x/4062.T.json",
+    }
+
+    graph.prepare_final_state(state, "4062.T")
+
+    assert state["research_model_source"] == "reused"
+    assert state["spec_compatibility"] == "compatible"
+    assert state["report_audit"].startswith("The number audit did not run")
+
+
+def test_a_fallback_decision_is_marked_degraded_and_its_sizing_qualified():
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {}
+    state = {
+        "final_trade_decision": "**Rating**: Underweight\n\nTrim to 2.5% of the sleeve.",
+        "trader_investment_plan": "Reduce to 50% in two tranches.",
+        "structured_fallbacks": {"Trader": "ValueError: no parsed result"},
+        "portfolio_context": "",
+    }
+
+    graph._apply_decision_integrity(state)
+
+    assert state["decision_integrity"].startswith("DEGRADED")
+    assert "Trader" in state["decision_integrity"]
+    assert "**Sizing note**" in state["final_trade_decision"]
+    assert "**Decision integrity**" in state["final_trade_decision"]
+
+    before = state["final_trade_decision"]
+    graph._apply_decision_integrity(state)
+    assert state["final_trade_decision"] == before      # idempotent
+
+
+def test_a_clean_decision_is_marked_validated():
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = {}
+    state = {
+        "final_trade_decision": "**Rating**: Hold\n\nNo position change.",
+        "trader_investment_plan": "Hold.",
+        "portfolio_context": "Current position in NVDA: 100 units",
+    }
+
+    graph._apply_decision_integrity(state)
+
+    assert state["decision_integrity"] == "validated"
+    assert "**Decision integrity**" not in state["final_trade_decision"]
 
 
 

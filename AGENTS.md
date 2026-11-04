@@ -63,9 +63,84 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
 - `TRADINGAGENTS_REBUILD_MODEL=1` builds a new spec from the corpus;
   `TRADINGAGENTS_RESEARCH_MODEL` points at a spec; `TRADINGAGENTS_MODEL_PRICE` overrides
   the valuation price. A failed build writes `<TICKER>.failed.json` beside the spec.
+- Repair gate: before the Adversarial Reviewer runs (inside its node entry, no new graph
+  node), the Fundamentals Analyst's report is mined for explicit model defects
+  (`research/repair.py`), scalar corrections are applied to a copy of the spec and
+  revalidated by the kernel, and a v2 spec is written as `<TICKER>.v2.json`. The audit then
+  accepts v2, classifies a v1-only figure whose field changed as **superseded** (not a
+  failure), and the debate reads the v2 package plus a repair note. A structural challenge
+  is recorded as unresolved; a blocking one that cannot be applied marks the model
+  unavailable. `active_model_version` makes the gate idempotent.
+- Fidelity checks that outrank prose: `research/periods.py` derives the canonical fiscal
+  label from the period's own dates, `research/shares.py` names the share basis behind the
+  market cap and the forecast EPS (and warns when they diverge), and
+  `research/conflicts.py` records guidance/consensus/model disagreements at 0.5%. All three
+  surface as warnings or a package table; none changes a computed number.
+- Sensitivities (`research/sensitivity.py`): a bridge line with a `driver` and an
+  `alternative` is shocked one at a time and ranked by fair-value impact; a line without
+  both is a research gap, never a proxy. The ranked table is part of the research package,
+  and the reviewer must cite a `Decisive sensitivity ID` from it (one retry, then
+  "not established").
+- PM traceability: a published controlling range must match the active model band or a
+  reproducible `valuation_override`; a rejected scenario cannot supply a bound. An
+  untraceable range is cleared and the decision is provisional, never silently published.
+  Repair conclusions replace superseded ones in the decision; superseded figures and
+  conclusions are appendix-only.
+- UNVERIFIED means unavailable for decision use, not available with a warning. The
+  downstream packet drops the model package, cases, metrics and ranked sensitivities
+  (`research/packets.py`), withholds the Fundamentals report (it was written against the
+  model), and the PM returns a deterministic Not Rated / Provisional decision unless an
+  audited event basis (merger, delisting, insolvency, accounting breach, suspension) is
+  present. The header names the blocking challenge, its fields, the verification result
+  and the publication impact.
+- Output statuses are derived, not asserted (`research/dependencies.py`): each output
+  declares its inputs, and a failed input suppresses only its dependents — an unverified
+  EPS basis suppresses P/E and per-share targets while EV/EBITDA stays verified. The
+  header prints every component plus `Overall research status: PARTIALLY VERIFIED`.
+- A directional call without a verified valuation must pass `research/decision_audit.py`:
+  zero suppressed figures, three independent evidence clusters (one `underlying_driver_id`
+  per fact), a cash-flow/balance-sheet/event or severe-operating leg (sector thresholds in
+  `default_config.severity_thresholds`), two independent primary disclosures, and stated
+  horizon/confirmation/invalidation. Failing Sell normalises to Reduce or Hold and the
+  decision is PROVISIONAL. `decision_basis` technical cannot publish a fundamental rating.
+- A Trader that misses the schema twice is `trader_status = advisory`: its levels, size
+  and target are scrubbed and the decision integrity says so.
+- Computed analyst figures may be marked `[[computed: 130 = 13/10*100]]`. The audit
+  evaluates only arithmetic (numbers, parentheses, + - * / and signs); a formula that
+  reproduces the figure joins the known values, and one that does not is a `computed`
+  finding. A correct ratio whose attribution is incomplete — an operating-profit delta
+  over a revenue delta with a multi-line bridge — is an `attribution` warning, never a
+  failed figure.
+- Company facts live only in `tests/fixtures/<ticker>/`; production code names no plant,
+  customer, project or share count. The fixtures at least cover an industrial case
+  (`4062.T`) and a synthetic bank, and the bank proves that P/E and EV/EBITDA verify
+  independently.
+- Capital structure (`research/capital.py`): an optional ledger on the spec — issued,
+  treasury, current net, per-period basic/diluted weighted averages, post-period issuance,
+  buybacks, treasury cancellations, convertibles with conversion dates, splits. Current
+  net shares drive the market cap; forecast EPS uses the period's weighted average (split
+  history restates pre-split periods); the dilution sensitivity uses full conversion.
+  An undated convertible is unresolved timing, not eligibility: the forecast EPS count is
+  withheld rather than silently diluted. A stated net must equal issued − treasury, and a
+  cancellation requires a treasury balance. Absent the ledger, the named `ShareBase`
+  entries remain the source of truth. Every field is additive and `None` means
+  "not established".
+- Two valuation methods are status-independent: P/E needs forecast EPS, EV/EBITDA needs
+  EBITDA (operating profit + D&A), net debt and `ev_ebitda_multiple`. EV is
+  `multiple x EBITDA`; equity is `EV - net debt` once. An unverified EPS basis removes
+  EPS, P/E, the P/E case table and the PM's controlling band from the decision inputs,
+  while EV/EBITDA stays usable. The per-share EV target uses `equity_value_share_basis`
+  and is the only EV output a missing share basis suppresses.
+- Net debt is derived, never asserted: the spec carries `NetDebt` with gross debt, cash
+  and equivalents, lease liabilities plus treatment, minority interest plus treatment,
+  and source refs. `components_verified()` requires gross debt and cash; a legacy single
+  figure loads as `reported_net_debt` for display but cannot feed a verified EV/EBITDA.
+  A missing component is never defaulted to zero — the builder refuses a bare number and
+  EV/EBITDA becomes UNAVAILABLE on its own, leaving P/E untouched. The EV/EBITDA multiple
+  is `analyst_assumption` with a rationale and refs, never presented as company-reported.
 - Debate cases: the Adversarial Reviewer appends both capped deltas
   (aggressive + bearish, `research/cases.py`); the managers get the model and the
-  case table. Caps are ±5% on revenue/operating profit, ±20% on the multiple.
+  case table. Caps are ±25% on revenue/operating profit, ±20% on the multiple.
 - Reported actuals come from the vendor's annual statement (`research/vendor_facts.py`),
   not from the model: a fiscal year is used only when it ended at least 90 days before
   the run date, and a >25% disagreement is treated as a scale/currency error and refused.

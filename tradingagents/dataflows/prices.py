@@ -26,12 +26,27 @@ def parse_last_close(text: str) -> float | None:
         return None
     try:
         reader = csv.DictReader(rows)
-        if not reader.fieldnames or "Close" not in reader.fieldnames:
+        fields = {name.lower(): name for name in (reader.fieldnames or [])}
+        close_key = fields.get("close")
+        date_key = fields.get("date") or fields.get("timestamp")
+        if close_key is None:
             return None
-        last = None
+        dated: list[tuple[str, str]] = []
+        undated: list[str] = []
         for row in reader:
-            last = row
-        return float(last["Close"]) if last and last.get("Close") else None
+            value = row.get(close_key)
+            if not value:
+                continue
+            stamp = row.get(date_key) if date_key else ""
+            if stamp:
+                dated.append((str(stamp), value))
+            else:
+                undated.append(value)
+        # Vendors disagree on row order (Alpha Vantage is newest-first), so the
+        # latest close is the greatest date, not the last row.
+        if dated:
+            return float(max(dated, key=lambda item: item[0])[1])
+        return float(undated[-1]) if undated else None
     except (csv.Error, KeyError, TypeError, ValueError):
         return None
 

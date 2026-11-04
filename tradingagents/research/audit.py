@@ -18,6 +18,7 @@ removes the brackets before the report is written, so the reader never sees them
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 
@@ -42,7 +43,12 @@ class Finding:
     number: float
     context: str
     kind: str = "figure"     # "figure" = misquoted model value; "relation" = a
-                             # comparative claim contradicted by its own operands
+                             # comparative claim contradicted by its own
+                             # operands; "percentage" = a level's distance from
+                             # the price, recomputed
+    subject: float | None = None
+    object: float | None = None
+    expected: str = ""
 
     def describe(self) -> str:
         return f"{self.section}: {_fmt_number(self.number)} — {self.context}"
@@ -50,6 +56,62 @@ class Finding:
 
 def _fmt_number(value: float) -> str:
     return f"{value:,.0f}" if abs(value) >= 1000 else f"{value:g}"
+
+
+# An analyst's own arithmetic may be marked for checking instead of suppressed:
+# [[computed: 130 = 13/10*100]]. Only arithmetic is evaluated — numbers,
+# parentheses, + - * / and unary sign — never names or calls.
+_COMPUTED = re.compile(
+    r"\[\[\s*computed\s*:\s*([-+]?\d[\d,]*(?:\.\d+)?)\s*=\s*([^\]]+?)\]\]",
+    re.IGNORECASE,
+)
+
+
+def _eval_formula(expression: str) -> float:
+    tree = ast.parse(expression, mode="eval")
+
+    def walk(node) -> float:
+        if isinstance(node, ast.Expression):
+            return walk(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            value = walk(node.operand)
+            return value if isinstance(node.op, ast.UAdd) else -value
+        if isinstance(node, ast.BinOp):
+            left, right = walk(node.left), walk(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                return left / right
+        raise ValueError("only arithmetic is allowed in a computed figure")
+
+    return walk(tree)
+
+
+def extract_computed(text: str) -> tuple[str, set[float], list[tuple[float, str]]]:
+    """Remove computed marks, returning their verified values and failures."""
+    verified: set[float] = set()
+    failures: list[tuple[float, str]] = []
+
+    def replace(match: re.Match) -> str:
+        try:
+            claimed = float(match.group(1).replace(",", ""))
+            value = _eval_formula(match.group(2))
+        except (ValueError, SyntaxError, ZeroDivisionError):
+            failures.append((0.0, match.group(0)))
+            return " "
+        if abs(value - claimed) <= max(0.01, abs(claimed) * 0.001):
+            verified.add(claimed)
+        else:
+            failures.append((claimed, match.group(2).strip()))
+        return " "
+
+    return _COMPUTED.sub(replace, text), verified, failures
 
 
 def marked_figures(text: str) -> list[str]:
@@ -174,7 +236,7 @@ def known_values(model: ModelResult, valuation: Valuation, cases: list[dict] | N
         values.add(round(base.shares_m, 2))
     for scenario in spec.scenarios:
         values.update({
-            round(scenario.eps, 2), round(scenario.multiple, 2), round(scenario.target_price, 2),
+            round(scenario.eps, 2), round(scenario.multiple, 2), round(scenario.resolved_target, 2),
         })
         if scenario.revenue is not None:
             values.add(round(scenario.revenue, 2))
@@ -240,7 +302,7 @@ def _figure_candidates(figure: str) -> list[float]:
     text = _CURRENCY.sub(" ", figure)
     # Only a figure can be a figure: a mark holding a document id or a label
     # ("doc-5803.T-…") must not be matched against the model on its digits.
-    if not re.match(r"[~≈\-−–]?\d", text.strip()):
+    if not re.match(r"[~≈+\-−–]?\d", text.strip()):
         return []
     negative = bool(_SIGNED.search(text))
     match = re.search(r"\d[\d,]*(?:\.\d+)?", text)
@@ -299,14 +361,6 @@ def _line_for(figure: str, lines: list[str]) -> str:
     return figure
 
 
-def _is_percentage(line: str, figure: str) -> bool:
-    """Whether the number, as the line writes it, is followed by a percent sign."""
-    digits = re.escape(re.sub(r"[^\d.,]", "", figure))
-    if not digits:
-        return False
-    return re.search(digits + r"[\d.]*\s*%", line) is not None
-
-
 def audit_text(
     text: str,
     section: str,
@@ -314,38 +368,76 @@ def audit_text(
     *,
     band: tuple[float, float] | None = None,
     stats: dict | None = None,
+    superseded: set[float] | None = None,
 ) -> list[Finding]:
-    """Findings for the marked figures in one section."""
+    """Findings for the marked figures in one section.
+
+    A mark is either checked against the model, counted as a citation (a bare
+    single digit), or skipped because it is a label rather than a number (a
+    document id, a date). Skipped is not checked: the counters in ``stats`` keep
+    the three apart so the rendered audit can say what it actually did.
+
+    ``superseded`` holds the values that changed in a model repair: a figure that
+    matches one was valid when it was written and is no longer current. It is
+    counted apart and never reported as a failure.
+    """
     findings: list[Finding] = []
     seen: set[tuple[float, str]] = set()
+    text, computed, computed_failures = extract_computed(text)
+    known = set(known) | computed
     lines = text.splitlines()
     figures = marked_figures(text)
-    references = sum(1 for figure in figures if _is_reference(figure))
-    if stats is not None:
-        stats.setdefault("sections", {})[section] = len(figures) - references
-        stats["marked"] = stats.get("marked", 0) + len(figures)
-        stats["references"] = stats.get("references", 0) + references
-
+    references = 0
+    skipped = 0
+    checked = 0
     for figure in figures:
         if _is_reference(figure):
-            continue
-        line = _line_for(figure, lines)
-        if _is_percentage(line, figure):
+            references += 1
             continue
         candidates = _figure_candidates(figure)
         if not candidates:
+            # A mark holding a document id or a label carries no number to check.
+            skipped += 1
             continue
+        checked += 1
+        line = _line_for(figure, lines)
         value = candidates[0]
         if band is not None and band[0] <= value <= band[1]:
             continue
         rounded = _is_round_quote(value)
         if any(_matches(candidate, known, round_quote=rounded) for candidate in candidates):
             continue
+        if superseded and any(
+            _matches(candidate, superseded, round_quote=rounded) for candidate in candidates
+        ):
+            # Valid against the model the analyst read, invalid against v2.
+            if stats is not None:
+                stats["superseded"] = stats.get("superseded", 0) + 1
+                stats.setdefault("superseded_values", []).append(value)
+            continue
         key = (value, line)
         if key in seen:   # the same misquote quoted again is one error, not two
             continue
         seen.add(key)
         findings.append(Finding(section, value, line))
+
+    for claimed, formula in computed_failures:
+        findings.append(
+            Finding(
+                section,
+                claimed,
+                f"computed: {formula}",
+                kind="computed",
+                expected="the formula does not reproduce the stated figure",
+            )
+        )
+
+    if stats is not None:
+        stats.setdefault("sections", {})[section] = checked
+        stats["marked"] = stats.get("marked", 0) + len(figures)
+        stats["references"] = stats.get("references", 0) + references
+        stats["skipped"] = stats.get("skipped", 0) + skipped
+        stats["checked"] = stats.get("checked", 0) + checked
     return findings
 
 
@@ -418,10 +510,17 @@ _ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _MM_DD = re.compile(r"\b\d{2}-\d{2}\b")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 _PAGE = re.compile(r"\bp\.\s*\d+\b")
+# "Cell 9", "Phase 2", "Option 3": a numbered label, not a figure to compare.
+_ENTITY_NUMBER = re.compile(
+    r"\b(?:Cell|Phase|Stage|Option|Step|Tranche|Facility|Line)\s+\d+\b", re.IGNORECASE
+)
 _RANGE = re.compile(r"\d[\d,]*(?:\.\d+)?\s?[–—-]\s*\d")     # 6,915–8,644: ambiguous
 _OPERAND = re.compile(
     r"(?<![\w.])(?:[~≈]\s*)?(?:[¥$€£]\s*)?(?:(?:JPY|USD|EUR|GBP|CNY|KRW|TWD)\s+)?"
-    r"([-−]?\d[\d,]*(?:\.\d+)?)\s?(bn|tn|mn|billion|million|trillion|x|%|percent)?",
+    # The number must end in a digit: a trailing comma belongs to the sentence
+    # ("…at 8,045, add on…"), and swallowing it hid the clause boundary that
+    # stops 8,045 from being compared with the next clause's 8,622.
+    r"([-−]?\d(?:[\d,]*\d)?(?:\.\d+)?)\s?(bn|tn|mn|billion|million|trillion|x|%|percent)?",
     re.IGNORECASE,
 )
 _METRIC_KEYWORDS = (
@@ -475,6 +574,327 @@ def _period_table(model: ModelResult) -> dict[str, dict[str, float | None]]:
     return table
 
 
+# --- percentages against the price -----------------------------------------
+# "The 50-day SMA 10,168.07 ... sits 20.9% above price" is wrong when the price
+# is 8,045: the SMA is 26.4% above it. The sentence prints both operands, so the
+# claim is checkable without asking where either number came from.
+
+_PCT_LEVEL = re.compile(
+    r"\b(?:SMA|EMA|VWMA|moving average|average)\b[^\d]{0,16}"
+    # The number must be a level, not the claim's own percentage: "the 200 SMA
+    # is only 3.4% below spot" has no level printed, and reading 3.4 as one
+    # reported a -100% miss every time a debater quoted another's percentage.
+    r"(?P<level>\d[\d,]*(?:\.\d+)?)(?!\s*%)",
+    re.IGNORECASE,
+)
+_PCT_VS_PRICE = re.compile(
+    r"(?P<pct>\d+(?:\.\d+)?)\s*%\s*(?P<direction>above|below)\s+"
+    r"(?:the\s+)?(?:current\s+)?(?:price|spot|close)",
+    re.IGNORECASE,
+)
+
+
+def percentage_findings(text: str, section: str, price: float | None) -> list[Finding]:
+    """Claims that an indicator sits X% above/below the price, recomputed.
+
+    Conservative by construction: the sentence must name the indicator and its
+    level, and must say "above/below price|spot|close". A percentage against a
+    level ("3.4% above the 200-day SMA") is a different statement and is skipped.
+    """
+    if not price:
+        return []
+    findings: list[Finding] = []
+    for sentence in _sentences(text):
+        claim = _PCT_VS_PRICE.search(sentence)
+        if claim is None:
+            continue
+        level_match = None
+        for candidate in _PCT_LEVEL.finditer(sentence):
+            if candidate.start() < claim.start():
+                level_match = candidate
+        if level_match is None:
+            continue
+        try:
+            level = float(level_match.group("level").replace(",", ""))
+            claimed = float(claim.group("pct")) / 100
+        except ValueError:
+            continue
+        if level <= 0 or level == price:
+            continue
+        # A price level sits within an order of magnitude of the run price; a
+        # small integer read as a level is a period count or a stray figure.
+        if level < price * 0.05 or level > price * 20:
+            continue
+        if claim.group("direction").lower() == "below":
+            claimed = -claimed
+        expected = level / price - 1
+        if (expected > 0) != (claimed > 0) or abs(expected - claimed) > max(
+            0.01, abs(expected) * 0.10
+        ):
+            findings.append(
+                Finding(
+                    section,
+                    float(claim.group("pct")),
+                    " ".join(sentence.split())[:400],
+                    kind="percentage",
+                    subject=level,
+                    object=price,
+                    expected=f"{expected * 100:+.1f}%",
+                )
+            )
+    return findings
+
+
+def fix_percentage_claims(text: str, price: float | None) -> tuple[str, int]:
+    """Rewrite a wrong "X% above/below price" claim to the measured value.
+
+    Arithmetic, not prose: the level and the price are in the text, so the
+    percentage can be corrected in place. Used before any model repair, so a
+    repair pass is only asked for the claims that need judgement.
+    """
+    if not price:
+        return text, 0
+    fixes: list[tuple[int, int, str]] = []
+    claims = 0
+    for claim in _PCT_VS_PRICE.finditer(text):
+        start = max(text.rfind(". ", 0, claim.start()), text.rfind("\n", 0, claim.start()))
+        levels = list(_PCT_LEVEL.finditer(text, start, claim.start()))
+        if not levels:
+            continue
+        level_match = levels[-1]
+        try:
+            level = float(level_match.group("level").replace(",", ""))
+            claimed_pct = claim.group("pct")
+            claimed = float(claimed_pct) / 100
+        except ValueError:
+            continue
+        if level <= 0 or level == price:
+            continue
+        direction = claim.group("direction").lower()
+        if direction == "below":
+            claimed = -claimed
+        expected = level / price - 1
+        if abs(expected - claimed) <= max(0.01, abs(expected) * 0.10):
+            continue
+        decimals = 1 if "." in claimed_pct else 0
+        fixes.append((claim.start("pct"), claim.end("pct"),
+                      f"{abs(expected) * 100:.{decimals}f}"))
+        new_direction = "above" if expected > 0 else "below"
+        if new_direction != direction:
+            fixes.append((claim.start("direction"), claim.end("direction"), new_direction))
+        claims += 1
+    if not fixes:
+        return text, 0
+    for start, end, replacement in sorted(fixes, reverse=True):
+        text = text[:start] + replacement + text[end:]
+    return text, claims
+
+
+# --- grounding and terminology warnings -------------------------------------
+# A warning, not a rejection: the reviewer's sentence may be correct, but a number
+# with no evidence-class tag cannot be traced to the current run.
+
+_EVIDENCE_TAG = re.compile(
+    r"\[(?:fundamental|valuation|technical|news_sentiment|portfolio_action)\]",
+    re.IGNORECASE,
+)
+_NUMERIC_CLAIM = re.compile(
+    r"[¥$€£]\s?\d|"
+    r"\b\d[\d,]*(?:\.\d+)?\s*(?:%|x\b|bn\b|tn\b|mn\b|bp\b|bps\b|percent\b)|"
+    r"\b\d{1,3}(?:,\d{3})+\b|"
+    r"\b\d+\.\d+\b"
+)
+_INTERESTING_PCT = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*%")
+
+
+def _first_number(sentence: str) -> float:
+    match = re.search(r"\d[\d,]*(?:\.\d+)?", sentence)
+    if not match:
+        return 0.0
+    try:
+        return float(match.group(0).replace(",", ""))
+    except ValueError:
+        return 0.0
+
+
+def grounding_findings(text: str, section: str = "Adversarial Reviewer") -> list[Finding]:
+    """Numerical sentences in the review with no evidence-class tag.
+
+    Only the tag is checked: deciding whether the number itself is right needs the
+    whole provenance machinery, and a false finding is worse than a warning. A
+    marked figure (``[[229.5]]``) needs no tag: it names the model as its source.
+    """
+    findings: list[Finding] = []
+    seen: set[str] = set()
+    for sentence in _sentences(text):
+        if _EVIDENCE_TAG.search(sentence) or _MARK.search(sentence):
+            continue
+        if not _NUMERIC_CLAIM.search(sentence):
+            continue
+        context = " ".join(sentence.split())[:400]
+        if context in seen:
+            continue
+        seen.add(context)
+        findings.append(
+            Finding(
+                section,
+                _first_number(sentence),
+                context,
+                kind="grounding",
+                expected="no evidence-class tag",
+            )
+        )
+    return findings
+
+
+def terminology_findings(text: str, metrics, section: str, bridge_line_count: int = 0) -> list[Finding]:
+    """Sentences that call an operating-profit growth rate an incremental margin."""
+    growth = {
+        round(row.op_growth * 100, 1)
+        for row in metrics
+        if row.op_growth is not None
+    }
+    incremental = {
+        round(row.incremental_margin * 100, 1)
+        for row in metrics
+        if row.incremental_margin is not None
+    }
+    findings: list[Finding] = []
+    seen: set[str] = set()
+    for sentence in _sentences(text):
+        if not re.search(r"incremental", sentence, re.IGNORECASE):
+            continue
+        candidates = set(growth)
+        # A growth rate printed in the same sentence is the likely source of the
+        # mislabel ("operating profit +97% ... a 97% incremental margin").
+        for match in re.finditer(
+            r"(?:operating profit|op)\b[^.;]{0,60}?"
+            r"(?:grew|grow|growing|rose|rise|rising|increased?|increasing|"
+            r"jumped|advanced|expanded|surged|up|\+)\s*(?:by\s*)?"
+            r"([+-]?\d+(?:\.\d+)?)\s*%",
+            sentence,
+            re.IGNORECASE,
+        ):
+            try:
+                candidates.add(abs(float(match.group(1))))
+            except ValueError:
+                continue
+        if re.search(r"\b(?:nearly|almost|roughly|about|more than)?\s*doubled\b",
+                     sentence, re.IGNORECASE):
+            candidates.update({85.0, 90.0, 95.0, 97.0, 100.0})
+        if re.search(r"\btripled\b", sentence, re.IGNORECASE):
+            candidates.update({180.0, 190.0, 200.0})
+        labels = list(re.finditer(r"incremental", sentence, re.IGNORECASE))
+        percentages = list(_INTERESTING_PCT.finditer(sentence))
+        if not labels or not percentages:
+            continue
+        for label in labels:
+            # Only the percentage the word "incremental" labels: the nearest one,
+            # either side ("97% incremental margin", "incremental margin of 39%").
+            nearest = min(
+                percentages,
+                key=lambda pct: min(
+                    abs(pct.end() - label.start()), abs(label.end() - pct.start())
+                ),
+            )
+            # A margin named AFTER the label ("incremental operating margin of
+            # ~39%") is the figure being labelled. The growth rate printed before
+            # it is not: preferring raw proximity flagged 13.1% revenue growth
+            # beside a correctly-labelled 39% margin.
+            margin_after = re.search(
+                r"\bmargin\b", sentence[label.end():label.end() + 60], re.IGNORECASE
+            )
+            if margin_after:
+                margin_pos = label.end() + margin_after.start()
+                following = [
+                    pct for pct in percentages
+                    if label.end() <= pct.start() <= margin_pos + 30
+                ]
+                if following:
+                    nearest = following[0]
+            gap = min(abs(nearest.end() - label.start()), abs(label.end() - nearest.start()))
+            if gap > 25:
+                continue
+            phrase = sentence[min(nearest.start(), label.start()):
+                              max(nearest.end(), label.end()) + 30]
+            if not re.search(r"\b(?:margin|contribution)\b", phrase, re.IGNORECASE):
+                continue                       # "incremental capacity", not a margin
+            try:
+                value = float(nearest.group(1))
+            except ValueError:
+                continue
+            # Only an exact match to a published growth rate counts: a value 1.3
+            # points away (41% H1 incremental margin vs 39.7% FY3/28 op growth)
+            # is a different quantity, and flagging it made four false findings
+            # in the 16:59 report.
+            labelled_growth = any(abs(value - candidate) <= 0.5 for candidate in candidates)
+            too_high = value >= 90.0
+            if too_high and not labelled_growth and _reproduces_incremental(sentence, value):
+                if bridge_line_count >= 2:
+                    # The ratio is arithmetically right; the attribution is not.
+                    # That is a warning, never a failed figure.
+                    context = " ".join(sentence.split())[:400]
+                    if context not in seen:
+                        seen.add(context)
+                        findings.append(
+                            Finding(
+                                section,
+                                value,
+                                context,
+                                kind="attribution",
+                                expected=(
+                                    "the profit difference cannot be explained by the revenue "
+                                    "difference alone; reconcile margin, mix, utilization, "
+                                    "pricing, yield, depreciation or ramp costs"
+                                ),
+                            )
+                        )
+                continue                       # 13 / 10 = 130%: arithmetically correct
+            if not labelled_growth and not too_high:
+                continue
+            if any(abs(value - candidate) <= 1.5 for candidate in incremental):
+                continue                       # it really is the incremental margin
+            context = " ".join(sentence.split())[:400]
+            if context in seen:
+                continue
+            seen.add(context)
+            findings.append(
+                Finding(
+                    section,
+                    value,
+                    context,
+                    kind="terminology",
+                    expected=(
+                        "this is an operating-profit growth rate, not an incremental margin"
+                        if labelled_growth
+                        else "an incremental margin above 90% is implausible; verify the label"
+                    ),
+                )
+            )
+            break
+    return findings
+
+
+def _reproduces_incremental(sentence: str, value: float) -> bool:
+    """Whether two figures in the sentence produce ``value`` as their ratio x 100.
+
+    "an implied 130% incremental margin" beside "+10 revenue and +13 operating
+    profit" is a correctly labelled margin, however implausible; the >90% rule
+    exists to catch a growth rate relabelled as a margin, not this.
+    """
+    numbers: list[float] = []
+    for token in re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)", sentence):
+        try:
+            numbers.append(float(token))
+        except ValueError:
+            continue
+    for numerator in numbers:
+        for denominator in numbers:
+            if denominator and abs(numerator / denominator * 100 - value) <= 2:
+                return True
+    return False
+
+
 def _sentences(text: str):
     """Prose sentences: table rows are column structure, not claims."""
     for line in text.splitlines():
@@ -495,6 +915,7 @@ def _sentences(text: str):
 def _clean(sentence: str, *, keep_labels: bool = False) -> str:
     """Noise-free sentence. Tier 2 keeps fiscal labels — they are its object."""
     text = strip_marks(sentence)
+    text = _ENTITY_NUMBER.sub(" ", text)
     text = _CITATION_SPAN.sub(" ", text)
     if not keep_labels:
         text = _FISCAL_LABEL.sub(" ", text)
@@ -566,6 +987,20 @@ def _violates(direction: int, first: float, second: float, hedged: bool) -> bool
     return first > second * (1 + margin)
 
 
+def _slash_between(text: str, operands: list[tuple], operand: tuple) -> bool:
+    """Whether ``operand`` is the other half of a slash-joined pair.
+
+    "revenue/operating profit of 680.0/190.0 sits above 650.0/165.0" compares
+    two ordered pairs, not 190 with 650. A '/' between neighbours is the marker.
+    """
+    for left, right in zip(operands, operands[1:], strict=False):
+        if (operand is left or operand is right) and re.fullmatch(
+            r"\s*/\s*", text[left[1]:right[0]]
+        ):
+            return True
+    return False
+
+
 def _tier_one(cleaned: str) -> tuple[float, float] | None:
     if _RANGE.search(cleaned):
         return None                      # "the 6,915–8,644 band above 8,000": which end?
@@ -591,8 +1026,16 @@ def _tier_one(cleaned: str) -> tuple[float, float] | None:
         # not a subject; for a verbal claim it is a delta when an earlier
         # same-unit figure sits behind it.
         gap = cleaned[subject[1]:start]
-        if re.search(r"[,;:()\[\]]|\b(?:and|or|but|yet|while|whereas|then|plus)\b",
-                     gap, re.IGNORECASE):
+        # A participle opens a new clause about a trajectory ("350bn ... rising
+        # above 400bn thereafter"), so the figure before it is not the subject of
+        # the comparison. Finite forms ("rose above 100") stay comparable.
+        if re.search(
+            r"[,;:()\[\]]|\b(?:and|or|but|yet|while|whereas|then|plus|"
+            r"ris(?:e|es|ing)|fall(?:s|ing)|grow(?:s|ing)|climb(?:s|ing)|"
+            r"declin(?:e|es|ing)|increas(?:e|es|ing)|decreas(?:e|es|ing))\b",
+            gap,
+            re.IGNORECASE,
+        ):
             return None
         welded = not gap.strip(" \t*_—–`#")
         if welded and lemma not in _APPOSITIVE:
@@ -606,7 +1049,11 @@ def _tier_one(cleaned: str) -> tuple[float, float] | None:
         if lemma not in _APPOSITIVE or len(after) < 2:
             return None                  # prepositional object with no numeric subject
         subject, object_ = after[0], after[1]
-
+    # Two ordered pairs joined by "/" ("revenue/operating profit of 680.0/190.0
+    # sits above 650.0/165.0") compare tuple positions, not the two inner
+    # numbers: pairing 190 with 650 reported a false contradiction in every run.
+    if _slash_between(cleaned, operands, subject) or _slash_between(cleaned, operands, object_):
+        return None
     pair = _pair(subject, object_)
     if pair is None:
         return None
@@ -635,16 +1082,30 @@ def _tier_two(cleaned: str,
 
     subject = None
     metric = None
+    best_end = -1
     for name, keywords in _METRIC_KEYWORDS:
         for match in keywords.finditer(cleaned[:start]):
-            attached = [operand for operand in _operands(cleaned) if match.end() <= operand[0] < start]
-            if attached:
+            if start - match.end() > 80:
+                continue                 # too far from the claim to be its subject
+            attached = [
+                operand
+                for operand in _operands(cleaned)
+                if match.end() <= operand[0] < start and operand[0] - match.end() <= 30
+            ]
+            if attached and match.end() > best_end:
+                # The metric nearest the predicate is the claim's subject; taking
+                # the first keyword in a fixed order paired "net profit ~118" with
+                # a period introduced by a later "capex above …" clause.
+                best_end = match.end()
                 subject, metric = attached[0], name
-                break
-        if subject is not None:
-            break
     if subject is None:
         return None                      # no figure is tied to a metric before the claim
+    # The subject must be in the claim's own clause. "net profit ~118 + D&A ~90 -
+    # capex ~350), capex above JPY400bn in FY3/29" pairs net profit with FY3/29
+    # across a comma; the claim there is about capex, which is not a model metric.
+    if re.search(r"[,;:()\[\]]|\b(?:and|but|or)\b",
+                 cleaned[subject[1]:start], re.IGNORECASE):
+        return None
 
     tail = cleaned[end:]
     labels = sorted(table, key=len, reverse=True)
@@ -656,6 +1117,8 @@ def _tier_two(cleaned: str,
     if found is None:
         return None
     label, label_at = found
+    if label_at - subject[1] > 120:
+        return None                      # the period label belongs to a later clause
     if any(operand[0] < label_at for operand in _operands(tail)):
         return None                      # the object was printed — Tier 1 had its chance
     for name, keywords in _METRIC_KEYWORDS:
@@ -696,47 +1159,69 @@ def relational_findings(text: str, section: str,
             pair = _tier_two(_clean(sentence, keep_labels=True), table, unit)
         if pair is None:
             continue
-        key = " ".join(sentence.split())[:240]
+        key = " ".join(sentence.split())[:400]
         if key in seen:
             continue
         seen.add(key)
-        findings.append(Finding(section, pair[0], key, kind="relation"))
+        first, second = pair
+        expected = (
+            f"{_fmt_number(first)} is {'below' if first < second else 'above'} "
+            f"{_fmt_number(second)}"
+        )
+        findings.append(
+            Finding(section, first, key, kind="relation",
+                    subject=first, object=second, expected=expected)
+        )
     return findings
 
 
 def repair_relations(final_state: dict, findings: list[Finding], ask,
                      *, model: ModelResult) -> list[str]:
-    """One LLM pass per section whose claims contradicted their own figures.
+    """Fix contradicted comparisons, and percentages the arithmetic contradicts.
 
-    The answer is accepted only when the same check passes it: a repair that
-    still fails leaves the original text and the finding stands, so publication
-    can never be worse than the unchecked report. Returns the sections rewritten.
+    Percentages are corrected in place (the level and the price are in the
+    text); only the claims that need judgement go to the model. An answer is
+    accepted only when the same checks pass it, so a repair that still fails
+    leaves the original text and the finding stands. Returns the sections
+    rewritten.
     """
     table = _period_table(model)
     unit = model.spec.unit
-    claims_by_section: dict[str, list[str]] = {}
+    price = model.spec.valuation.price
+    relation_claims: dict[str, list[str]] = {}
+    percentage_claims: dict[str, list[str]] = {}
     for finding in findings:
         if finding.kind == "relation":
-            claims_by_section.setdefault(finding.section, []).append(finding.context)
+            relation_claims.setdefault(finding.section, []).append(finding.context)
+        elif finding.kind == "percentage":
+            percentage_claims.setdefault(finding.section, []).append(finding.context)
 
     changed: list[str] = []
     for section, path in _PROSE_SECTIONS:
-        claims = claims_by_section.get(section)
         text = _state_get(final_state, path)
-        if not claims or not isinstance(text, str):
+        if not isinstance(text, str):
+            continue
+        if percentage_claims.get(section):
+            fixed_text, count = fix_percentage_claims(text, price)
+            if count:
+                _state_set(final_state, path, fixed_text)
+                text = fixed_text
+                changed.append(section)
+        claims = relation_claims.get(section)
+        if not claims:
             continue
         prompt = (
-            "You proofread one section of an investment report. A checker found comparative "
-            "claims that contradict the figures printed beside them: each quoted claim says "
-            "one number exceeds or falls below another when the two figures show the "
-            "opposite (for example, 'H1 net profit of 38.6bn already exceeds all of FY3/26' "
-            "when the full year was 63.7).\n\n"
+            "You proofread one section of an investment report. A checker found comparisons "
+            "that contradict the figures printed beside them: each quoted claim says one "
+            "number exceeds or falls below another when the two figures show the opposite "
+            "(for example, 'H1 net profit of 38.6bn already exceeds all of FY3/26' when the "
+            "full year was 63.7).\n\n"
             "For EACH quoted claim, correct ONLY that sentence: restate the true relationship "
-            "between the two figures using the figures themselves (38.6bn is about 61% of "
-            "63.7bn), or delete the claim if it cannot be corrected from the figures at hand. "
-            "Leave every other sentence, number, table, heading and citation byte-identical. "
-            "Keep the section's language. Return the full corrected section and nothing "
-            "else — no preamble, no code fence.\n\n"
+            "using the figures themselves (38.6bn is about 61% of 63.7bn), or delete the "
+            "claim if it cannot be corrected from the figures at hand. Leave every other "
+            "sentence, number, table, heading and citation byte-identical. Keep the section's "
+            "language. Return the full corrected section and nothing else — no preamble, no "
+            "code fence.\n\n"
             "Claims to fix:\n" + "\n".join(f"- {claim}" for claim in claims)
             + "\n\nSECTION:\n" + str(text)
         )
@@ -752,8 +1237,11 @@ def repair_relations(final_state: dict, findings: list[Finding], ask,
             continue                     # a stub, not the section: never swap prose for less
         if relational_findings(answer, section, table, unit):
             continue                     # still self-contradictory: keep the original
+        if percentage_findings(answer, section, model.spec.valuation.price):
+            continue                     # the percentage still does not match the price
         _state_set(final_state, path, answer)
-        changed.append(section)
+        if section not in changed:
+            changed.append(section)
     return changed
 
 
@@ -763,6 +1251,7 @@ def audit_state(
     valuation: Valuation,
     *,
     stats: dict | None = None,
+    superseded: set[float] | None = None,
 ) -> list[Finding]:
     """Audit the marked figures in the sections a run writes for a reader.
 
@@ -795,7 +1284,7 @@ def audit_state(
         text = final_state.get(key)
         if isinstance(text, str) and text.strip():
             findings.extend(
-                audit_text(text, section, known, band=band, stats=stats)
+                audit_text(text, section, known, band=band, stats=stats, superseded=superseded)
             )
 
     table = _period_table(model)
@@ -803,46 +1292,98 @@ def audit_state(
         text = _state_get(final_state, path)
         if isinstance(text, str) and text.strip():
             findings.extend(relational_findings(text, section, table, model.spec.unit))
+            findings.extend(percentage_findings(text, section, valuation.price))
+
+    review = _state_get(final_state, ("investment_debate_state", "first_review"))
+    if isinstance(review, str) and review.strip():
+        findings.extend(grounding_findings(review))
+
+    from .metrics import period_metrics
+
+    metrics = period_metrics(model)
+    bridge_lines = max(
+        (len(bridge.lines) for bridge in model.spec.bridges
+         if bridge.metric == "operating_profit"),
+        default=0,
+    )
+    if metrics:
+        for section, path in _PROSE_SECTIONS:
+            text = _state_get(final_state, path)
+            if isinstance(text, str) and text.strip():
+                findings.extend(
+                    terminology_findings(text, metrics, section, bridge_lines)
+                )
     return findings
 
 
 def render(findings: list[Finding], stats: dict | None = None) -> str:
     """The audit file's text, including what was actually checked."""
-    figures = [finding for finding in findings if finding.kind != "relation"]
+    figures = [
+        finding
+        for finding in findings
+        if finding.kind not in {"relation", "percentage", "grounding", "terminology",
+                                "attribution", "computed"}
+    ]
     relations = [finding for finding in findings if finding.kind == "relation"]
+    percentages = [finding for finding in findings if finding.kind == "percentage"]
+    grounding = [finding for finding in findings if finding.kind == "grounding"]
+    terminology = [finding for finding in findings if finding.kind == "terminology"]
+    attribution = [finding for finding in findings if finding.kind == "attribution"]
+    computed = [finding for finding in findings if finding.kind == "computed"]
 
     blocks: list[str] = []
     if stats is not None and not stats.get("marked"):
         if not relations:
-            return (
+            blocks.append(
                 "No figure was marked as the model's in this run, so nothing was checked. "
                 "The agents mark a figure they take from the verified model in double square brackets; "
                 "an unmarked report cannot be audited."
             )
-        blocks.append(
-            "No figure was marked as the model's in this run, so no marked figure was checked. "
-            "Comparative claims were still checked against the figures beside them."
-        )
+        else:
+            blocks.append(
+                "No figure was marked as the model's in this run, so no marked figure was checked. "
+                "Comparative claims were still checked against the figures beside them."
+            )
     else:
         marked = int((stats or {}).get("marked", 0))
         sections = (stats or {}).get("sections") or {}
         references = int((stats or {}).get("references", 0))
-        checked = marked - references
+        skipped = int((stats or {}).get("skipped", 0))
+        checked = int((stats or {}).get("checked", marked - references - skipped))
+        failed = len(figures)
         summary = _by_section(sections)
-        if references:
-            summary += (
-                f" {references} mark(s) were plain reference numbers (a bare single digit, "
-                "as the number 6) and were not treated as figures."
+        counters = [
+            f"- Marked: {marked}",
+            f"- Independently checked: {checked}",
+            f"- Reference-only: {references} (plain reference numbers, a bare single digit "
+            "such as 6, are counted, not checked)",
+            f"- Skipped: {skipped} (a label or identifier, not a figure)",
+            f"- Failed: {failed}",
+        ]
+        superseded_count = int((stats or {}).get("superseded", 0))
+        if superseded_count:
+            # Four statuses; valid-unaffected only exists when a v1 field
+            # disappears from v2, so it is normally zero.
+            counters.append(
+                f"- By status: current {max(checked - superseded_count, 0)}, "
+                f"superseded {superseded_count}, valid-unaffected 0, failed {failed}"
             )
 
         if not figures:
             blocks.append(
-                f"All {checked} figure(s) the report marks as the model's were found in the "
-                f"verified model. {summary}"
+                "\n".join(
+                    [
+                        f"All {checked} checked figure(s) were found in the verified model.",
+                        "",
+                        *counters,
+                        "",
+                        summary,
+                    ]
+                ).strip()
             )
         else:
             lines = [
-                f"{len(figures)} marked figure(s) do not match the verified model. "
+                f"{failed} marked figure(s) do not match the verified model. "
                 "Each is either a misquote or an error.",
                 "",
                 "| Section | Figure | Where it appears |",
@@ -853,22 +1394,126 @@ def render(findings: list[Finding], stats: dict | None = None) -> str:
                 lines.append(f"| {finding.section} | {_fmt_number(finding.number)} | {context} |")
             if len(figures) > 30:
                 lines.append(f"| … | | {len(figures) - 30} more |")
-            lines += ["", f"Checked {checked} marked figure(s). {summary}"]
+            lines += ["", *counters, "", summary]
             blocks.append("\n".join(lines))
+
+    superseded_values = sorted({float(v) for v in (stats or {}).get("superseded_values", [])})
+    if superseded_values:
+        blocks.append(
+            "Superseded by the model repair (v2): these figures were correct in the model "
+            "the Fundamentals Analyst read and are no longer current. They are not audit "
+            "failures, and no later section may use them.\n\n"
+            + "\n".join(f"- {_fmt_number(value)}" for value in superseded_values)
+        )
 
     if relations:
         lines = [
-            f"{len(relations)} comparative claim(s) contradict the figures printed beside them. "
-            "Each says one number exceeds or falls below another when the figures show the "
+            f"{len(relations)} comparative claim(s) contradict the figures printed beside them. "            "Each says one number exceeds or falls below another when the figures show the "
             "opposite.",
             "",
-            "| Section | The claim |",
-            "|---|---|",
+            "| Section | The claim | Figures | What the figures say |",
+            "|---|---|---|---|",
         ]
         for finding in relations[:30]:
-            lines.append(f"| {finding.section} | {finding.context.replace('|', chr(92) + '|')} |")
+            claim = finding.context.replace("|", chr(92) + "|")
+            figures = (
+                f"{_fmt_number(finding.subject)} vs {_fmt_number(finding.object)}"
+                if finding.subject is not None and finding.object is not None else "—"
+            )
+            lines.append(
+                f"| {finding.section} | {claim} | {figures} | "
+                f"{finding.expected.replace('|', chr(92) + '|')} |"
+            )
         if len(relations) > 30:
-            lines.append(f"| … | {len(relations) - 30} more |")
+            lines.append(f"| … | | | {len(relations) - 30} more |")
+        blocks.append("\n".join(lines))
+
+    if percentages:
+        lines = [
+            f"{len(percentages)} percentage claim(s) do not match the price they compare with. "
+            "Each states how far a level sits above or below the run price; the level and the "
+            "price are printed in the same sentence.",
+            "",
+            "| Section | The claim | Level vs price | Recomputed |",
+            "|---|---|---|---|",
+        ]
+        for finding in percentages[:30]:
+            claim = finding.context.replace("|", chr(92) + "|")
+            figures_text = (
+                f"{_fmt_number(finding.subject)} vs {_fmt_number(finding.object)}"
+                if finding.subject is not None and finding.object is not None else "—"
+            )
+            lines.append(
+                f"| {finding.section} | {claim} | {figures_text} | {finding.expected} |"
+            )
+        if len(percentages) > 30:
+            lines.append(f"| … | | | {len(percentages) - 30} more |")
+        blocks.append("\n".join(lines))
+
+    if terminology:
+        lines = [
+            f"{len(terminology)} sentence(s) call an operating-profit growth rate an "
+            "incremental margin. Growth is current / prior - 1; incremental margin is "
+            "(change in operating profit) / (change in revenue).",
+            "",
+            "| Section | The claim | Figure | What it is |",
+            "|---|---|---|---|",
+        ]
+        for finding in terminology[:20]:
+            lines.append(
+                f"| {finding.section} | {finding.context.replace('|', chr(92) + '|')} | "
+                f"{_fmt_number(finding.number)}% | {finding.expected} |"
+            )
+        blocks.append("\n".join(lines))
+
+    if computed:
+        lines = [
+            f"{len(computed)} computed figure(s) fail their own arithmetic. The formula "
+            "printed with the mark does not reproduce the stated value.",
+            "",
+            "| Section | Figure | Formula |",
+            "|---|---|---|",
+        ]
+        for finding in computed[:20]:
+            lines.append(
+                f"| {finding.section} | {_fmt_number(finding.number)} | "
+                f"{finding.context.replace('|', chr(92) + '|')} |"
+            )
+        blocks.append("\n".join(lines))
+
+    if attribution:
+        lines = [
+            f"{len(attribution)} incremental-margin claim(s) use a correct ratio whose "
+            "attribution is incomplete. The profit difference cannot be explained by the "
+            "revenue difference alone; reconcile margin, mix, utilization, pricing, yield, "
+            "depreciation or ramp costs. This is a warning, not a failed figure.",
+            "",
+            "| Section | Figure | The claim |",
+            "|---|---|---|",
+        ]
+        for finding in attribution[:20]:
+            lines.append(
+                f"| {finding.section} | {_fmt_number(finding.number)}% | "
+                f"{finding.context.replace('|', chr(92) + '|')} |"
+            )
+        blocks.append("\n".join(lines))
+
+    if grounding:
+        lines = [
+            f"{len(grounding)} numerical sentence(s) in the adversarial review carry no "
+            "evidence-class tag ([fundamental], [valuation], [technical], [news_sentiment]). "
+            "This is a warning, not a rejection: the number may still be correct, but its "
+            "source is not stated.",
+            "",
+            "| Section | The sentence |",
+            "|---|---|",
+        ]
+        for finding in grounding[:20]:
+            lines.append(
+                f"| {finding.section} | {finding.context.replace('|', chr(92) + '|')} |"
+            )
+        if len(grounding) > 20:
+            lines.append(f"| … | {len(grounding) - 20} more |")
         blocks.append("\n".join(lines))
 
     return "\n\n".join(blocks)

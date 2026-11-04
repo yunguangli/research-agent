@@ -201,10 +201,22 @@ class CorpusStore:
         return extracted
 
     def read_document(
-        self, document_id: str, max_chars: int = 20000, *, for_llm: bool = True
+        self, document_id: str, max_chars: int = 20000, *, for_llm: bool = True,
+        as_of: str | None = None,
     ) -> str:
-        """The document text, with a citation header and a licence guard."""
+        """The document text, with a citation header and a licence guard.
+
+        ``as_of`` is the run date: a document published after it is withheld,
+        exactly as the listing and search already withhold it. Reading by id was
+        the one path that could reach a post-cutoff document (#point-in-time).
+        """
         record = self.get(document_id)
+        if as_of and record.published_at and str(record.published_at) > str(as_of):
+            raise CorpusError(
+                f"{record.document_id} was published on {record.published_at}, after the "
+                f"analysis date {as_of}. It is withheld from this run; use the documents "
+                "listed as visible."
+            )
         if record.doc_quality == "reference_output":
             raise CorpusError(
                 f"{record.document_id} is a reference output: a report written about this company. "
@@ -342,10 +354,11 @@ def read_research_document(
     document_id: str,
     max_chars: int = 20000,
     root: str | None = None,
+    as_of: str | None = None,
 ) -> str:
     """Read one corpus document, bounded and citation-headed."""
     store = CorpusStore(root, "")
-    return store.read_document(document_id, max_chars=max_chars, for_llm=True)
+    return store.read_document(document_id, max_chars=max_chars, for_llm=True, as_of=as_of)
 
 
 def search_research_documents(

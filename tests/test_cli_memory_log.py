@@ -40,6 +40,27 @@ def test_record_decision_skips_a_run_without_a_decision(tmp_path):
     assert graph.memory_log.load_entries() == []
 
 
+@pytest.mark.unit
+def test_a_diagnostic_run_writes_no_memory_entry(tmp_path):
+    """A comparison run on an unverified spec must not teach later runs."""
+    graph = _bare_graph(tmp_path)
+    graph.config["run_purpose"] = "comparison"
+    graph.record_decision(
+        "NVDA", "2026-01-10", {"final_trade_decision": "Rating: Buy\n\nBuy NVDA."}
+    )
+    assert graph.memory_log.load_entries() == []
+
+
+@pytest.mark.unit
+def test_a_production_run_still_writes_the_memory_entry(tmp_path):
+    graph = _bare_graph(tmp_path)
+    graph.config["run_purpose"] = "production"
+    graph.record_decision(
+        "NVDA", "2026-01-10", {"final_trade_decision": "Rating: Buy\n\nBuy NVDA."}
+    )
+    assert len(graph.memory_log.load_entries()) == 1
+
+
 # --- the CLI path ----------------------------------------------------------------
 
 class _FakeGraph:
@@ -58,6 +79,9 @@ class _FakeGraph:
 
     def record_decision(self, ticker, trade_date, final_state):
         self.calls.append(("record_decision", ticker, trade_date, final_state.get("final_trade_decision")))
+
+    def prepare_final_state(self, final_state, ticker):
+        self.calls.append(("prepare_final_state", ticker))
 
     def get_graph_args(self, callbacks=None):
         return {}
@@ -146,8 +170,9 @@ def test_cli_run_uses_the_memory_log_like_propagate(tmp_path, monkeypatch):
 
     assert fake.calls == [
         ("create_run_state", "NVDA", "2026-01-10"),
-        # The decision is recorded from the merged stream, before the checkpoint
-        # is cleared, matching propagate().
+        # The audit and case table are prepared before the decision is recorded,
+        # so the memory entry and the report carry the same text (#finding B5).
+        ("prepare_final_state", "NVDA"),
         ("record_decision", "NVDA", "2026-01-10", "Rating: Buy\n\nBuy NVDA."),
         ("clear_checkpoint",),
     ]

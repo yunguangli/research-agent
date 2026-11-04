@@ -11,7 +11,7 @@ import csv
 from pathlib import Path
 
 from .kernel import ModelResult, PeriodRow
-from .schemas import Bridge, ModelError, ModelSpec
+from .schemas import Bridge, ModelError
 from .valuation import Valuation
 
 Table = tuple[list[str], list[list[str]]]
@@ -33,10 +33,6 @@ def yoy(current: float | None, previous: float | None) -> str:
     if current is None or previous in (None, 0):
         return "n/a"
     return f"{(current / previous - 1) * 100:+.1f}%"
-
-
-def _periods_by_basis(spec: ModelSpec, basis: str) -> list[str]:
-    return [p.label for p in spec.periods if p.basis == basis]
 
 
 def annual_table(model: ModelResult) -> Table:

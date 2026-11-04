@@ -4,6 +4,11 @@ from langgraph.graph import MessagesState
 from typing_extensions import TypedDict
 
 
+def merge_fallbacks(left: dict | None, right: dict | None) -> dict:
+    """Merge per-agent structured-output fallbacks; later agents add, never replace."""
+    return {**(left or {}), **(right or {})}
+
+
 # Researcher team state
 class InvestDebateState(TypedDict):
     bull_history: Annotated[
@@ -15,6 +20,13 @@ class InvestDebateState(TypedDict):
     challenge_history: Annotated[
         str, "Adversarial Investment Reviewer's challenge, round by round"
     ]
+    last_review: Annotated[str, "The reviewer's most recent answer, for a delta-only next round"]
+    first_review: Annotated[str, "The round-1 review: the full bull and bear cases for the main report"]
+    first_review_raw: Annotated[str, "The reviewer's first round-1 answer, before any repair — kept for diagnosis"]
+    unresolved_issue: Annotated[str, "The one open issue a reader should watch, from the latest round"]
+    review_missing: Annotated[str, "Required review headings the reviewer failed to supply; empty when complete"]
+    no_material_update: Annotated[bool, "The reviewer reported no change; stop the debate"]
+    decisive_sensitivity_id: Annotated[str, "The ranked sensitivity the reviewer named; empty means not established"]
     history: Annotated[str, "Conversation history"]
     current_response: Annotated[str, "Latest response"]
     count: Annotated[int, "Length of the current conversation"]
@@ -76,6 +88,54 @@ class AgentState(MessagesState):
     portfolio_context: Annotated[str, "Caller-supplied holdings and cash, rendered at run start; empty when not provided"]
     decision_horizon: Annotated[str, "The horizon the technical analysis is framed against; from TRADINGAGENTS_DECISION_HORIZON or the CLI question (default 3-6 months), empty when nothing supplied it"]
     research_package: Annotated[str, "Deterministic fundamental model (forecasts, bridges, valuation) for this run; empty unless a research corpus and model spec are configured"]
+    research_package_artifact: Annotated[str, "The same model without the prompt's imperative lines, for the published report"]
+    research_fair_value_low: Annotated[float | None, "Low end of the verified model's fair-value band; None when no model"]
+    research_fair_value_high: Annotated[float | None, "High end of the verified model's fair-value band; None when no model"]
     research_price: Annotated[float, "The share price the model's valuation used; 0 when no model was used"]
     research_model_path: Annotated[str, "The model spec file this run used, so the audit checks the same numbers"]
+    research_model_source: Annotated[str, "Whether that spec was 'built' in this run or 'reused' from an earlier one"]
+    research_model_created_at: Annotated[str, "The spec file's timestamp, so a reader can judge reuse"]
+    research_model_path_v1: Annotated[str, "The spec before the repair gate; v1 figures are superseded, not current"]
+    active_model_version: Annotated[str, "v1, v2 when the repair gate changed the model, or unverified"]
+    model_challenges: Annotated[str, "The analyst's model challenges and the applied changes, as JSON"]
+    model_repair_log: Annotated[str, "Changed fields and unresolved challenges, as JSON"]
+    model_repair_addendum: Annotated[str, "The repair note the debate reads when v2 differs from v1"]
+    fundamentals_challenge_check: Annotated[str, "repaired | no_material_challenges | repair_unresolved | repair_failed | kernel_only_pass | not_applicable"]
+    model_status: Annotated[str, "VERIFIED | UNVERIFIED | NOT_APPLICABLE, derived after the repair gate and the audit"]
+    repairs_applied: Annotated[int, "How many model fields the repair gate changed"]
+    unresolved_blocking: Annotated[int, "Blocking challenges the repair gate could not apply"]
+    unresolved_material: Annotated[int, "Material challenges the repair gate could not apply"]
+    market_cap_basis: Annotated[str, "Named share base behind the market capitalisation"]
+    forecast_eps_basis: Annotated[str, "Named share base behind the forecast EPS and P/E"]
+    dilution_sensitivity_basis: Annotated[str, "Named share base for the full-conversion dilution case"]
+    equity_value_share_basis: Annotated[str, "Named share base for an EV-based per-share value"]
+    controlling_fair_value_low: Annotated[float | None, "The PM decision's controlling fair-value low"]
+    controlling_fair_value_base: Annotated[float | None, "The PM decision's controlling fair-value base"]
+    controlling_fair_value_high: Annotated[float | None, "The PM decision's controlling fair-value high"]
+    stale_model_path: Annotated[str, "An older spec kept for comparison only; never used for the rating"]
+    stale_model_package: Annotated[str, "The stale spec rendered for the appendix, with a NOT USED banner"]
+    spec_compatibility: Annotated[str, "compatible | unknown | not_applicable — verified only with a dependency manifest"]
+    spec_compatibility_reason: Annotated[str, "Why that status was reached, for the report header"]
+    structured_fallbacks: Annotated[dict, merge_fallbacks]
+    replacement_conclusions_applied: Annotated[str, "How many superseded conclusions the repair note replaced in the decision"]
+    operating_model_status: Annotated[str, "VERIFIED when revenue and operating profit may be used"]
+    eps_status: Annotated[str, "VERIFIED only when the share bases and per-share arithmetic verified"]
+    valuation_status: Annotated[str, "VERIFIED only when a controlling fair value exists"]
+    sensitivity_status: Annotated[str, "VERIFIED only when ranked sensitivities are publishable"]
+    research_fair_value_verified: Annotated[bool, "Whether the model band may control the decision"]
+    trader_status: Annotated[str, "structured | advisory — advisory output may not control the rating or levels"]
+    sector: Annotated[str, "Sector used for severity thresholds, from the model spec"]
+    decision_basis: Annotated[str, "fundamental | event | technical | mixed, as audited"]
+    decision_audit_result: Annotated[str, "JSON: the non-valuation decision audit result"]
+    blocking_issue: Annotated[str, "JSON: the exact challenge that blocked the model, its fields, verification and publication impact"]
+    overall_status: Annotated[str, "Not Rated when the model is unverified, else empty"]
+    decision_status: Annotated[str, "Provisional when the model is unverified, else empty"]
+    sizing_instruction: Annotated[str, "The phrase the sizing detector matched, for the report diagnostics"]
+    non_model_decision_basis: Annotated[dict, "A deterministic, event-driven basis that may justify a directional call without the model"]
     debate_cases: Annotated[str, "Cases argued in the debate as JSON: stance, capped deltas, multiple, probability"]
+    case_table: Annotated[str, "The cases recomputed on the model, rendered as a table"]
+    metrics_table: Annotated[str, "Growth and incremental margin for each consecutive model year"]
+    sensitivity_table: Annotated[str, "The model's assumptions ranked by fair-value impact"]
+    sensitivity_ids: Annotated[str, "JSON list of the ranked sensitivity IDs, for reviewer validation"]
+    sensitivity_gaps: Annotated[str, "JSON list of research drivers with no explicit model assumption"]
+    decisive_sensitivity_id: Annotated[str, "The ranked sensitivity the reviewer named as decisive; empty means not established"]

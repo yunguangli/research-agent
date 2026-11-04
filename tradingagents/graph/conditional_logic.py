@@ -10,8 +10,15 @@ class ConditionalLogic:
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
 
     def should_continue_debate(self, state: AgentState) -> str:
-        """One adversarial reviewer per configured round, then the Research Manager."""
-        if state["investment_debate_state"]["count"] >= self.max_debate_rounds:
+        """One adversarial reviewer per configured round, then the Research Manager.
+
+        A round that reports no material change ends the debate early: repeating a
+        review that has nothing new to add only lengthens the report.
+        """
+        debate = state["investment_debate_state"]
+        if debate.get("no_material_update"):
+            return "Research Manager"
+        if debate["count"] >= self.max_debate_rounds:
             return "Research Manager"
         return "Adversarial Reviewer"
 

@@ -74,6 +74,15 @@ def analyze(
         help="Share price for the fundamental valuation, overriding the latest close on the "
         "analysis date. Use when the run date has no market data or you want your own price.",
     ),
+    run_purpose: str = typer.Option(
+        None, "--run-purpose",
+        help="production | comparison | replay. comparison and replay are diagnostic: the "
+        "report is labelled and the decision is not written to the memory log.",
+    ),
+    log_level: str = typer.Option(
+        "WARNING", "--log-level",
+        help="Level for <results_dir>/<ticker>/<date>/run.log (DEBUG, INFO, WARNING, ERROR).",
+    ),
 ):
     """Run an analysis. This is what a bare `tradingagents` does.
 
@@ -98,11 +107,15 @@ def analyze(
     # caller names a price here. It is passed through the environment so the
     # graph's config — and therefore its checkpoint signature — stays unchanged.
     if price is not None:
-        os.environ["TRADINGAGENTS_MODEL_PRICE"] = f"{price:g}"
+        # ``repr`` round-trips exactly; ``%g`` silently kept six significant
+        # digits and changed a price the caller typed (1234567 -> 1234570).
+        os.environ["TRADINGAGENTS_MODEL_PRICE"] = repr(price)
 
     try:
-        flags = {"ticker": ticker, "date": date, "analysts": analysts, "save": save, "show": show, "html": html}
-        run_analysis(checkpoint=checkpoint, portfolio=portfolio_context, flags=flags)
+        flags = {"ticker": ticker, "date": date, "analysts": analysts, "save": save,
+                 "show": show, "html": html, "run_purpose": run_purpose}
+        run_analysis(checkpoint=checkpoint, portfolio=portfolio_context, flags=flags,
+                     log_level=log_level)
     except _NO_CONSOLE_ERRORS:
         # A terminal with no console buffer cannot host the interactive prompts.
         # Emit one actionable line on stderr instead of a prompt_toolkit

@@ -1,0 +1,1 @@
+All 143 figure(s) the report marks as the model's were found in the verified model. Figures checked by section: Fundamentals Analyst 130, Research Manager 7, Trader 6, Portfolio Manager 0. 3 mark(s) were plain reference numbers (a bare single digit, as the number 6) and were not treated as figures.

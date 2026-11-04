@@ -43,6 +43,122 @@ def test_write_report_tree_creates_files(tmp_path):
 
 
 @pytest.mark.unit
+def test_the_published_package_prefers_the_artifact_rendering(tmp_path):
+    """The prompt's imperative lines must not reach the reader (#finding B3)."""
+    state = _state()
+    state["research_package"] = "PROMPT TEXT\nDo not recalculate these figures."
+    state["research_package_artifact"] = "MODEL TEXT"
+    write_report_tree(state, "AAPL", tmp_path)
+    published = (tmp_path / "1b_research" / "research_package.md").read_text()
+    assert published == "MODEL TEXT"
+
+
+@pytest.mark.unit
+def test_a_state_saved_before_the_split_still_publishes_the_package(tmp_path):
+    """A checkpoint from an older version has only the prompt rendering."""
+    state = _state()
+    state["research_package"] = "MODEL TEXT"
+    write_report_tree(state, "AAPL", tmp_path)
+    assert (tmp_path / "1b_research" / "research_package.md").read_text() == "MODEL TEXT"
+
+
+@pytest.mark.unit
+def test_the_header_discloses_a_diagnostic_run_and_the_spec_source(tmp_path):
+    state = _state()
+    state.update({
+        "research_model_path": "C:/x/4062.T.json",
+        "research_model_source": "reused",
+        "research_model_created_at": "2026-11-02T11:45:46",
+        "spec_compatibility": "unknown",
+    })
+    write_report_tree(
+        state, "AAPL", tmp_path, settings={**SETTINGS, "run_purpose": "comparison"}
+    )
+    header = (tmp_path / "complete_report.md").read_text()
+    assert "Authority: diagnostic" in header
+    assert "reused from C:/x/4062.T.json" in header
+    assert "compatibility unknown" in header
+
+
+@pytest.mark.unit
+def test_the_main_report_excludes_the_debate_and_audit(tmp_path):
+    state = _state()
+    state["investment_debate_state"]["challenge_history"] = "ADVERSARIAL-ONLY"
+    state["risk_debate_state"]["neutral_history"] = "RISK-ONLY"
+    state["report_audit"] = "AUDIT"
+    state["case_table"] = "CASES"
+    write_report_tree(state, "AAPL", tmp_path)
+    main = (tmp_path / "complete_report.md").read_text()
+    assert "ADVERSARIAL-ONLY" not in main
+    assert "RISK-ONLY" not in main
+    assert "AUDIT" not in main
+    appendix = (tmp_path / "appendix.md").read_text()
+    assert "ADVERSARIAL-ONLY" in appendix
+    assert "RISK-ONLY" in appendix
+    assert "AUDIT" in appendix
+    assert "CASES" in appendix
+
+
+@pytest.mark.unit
+def test_the_header_shows_rounds_run_not_only_the_configured_maximum(tmp_path):
+    state = _state()
+    state["research_rounds_used"] = 2
+    state["risk_rounds_used"] = 1
+    write_report_tree(state, "AAPL", tmp_path, settings={**SETTINGS, "max_debate_rounds": 3,
+                                                          "max_risk_discuss_rounds": 3})
+    header = (tmp_path / "complete_report.md").read_text()
+    assert "research debate rounds: 2 of 3" in header
+    assert "risk debate rounds: 1 of 3" in header
+
+
+@pytest.mark.unit
+def test_a_degraded_decision_is_labelled_provisional_in_the_header(tmp_path):
+    state = _state()
+    state["final_trade_decision"] = "**Rating**: Underweight\n\nReduce."
+    state["decision_integrity"] = "DEGRADED: structured output fell back to free text for Trader"
+    write_report_tree(state, "AAPL", tmp_path)
+    header = (tmp_path / "complete_report.md").read_text()
+    assert "- Rating: Underweight (provisional)" in header
+
+
+@pytest.mark.unit
+def test_the_header_discloses_decision_integrity(tmp_path):
+    state = _state()
+    state["decision_integrity"] = "DEGRADED: structured output fell back to free text for Trader"
+    write_report_tree(state, "AAPL", tmp_path)
+    header = (tmp_path / "complete_report.md").read_text()
+    assert "Decision integrity: DEGRADED" in header
+    assert "Trader" in header
+
+
+@pytest.mark.unit
+def test_the_header_names_an_unavailable_research_model(tmp_path):
+    """A rejected spec is the research model, not the LLM; the header must say so."""
+    state = _state()
+    state.update({
+        "research_model_source": "unavailable",
+        "spec_compatibility": "unavailable",
+        "spec_compatibility_reason": (
+            "MODEL UNAVAILABLE: the model spec at 4062.T.json failed its checks"
+        ),
+    })
+    write_report_tree(state, "AAPL", tmp_path)
+    header = (tmp_path / "complete_report.md").read_text()
+    assert "Research model: UNAVAILABLE" in header
+    assert "not the LLM" in header
+    assert "failed its checks" in header
+
+
+@pytest.mark.unit
+def test_saving_twice_writes_the_same_sections(tmp_path):
+    state = _state()
+    write_report_tree(state, "AAPL", tmp_path)
+    first = (tmp_path / "1_analysts" / "market.md").read_bytes()
+    write_report_tree(state, "AAPL", tmp_path)
+    assert (tmp_path / "1_analysts" / "market.md").read_bytes() == first
+
+
+@pytest.mark.unit
 def test_save_reports_explicit_path(tmp_path):
     graph = SimpleNamespace(run_settings=lambda: SETTINGS)
     out = TradingAgentsGraph.save_reports(graph, _state(), "AAPL", save_path=tmp_path)
@@ -72,7 +188,8 @@ def test_the_report_names_the_analysis_date_and_what_produced_it(tmp_path):
     assert "TradingAgents 0.5.2" in header
     assert "openai, deep gpt-6-sol, quick gpt-6-luna" in header
     assert "Analysts: market, news" in header
-    assert "research debate rounds 1, risk debate rounds 2" in header
+    assert "research debate rounds: 1" in header
+    assert "risk debate rounds: 2" in header
     assert "core_stock_apis yfinance" in header
 
 

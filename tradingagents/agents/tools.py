@@ -270,12 +270,14 @@ def read_research_document(
     document_id: Annotated[str, "A document_id returned by list_research_documents"],
     ticker: Annotated[str, InjectedState("company_of_interest")],
     max_chars: Annotated[int, "Maximum characters of text to return; keep this modest"] = 20000,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
 ) -> str:
     """Read one research document in full, with a citation header.
 
     Returns the publication date, type, licence, and page markers, so you can cite
-    the page a statement came from. A document the licence forbids sending to a
-    model returns DATA_UNAVAILABLE: report the gap, do not guess its content.
+    the page a statement came from. A document published after the analysis date,
+    or one whose licence forbids sending it to a model, returns DATA_UNAVAILABLE:
+    report the gap, do not guess its content.
     """
     root = research_dir_from_env()
     if root is None:
@@ -285,6 +287,7 @@ def read_research_document(
             document_id=document_id,
             max_chars=max_chars,
             root=str(resolve_corpus_root(root, ticker)),
+            as_of=trade_date,
         )
     except (CorpusError, OSError) as exc:
         return f"DATA_UNAVAILABLE: {exc}"

@@ -38,6 +38,15 @@ NO_EXTERNAL_TOOLS = (
     "or search the web; if something is missing, say so explicitly."
 )
 
+# A thinking model can answer a schema-only call in prose instead of calling the
+# one tool that carries the schema, leaving the parser with nothing. One retry
+# with the requirement restated recovers most of those before the smaller
+# fallback schema is used.
+STRUCTURED_RETRY = (
+    "\n\nYour previous answer did not call the required output tool. Answer again by "
+    "calling that tool with every field the schema asks for. Do not answer in prose."
+)
+
 
 def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Any | None:
     """Return ``llm.with_structured_output(schema)`` or ``None`` if unsupported.
@@ -56,14 +65,23 @@ def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Any | None:
         return None
 
 
-def invoke_structured(structured_llm: Any | None, prompt: Any, agent_name: str) -> T | None:
+def invoke_structured(
+    structured_llm: Any | None,
+    prompt: Any,
+    agent_name: str,
+    status: dict | None = None,
+) -> T | None:
     """Run the structured call; ``None`` when there is none or it fails.
 
     ``prompt`` is whatever the underlying LLM accepts (a string for chat
     invocations, a list of message dicts for chat models that take that
     shape), so a caller can forward the same value to its free-text fallback.
+    ``status`` receives a ``reason`` when the fallback fires, so the report can
+    say the proposal was not schema-validated.
     """
     if structured_llm is None:
+        if status is not None:
+            status["reason"] = "provider has no structured-output support"
         return None
     try:
         result = structured_llm.invoke(prompt)
@@ -74,6 +92,8 @@ def invoke_structured(structured_llm: Any | None, prompt: Any, agent_name: str) 
             raise ValueError("structured output returned no parsed result")
         return result
     except Exception as exc:
+        if status is not None:
+            status["reason"] = f"{type(exc).__name__}: {exc}"[:200]
         logger.warning(
             "%s: structured-output invocation failed (%s); retrying once as free text",
             agent_name, exc,
@@ -87,9 +107,10 @@ def invoke_structured_or_freetext(
     prompt: Any,
     render: Callable[[T], str],
     agent_name: str,
+    status: dict | None = None,
 ) -> str:
     """Run the structured call and render to markdown; fall back to free-text on any failure."""
-    result = invoke_structured(structured_llm, prompt, agent_name)
+    result = invoke_structured(structured_llm, prompt, agent_name, status=status)
     if result is not None:
         return render(result)
     return plain_llm.invoke(prompt).content

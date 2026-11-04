@@ -23,6 +23,7 @@ from tradingagents.agents.schemas import (
     SentimentBand,
     SentimentReport,
     TraderAction,
+    TraderIntent,
     TraderProposal,
     render_research_plan,
     render_sentiment_report,
@@ -69,6 +70,31 @@ class TestRenderTraderProposal:
         for field in ("Entry Price", "Stop Loss", "Position Sizing"):
             assert f"**{field}**: not provided" in md
         assert "FINAL TRANSACTION PROPOSAL: **SELL**" in md
+
+    def test_a_level_above_the_entry_is_a_reassessment_level_not_a_stop(self):
+        """4062.T published entry 8,045 and 'Stop Loss 9,126' — above the entry."""
+        p = TraderProposal(
+            action=TraderAction.SELL,
+            intent=TraderIntent.REDUCE_LONG,
+            reasoning="Uptrend broken.",
+            entry_price=8045.0,
+            stop_loss=9126.0,
+        )
+        md = render_trader_proposal(p)
+        assert "**Reassessment Level**: 9126.0" in md
+        assert "**Stop Loss**" not in md
+
+    def test_a_normal_stop_for_a_long_keeps_its_label(self):
+        p = TraderProposal(
+            action=TraderAction.BUY, reasoning="x", entry_price=189.5, stop_loss=178.0
+        )
+        assert "**Stop Loss**: 178.0" in render_trader_proposal(p)
+
+    def test_the_intent_is_published_with_a_sell(self):
+        p = TraderProposal(
+            action=TraderAction.SELL, intent=TraderIntent.REDUCE_LONG, reasoning="x"
+        )
+        assert "**Intent**: reduce long" in render_trader_proposal(p)
 
 
 @pytest.mark.unit
@@ -194,6 +220,23 @@ def _structured_trader_llm(captured: dict, proposal: TraderProposal | None = Non
 
 
 @pytest.mark.unit
+def test_structured_fallbacks_from_several_agents_are_merged():
+    """The Trader, the manager and the PM can each fall back; none may erase another."""
+    from langgraph.graph import END, START, StateGraph
+
+    from tradingagents.agents.state import AgentState
+
+    graph = StateGraph(AgentState)
+    graph.add_node("first", lambda state: {"structured_fallbacks": {"Trader": "x"}})
+    graph.add_node("second", lambda state: {"structured_fallbacks": {"Portfolio Manager": "y"}})
+    graph.add_edge(START, "first")
+    graph.add_edge("first", "second")
+    graph.add_edge("second", END)
+    out = graph.compile().invoke({"messages": [], "structured_fallbacks": {}})
+    assert out["structured_fallbacks"] == {"Trader": "x", "Portfolio Manager": "y"}
+
+
+@pytest.mark.unit
 def test_invoke_structured_falls_back_when_result_is_none():
     # A thinking model can answer in plain text, leaving the parser with None.
     # That must fall back to free text, not crash on render(None) (#1051).
@@ -204,10 +247,13 @@ def test_invoke_structured_falls_back_when_result_is_none():
     plain = MagicMock()
     plain.invoke.return_value = MagicMock(content="FREETEXT")
 
+    status: dict = {}
     out = invoke_structured_or_freetext(
-        structured, plain, "prompt", render=lambda r: r.rating, agent_name="t"
+        structured, plain, "prompt", render=lambda r: r.rating, agent_name="t",
+        status=status,
     )
     assert out == "FREETEXT"
+    assert "structured output returned no parsed result" in status["reason"]
     plain.invoke.assert_called_once()
 
 
@@ -224,7 +270,9 @@ class TestTraderAgent:
         )
         llm = _structured_trader_llm(captured, proposal)
         trader = create_trader(llm)
-        result = trader(_make_trader_state())
+        state = _make_trader_state()
+        state["portfolio_context"] = "Current position in NVDA: 100 units"
+        result = trader(state)
         plan = result["trader_investment_plan"]
         assert "**Action**: Buy" in plan
         assert "**Entry Price**: 189.5" in plan
@@ -266,6 +314,75 @@ class TestTraderAgent:
         assert "Ground concrete price levels" not in text
         assert "Proposed Investment Plan" in text  # still present
 
+    def test_no_portfolio_context_removes_an_invented_size(self):
+        captured = {}
+        proposal = TraderProposal(
+            action=TraderAction.SELL,
+            reasoning="x",
+            position_sizing="5% of portfolio",
+            entry_price=189.5,
+            stop_loss=178.0,
+        )
+        result = create_trader(_structured_trader_llm(captured, proposal))(_make_trader_state())
+        plan = result["trader_investment_plan"]
+        assert "**Position Sizing**: not provided" in plan
+        assert "**Entry Price**: not provided" in plan
+        assert "**Stop Loss**: not provided" in plan
+
+    def test_an_unverified_valuation_downgrades_a_buy(self):
+        captured = {}
+        proposal = TraderProposal(
+            action=TraderAction.BUY, reasoning="x", entry_price=189.5, stop_loss=178.0
+        )
+        state = _make_trader_state()
+        state["research_model_source"] = "unavailable"
+        plan = create_trader(_structured_trader_llm(captured, proposal))(state)[
+            "trader_investment_plan"
+        ]
+        assert "**Action**: Hold" in plan
+        assert "downgraded" in plan.lower()
+        assert "**Entry Price**: not provided" in plan
+
+    def test_an_unverified_valuation_forces_low_confidence(self):
+        from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
+        from tradingagents.agents.schemas import (
+            DecisionConfidence,
+            PortfolioDecision,
+            PortfolioRating,
+        )
+
+        decision = PortfolioDecision(
+            rating=PortfolioRating.HOLD,
+            executive_summary="Hold.",
+            investment_thesis="Valuation unverified.",
+            confidence=DecisionConfidence.HIGH,
+        )
+        state = {
+            "company_of_interest": "TEST", "trade_date": "2026-01-01",
+            "market_report": "m", "sentiment_report": "", "news_report": "",
+            "fundamentals_report": "f",
+            "investment_debate_state": {"challenge_history": "", "history": ""},
+            "investment_plan": "plan", "trader_investment_plan": "trade",
+            "risk_debate_state": {
+                "history": "", "aggressive_history": "", "conservative_history": "",
+                "neutral_history": "", "count": 1, "latest_speaker": "Judge",
+                "current_aggressive_response": "", "current_conservative_response": "",
+                "current_neutral_response": "",
+            },
+            "portfolio_context": "", "decision_horizon": "3-6 months",
+            "research_model_source": "unavailable",
+        }
+        result = create_portfolio_manager(
+            _pm_llm(decision)
+        )(state)
+        assert "| Confidence | Low |" in result["final_trade_decision"]
+
+    def test_the_prompt_does_not_map_underweight_to_sell(self):
+        captured = {}
+        create_trader(_structured_trader_llm(captured))(_make_trader_state())
+        text = " ".join(message["content"] for message in captured["prompt"])
+        assert "Underweight means reduce an existing long" in text
+
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = (
             "**Action**: Sell\n\nGuidance cut hits margins.\n\n"
@@ -277,6 +394,10 @@ class TestTraderAgent:
         trader = create_trader(llm)
         result = trader(_make_trader_state())
         assert result["trader_investment_plan"] == plain_response
+        # The fallback is visible: the report header can say the proposal was
+        # not schema-validated instead of presenting it like a typed decision.
+        assert "Trader" in result["structured_fallbacks"]
+        assert "structured" in result["structured_fallbacks"]["Trader"]
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +416,15 @@ def _make_rm_state():
             "count": 1,
         },
     }
+
+
+def _pm_llm(decision):
+    """An LLM whose structured binding returns the given PortfolioDecision."""
+    structured = MagicMock()
+    structured.invoke.return_value = decision
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+    return llm
 
 
 def _structured_rm_llm(captured: dict, plan: ResearchPlan | None = None):
@@ -326,12 +456,29 @@ class TestResearchManagerAgent:
         rm = create_research_manager(llm)
         result = rm(_make_rm_state())
         ip = result["investment_plan"]
-        assert "**Recommendation**: Overweight" in ip
+        # No benchmark: a relative Overweight is not published; the direction stays.
+        assert "**Recommendation**: Hold" in ip
+        assert "**Absolute view**: Positive" in ip
         assert "**Rationale**: Bull case" in ip
-        assert "**Strategic Actions**: Build position" in ip
+
+    def test_a_supplied_benchmark_keeps_the_relative_recommendation(self):
+        from tradingagents.dataflows.config import set_config
+
+        set_config({"benchmark_ticker": "SPY"})
+        captured = {}
+        plan = ResearchPlan(
+            recommendation=PortfolioRating.OVERWEIGHT,
+            rationale="Bull case is stronger.",
+            strategic_actions="Build position gradually.",
+        )
+        result = create_research_manager(_structured_rm_llm(captured, plan))(_make_rm_state())
+        assert "**Recommendation**: Overweight" in result["investment_plan"]
 
     def test_prompt_uses_5_tier_rating_scale(self):
-        """The RM prompt must list all five tiers so the schema enum matches user expectations."""
+        """With a benchmark, the RM prompt lists all five tiers."""
+        from tradingagents.dataflows.config import set_config
+
+        set_config({"benchmark_ticker": "SPY"})
         captured = {}
         llm = _structured_rm_llm(captured)
         rm = create_research_manager(llm)
@@ -550,3 +697,200 @@ def test_the_trader_names_the_levels_it_did_not_give():
     for field in ("Entry Price", "Stop Loss", "Position Sizing"):
         assert field in rendered
     assert rendered.lower().count("not provided") == 3
+
+
+@pytest.mark.unit
+def test_the_decision_framework_is_rendered_separately_from_the_rating():
+    from tradingagents.agents.schemas import (
+        DecisionConfidence,
+        FundamentalView,
+        HolderAction,
+        NewInvestorAction,
+        PortfolioDecision,
+        PortfolioRating,
+        TimingView,
+        ValuationView,
+        render_pm_decision,
+    )
+
+    decision = PortfolioDecision(
+        rating=PortfolioRating.HOLD,
+        executive_summary="Hold, no new capital.",
+        investment_thesis="Fully valued.",
+        fundamental_view=FundamentalView.NEUTRAL,
+        valuation_view=ValuationView.FULL,
+        technical_timing=TimingView.UNFAVORABLE,
+        new_investor_action=NewInvestorAction.WAIT,
+        existing_holder_action=HolderAction.HOLD,
+        confidence=DecisionConfidence.MEDIUM,
+    )
+    md = render_pm_decision(decision)
+    assert "| Fundamental view | Neutral |" in md
+    assert "| Valuation | Full |" in md
+    assert "| Technical timing | Unfavorable |" in md
+    assert "| New investor | Wait |" in md
+    assert "| Existing holder | Hold |" in md
+    assert "| Confidence | Medium |" in md
+
+
+@pytest.mark.unit
+def test_the_pm_retries_on_the_minimal_schema_before_free_text():
+    from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
+    from tradingagents.agents.schemas import (
+        PortfolioDecision,
+        PortfolioDecisionMinimal,
+        PortfolioRating,
+    )
+
+    full = MagicMock()
+    full.invoke.side_effect = ValueError("bad json")
+    minimal = MagicMock()
+    minimal.invoke.return_value = PortfolioDecisionMinimal(
+        rating=PortfolioRating.HOLD, executive_summary="Hold, no capital.", investment_thesis=""
+    )
+    llm = MagicMock()
+    llm.with_structured_output.side_effect = lambda schema, **kw: (
+        full if schema is PortfolioDecision else minimal
+    )
+    llm.invoke.return_value = MagicMock(content="FREE TEXT")
+    state = {
+        "company_of_interest": "TEST", "trade_date": "2026-01-01",
+        "market_report": "m", "sentiment_report": "", "news_report": "",
+        "fundamentals_report": "f",
+        "investment_debate_state": {"challenge_history": "", "history": ""},
+        "investment_plan": "plan", "trader_investment_plan": "trade",
+        "risk_debate_state": {
+            "history": "", "aggressive_history": "", "conservative_history": "",
+            "neutral_history": "", "count": 1, "latest_speaker": "Judge",
+            "current_aggressive_response": "", "current_conservative_response": "",
+            "current_neutral_response": "",
+        },
+        "portfolio_context": "", "decision_horizon": "3-6 months",
+    }
+
+    result = create_portfolio_manager(llm)(state)
+
+    assert "**Rating**: Hold" in result["final_trade_decision"]
+    assert "FREE TEXT" not in result["final_trade_decision"]
+    assert "minimal schema" in result["structured_fallbacks"]["Portfolio Manager"]
+
+
+@pytest.mark.unit
+def test_the_pm_minimal_fallback_keeps_the_fair_value_range():
+    from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
+    from tradingagents.agents.schemas import (
+        PortfolioDecision,
+        PortfolioDecisionMinimal,
+        PortfolioRating,
+        ValuationStatus,
+    )
+
+    full = MagicMock()
+    full.invoke.side_effect = ValueError("bad json")
+    minimal = MagicMock()
+    minimal.invoke.return_value = PortfolioDecisionMinimal(
+        rating=PortfolioRating.HOLD,
+        executive_summary="Hold: fair value is close to the price.",
+        investment_thesis="Range used.",
+        fair_value_low=6304.0,
+        fair_value_base=7984.0,
+        fair_value_high=9246.0,
+        valuation_status=ValuationStatus.RANGE,
+    )
+    llm = MagicMock()
+    llm.with_structured_output.side_effect = lambda schema, **kw: (
+        full if schema is PortfolioDecision else minimal
+    )
+    llm.invoke.return_value = MagicMock(content="FREE TEXT")
+    state = {
+        "company_of_interest": "TEST", "trade_date": "2026-01-01",
+        "market_report": "m", "sentiment_report": "", "news_report": "",
+        "fundamentals_report": "f",
+        "investment_debate_state": {"challenge_history": "", "history": ""},
+        "investment_plan": "plan", "trader_investment_plan": "trade",
+        "risk_debate_state": {
+            "history": "", "aggressive_history": "", "conservative_history": "",
+            "neutral_history": "", "count": 1, "latest_speaker": "Judge",
+            "current_aggressive_response": "", "current_conservative_response": "",
+            "current_neutral_response": "",
+        },
+        "portfolio_context": "", "decision_horizon": "3-6 months",
+        "research_model_source": "built",
+    }
+
+    decision = create_portfolio_manager(llm)(state)["final_trade_decision"]
+
+    assert "**Fair Value**: 6,304–9,246 (base 7,984)" in decision
+    assert "**Valuation status**: range" in decision
+    assert "Price Target**: not provided" not in decision
+
+
+@pytest.mark.unit
+def test_a_fallback_that_lost_the_range_gets_it_from_the_model_package():
+    from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
+    from tradingagents.agents.schemas import (
+        PortfolioDecision,
+        PortfolioDecisionMinimal,
+        PortfolioRating,
+    )
+
+    full = MagicMock()
+    full.invoke.side_effect = ValueError("bad json")
+    minimal = MagicMock()
+    minimal.invoke.return_value = PortfolioDecisionMinimal(
+        rating=PortfolioRating.HOLD, executive_summary="Hold.", investment_thesis=""
+    )
+    llm = MagicMock()
+    llm.with_structured_output.side_effect = lambda schema, **kw: (
+        full if schema is PortfolioDecision else minimal
+    )
+    llm.invoke.return_value = MagicMock(content="FREE TEXT")
+    state = {
+        "company_of_interest": "TEST", "trade_date": "2026-01-01",
+        "market_report": "m", "sentiment_report": "", "news_report": "",
+        "fundamentals_report": "f",
+        "investment_debate_state": {"challenge_history": "", "history": ""},
+        "investment_plan": "plan", "trader_investment_plan": "trade",
+        "risk_debate_state": {
+            "history": "", "aggressive_history": "", "conservative_history": "",
+            "neutral_history": "", "count": 1, "latest_speaker": "Judge",
+            "current_aggressive_response": "", "current_conservative_response": "",
+            "current_neutral_response": "",
+        },
+        "portfolio_context": "", "decision_horizon": "3-6 months",
+        "research_model_source": "built",
+        "research_package": "- Fair-value range: 6,304-9,246 JPY",
+    }
+
+    decision = create_portfolio_manager(llm)(state)["final_trade_decision"]
+
+    assert "**Fair Value**: 6,304–9,246" in decision
+    assert "**Valuation status**: range" in decision
+
+
+@pytest.mark.unit
+def test_the_rm_retries_on_the_minimal_schema_before_free_text():
+    from tradingagents.agents.managers.research_manager import create_research_manager
+    from tradingagents.agents.schemas import (
+        PortfolioRating,
+        ResearchPlan,
+        ResearchPlanMinimal,
+    )
+
+    full = MagicMock()
+    full.invoke.side_effect = ValueError("bad json")
+    minimal = MagicMock()
+    minimal.invoke.return_value = ResearchPlanMinimal(
+        recommendation=PortfolioRating.HOLD, rationale="Balanced."
+    )
+    llm = MagicMock()
+    llm.with_structured_output.side_effect = lambda schema, **kw: (
+        full if schema is ResearchPlan else minimal
+    )
+    llm.invoke.return_value = MagicMock(content="FREE TEXT")
+
+    result = create_research_manager(llm)(_make_rm_state())
+
+    assert "**Recommendation**: Hold" in result["investment_plan"]
+    assert "FREE TEXT" not in result["investment_plan"]
+    assert "minimal schema" in result["structured_fallbacks"]["Research Manager"]

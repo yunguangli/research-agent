@@ -1,0 +1,8 @@
+arm,marked,checked,references,skipped,failed,relations,rating,rm_recommendation,trader_action,trader_has_final_line,pm_price_target,pm_time_horizon,spec_source,spec_compatibility,fallbacks,run_purpose,chars_fundamentals,chars_challenge,chars_risk_total,dup_ratio_challenge,dup_ratio_risk,sections_vs_state
+baseline,,143,3,,,0,Underweight,Underweight (4062.T),Sell,False,7300.0,not provided,,,,,33112,23853,69106,0.101,0.104,mismatch:fundamentals
+arm-a,183,180,3,0,0,0,Underweight,Underweight,Sell,False,,,reused,unknown,Portfolio Manager;Trader,comparison,31385,16588,59961,0.15,0.032,ok
+arm-b,197,197,0,0,0,0,Underweight,Underweight,Sell,True,7600.0,3-6 months,reused,compatible,,comparison,36663,21287,64205,0.38,0.055,ok
+arm-c,158,158,0,0,0,0,Underweight,Underweight,Sell,False,7400.0,3-6 months,reused,compatible,Research Manager;Trader,comparison,35482,22604,60352,0.058,0.056,ok
+production-1720,,,,,,0,Underweight,Underweight,Sell,False,7400.0,3-6 months,,,Research Manager;Trader,production,34979,19752,67947,0.033,0.022,ok
+arm-d,204,202,2,0,1,1,Underweight,Underweight,Sell,True,,,reused,compatible,Portfolio Manager;Research Manager,comparison,35873,6078,67088,0.0,0.039,ok
+production-1103,207,203,4,0,1,0,Underweight,Underweight,Sell,True,,,reused,unknown,Portfolio Manager,production,42860,5686,69740,0.0,0.096,ok

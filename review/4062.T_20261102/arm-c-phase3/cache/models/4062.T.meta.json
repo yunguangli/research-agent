@@ -1,0 +1,12 @@
+{
+  "spec_sha256": "f3e5b4ed228010226683df29da39542846c66a5a8180283d5fd6cf1f0ff4d4fb",
+  "built_at": "2026-11-02T16:50:31",
+  "builder_version": "1",
+  "kernel_version": "1",
+  "ticker": "4062.T",
+  "unit": "JPY_bn",
+  "currency": "JPY",
+  "as_of": "2026-11-02",
+  "corpus_root": "C:\\Users\\yunguang\\OneDrive - Trilogy Partners Limited\\YL P Drive\\Ibiden",
+  "corpus_manifest_sha256": "00dc4b6809d0bc396438bf891f606c70714afdf010dc6e5d931e89a4bbd9835a"
+}

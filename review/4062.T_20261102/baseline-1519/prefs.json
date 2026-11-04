@@ -1,0 +1,13 @@
+{
+  "decision_horizon": "3-6 months",
+  "analysts": [
+    "market",
+    "fundamentals"
+  ],
+  "research_depth": 3,
+  "llm_provider": "openrouter",
+  "backend_url": "https://openrouter.ai/api/v1",
+  "quick_think_llm": "deepseek/deepseek-v4.1-flash-1017",
+  "deep_think_llm": "deepseek/deepseek-v4.1-flash-1017",
+  "output_language": "English"
+}

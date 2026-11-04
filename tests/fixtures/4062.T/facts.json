@@ -1,0 +1,33 @@
+{
+  "ticker": "4062.T",
+  "sector": "industrial",
+  "capital_structure": {
+    "issued_shares": 566.3,
+    "treasury_shares": 4.0,
+    "current_net_shares": 562.3,
+    "basic_weighted_average": {"FY3/27": 566.0},
+    "diluted_weighted_average": {},
+    "convertibles": [
+      {"name": "convertible bonds 2029", "shares_m": 19.8, "conversion_date": "2027-09-30"}
+    ],
+    "verification_status": "VERIFIED"
+  },
+  "net_debt": {
+    "gross_debt": 350.0,
+    "cash_and_equivalents": 92.0,
+    "lease_liabilities": 0.0,
+    "lease_treatment": "excluded",
+    "minority_interest": 0.0,
+    "minority_treatment": "excluded",
+    "source_refs": ["doc-4062.T-fixture balance sheet"],
+    "verification_status": "VERIFIED"
+  },
+  "effective_tax_rate": 0.3,
+  "expected": {
+    "operating_model_status": "VERIFIED",
+    "eps_model_status": "VERIFIED",
+    "pe": "VERIFIED",
+    "ev_ebitda": "VERIFIED",
+    "ev_per_share": "VERIFIED"
+  }
+}

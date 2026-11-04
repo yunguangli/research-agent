@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +17,127 @@ from . import kernel, render, valuation as valuation_module
 from .schemas import ModelError, ModelSpec
 
 NARRATIVE_MARKER = "<!-- NARRATIVE PENDING: {section} -->"
+
+# The two renderers that print the band: ``_header`` ("Fair-value range: L-H")
+# and ``compact_summary`` ("… fair value L-H"). Both shapes are accepted, and
+# the parser lives beside them so a format change breaks one test, not a run.
+_FAIR_VALUE_RANGE = re.compile(
+    r"(?:fair-value\s+range|fair\s+value)\s*:?\s*"
+    r"([\d,]+(?:\.\d+)?)\s*[-\u2013]\s*([\d,]+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _net_debt_lines(spec: ModelSpec) -> list[str]:
+    """The balance-sheet inputs behind net debt, and the multiple's provenance.
+
+    Net debt is derived from gross debt and cash, so the reader can re-add it.
+    The EV/EBITDA multiple is the analyst's assumption unless the spec says a
+    document states it; either way it is never presented as company-reported.
+    """
+    lines: list[str] = []
+    debt = spec.net_debt
+    if debt is not None and debt.components_verified():
+        parts = [
+            f"gross debt {render.fmt(debt.gross_debt)}",
+            f"cash {render.fmt(debt.cash_and_equivalents)}",
+        ]
+        if debt.lease_treatment.lower() == "included":
+            parts.append(f"leases {render.fmt(debt.lease_liabilities or 0.0)}")
+        if debt.minority_treatment.lower() == "included":
+            parts.append(f"minorities {render.fmt(debt.minority_interest or 0.0)}")
+        lines.append(
+            f"Net debt {render.fmt(debt.value)} {spec.currency}: "
+            + ", ".join(parts)
+            + "."
+        )
+
+    multiple = spec.valuation.ev_ebitda_multiple
+    if multiple is not None:
+        provenance = (spec.valuation.ev_ebitda_multiple_provenance or "").strip()
+        if provenance and provenance != "analyst_assumption":
+            label = f"{multiple:g}x ({provenance})"
+        else:
+            label = f"{multiple:g}x (analyst assumption, not company-reported)"
+        rationale = (spec.valuation.ev_ebitda_multiple_rationale or "").strip()
+        refs = [ref for ref in spec.valuation.ev_ebitda_multiple_refs if ref]
+        detail = ""
+        if rationale or refs:
+            detail = f": {rationale}" if rationale else ""
+            if refs:
+                detail += f" [{', '.join(refs)}]"
+        lines.append(f"EV/EBITDA multiple {label}{detail}.")
+    return lines
+
+
+def _quarterly_label(spec, model) -> str:
+    """Name the quarterly table for what it is: guidance allocation or model build."""
+    fy = spec.quarterly_fy
+    guided = spec.guidance.get(fy)
+    try:
+        row = model.row(fy)
+    except ModelError:
+        row = None
+    if guided is None or row is None:
+        return "Quarterly build (current fiscal year):"
+    metrics = ("revenue", "operating_profit", "net_profit")
+    sums = {
+        metric: sum((q.get(metric) or 0) for q in spec.quarterly.values())
+        for metric in metrics
+    }
+    ties_guidance = all(
+        guided.get(metric) is None or abs(sums[metric] - guided.get(metric)) <= 0.15
+        for metric in metrics
+    )
+    differs = any(
+        getattr(row, metric) is not None
+        and guided.get(metric) is not None
+        and abs(getattr(row, metric) - guided.get(metric)) > 0.15
+        for metric in metrics
+    )
+    if ties_guidance and differs:
+        return (
+            "Management-guidance quarterly allocation (sums to guidance; the annual row "
+            "above is the model's own forecast):"
+        )
+    return "Quarterly build (current fiscal year):"
+
+
+def fair_value_range_from_summary(text: str) -> tuple[float | None, float | None]:
+    """The fair-value band printed by either model renderer, or ``(None, None)``."""
+    match = _FAIR_VALUE_RANGE.search(text or "")
+    if not match:
+        return None, None
+    try:
+        return (
+            float(match.group(1).replace(",", "")),
+            float(match.group(2).replace(",", "")),
+        )
+    except ValueError:
+        return None, None
+
+
+_DECISION_BAND = re.compile(
+    r"\*\*Fair Value\*\*:\s*([\d,]+(?:\.\d+)?)\s*[–-]\s*([\d,]+(?:\.\d+)?)"
+    r"(?:\s*\(base\s*([\d,]+(?:\.\d+)?)\))?",
+    re.IGNORECASE,
+)
+
+
+def decision_fair_value(
+    text: str,
+) -> tuple[float | None, float | None, float | None]:
+    """The PM decision's controlling band: ``(low, base, high)``."""
+    match = _DECISION_BAND.search(text or "")
+    if not match:
+        return None, None, None
+    try:
+        low = float(match.group(1).replace(",", ""))
+        high = float(match.group(2).replace(",", ""))
+        base = float(match.group(3).replace(",", "")) if match.group(3) else None
+        return low, base, high
+    except ValueError:
+        return None, None, None
 
 
 def _header(model: kernel.ModelResult, valuation: valuation_module.Valuation) -> str:
@@ -149,8 +271,22 @@ def _consensus_notes(model: kernel.ModelResult) -> list[str]:
     return notes
 
 
-def compact_summary(model: kernel.ModelResult, valuation: valuation_module.Valuation) -> str:
-    """A prompt-sized rendering of the model: the tables an analyst must not recompute."""
+def compact_summary(
+    model: kernel.ModelResult,
+    valuation: valuation_module.Valuation,
+    *,
+    instructions: bool = True,
+    include_per_share: bool = True,
+    include_ev_ebitda: bool = True,
+    include_ev_per_share: bool = True,
+) -> str:
+    """A prompt-sized rendering of the model: the tables an analyst must not recompute.
+
+    ``instructions`` adds the imperative lines the prompt relies on ("say in one
+    sentence why the model differs from guidance"). The published artifact is
+    rendered with ``instructions=False``: a reader should get the model, not the
+    commands given to the model.
+    """
     spec = model.spec
     lines = [
         f"FUNDAMENTAL MODEL — {spec.company or spec.ticker} ({spec.ticker}) — "
@@ -166,7 +302,7 @@ def compact_summary(model: kernel.ModelResult, valuation: valuation_module.Valua
         eps_text = ", ".join(
             f"EPS {base.name} {row.eps[base.name]:,.1f}" for base in spec.share_bases
             if base.name in row.eps
-        )
+        ) if include_per_share else ""
         lines.append(
             f"- {row.label} ({row.basis}): revenue {render.fmt(row.revenue)}, "
             f"operating profit {render.fmt(row.operating_profit)}, "
@@ -209,14 +345,15 @@ def compact_summary(model: kernel.ModelResult, valuation: valuation_module.Valua
                     f"  {label} | {metric} | {render.fmt(guided_value)} | "
                     f"{render.fmt(model_value)} | {variance}"
                 )
-        lines.append(
-            "Say in one sentence why the model differs from guidance where it does; "
-            "do not copy guidance into the forecast to make the rows agree."
-        )
+        if instructions:
+            lines.append(
+                "Say in one sentence why the model differs from guidance where it does; "
+                "do not copy guidance into the forecast to make the rows agree."
+            )
 
     if spec.quarterly:
         lines.append("")
-        lines.append("Quarterly build (current fiscal year):")
+        lines.append(_quarterly_label(spec, model))
         for label, fin in spec.quarterly.items():
             lines.append(
                 f"- {label}: revenue {render.fmt(fin.revenue)}, "
@@ -233,10 +370,21 @@ def compact_summary(model: kernel.ModelResult, valuation: valuation_module.Valua
             for row in rows:
                 lines.append("  " + " | ".join(row))
             lines.extend(_consensus_notes(model))
-            lines.append(
-                "Where the model differs from consensus, say in one sentence why. "
-                "Do not average the two."
-            )
+            if instructions:
+                lines.append(
+                    "Where the model differs from consensus, say in one sentence why. "
+                    "Do not average the two."
+                )
+
+    # Where guidance, consensus and the model state different numbers. Record
+    # only: the model's figure is the one published, and the gap is what the
+    # debate must argue about.
+    if getattr(model, "conflicts", None):
+        from .conflicts import render as render_conflicts
+
+        block = render_conflicts(model.conflicts)
+        if block:
+            lines.extend(["", block])
 
     for bridge in spec.bridges:
         lines.append("")
@@ -251,31 +399,56 @@ def compact_summary(model: kernel.ModelResult, valuation: valuation_module.Valua
             lines.append(f"  {line.value:+g} {line.label}{detail}")
         lines.append(f"  = {bridge.total:g}")
 
-    lines.append("")
-    lines.append(
-        f"Valuation: price {render.fmt(valuation.price, 0)} {spec.currency}, "
-        f"{valuation.period} EPS {render.fmt(valuation.eps)} on {valuation.basis}, "
-        f"P/E {render.fmt(valuation.pe, 1)}x, fair value "
-        f"{render.fmt(valuation.fair_value_low, 0)}-{render.fmt(valuation.fair_value_high, 0)} "
-        f"{spec.currency}."
-    )
-    if valuation.scenarios:
+    if include_per_share:
+        lines.append("")
         lines.append(
-            "Scenarios: "
-            + "; ".join(
-                f"{s['name']} {render.fmt(s['target'], 0)} ({s['change'] * 100:+.0f}%)"
-                for s in valuation.scenarios
-            )
+            f"Valuation: price {render.fmt(valuation.price, 0)} {spec.currency}, "
+            f"{valuation.period} EPS {render.fmt(valuation.eps)} on {valuation.basis}, "
+            f"P/E {render.fmt(valuation.pe, 1)}x, fair value "
+            f"{render.fmt(valuation.fair_value_low, 0)}-{render.fmt(valuation.fair_value_high, 0)} "
+            f"{spec.currency}."
         )
+        if valuation.scenarios:
+            lines.append(
+                "Scenarios: "
+                + "; ".join(
+                    f"{s['name']} {render.fmt(s['target'], 0)} ({s['change'] * 100:+.0f}%)"
+                    for s in valuation.scenarios
+                )
+            )
+    else:
+        lines.append("")
+        lines.append(
+            "Per-share outputs suppressed: the share basis is not verified, so EPS, the P/E, "
+            "the fair-value band and the scenarios are not available for the decision."
+        )
+
+    if (
+        include_ev_ebitda
+        and valuation.ev_ebitda_multiple is not None
+        and valuation.ebitda is not None
+        and valuation.enterprise_value is not None
+    ):
+        line = (
+            f"EV/EBITDA: {valuation.ev_ebitda_multiple:g}x {valuation.ev_period} EBITDA "
+            f"{render.fmt(valuation.ebitda)} = enterprise value "
+            f"{render.fmt(valuation.enterprise_value)}; equity value "
+            f"{render.fmt(valuation.ev_equity_value)} {spec.currency} after net debt"
+        )
+        if include_ev_per_share and valuation.ev_per_share is not None:
+            line += f"; per share {render.fmt(valuation.ev_per_share, 0)} {spec.currency}"
+        lines.append(line)
+        lines.extend(_net_debt_lines(spec))
     if model.warnings:
         lines.append("")
         lines.append("Model warnings:")
         lines.extend(f"- {warning}" for warning in model.warnings)
     lines.append("")
-    lines.append(
-        "Do not recalculate these figures. Where the model depends on an assumption, "
-        "state the assumption and cite the document or meeting note behind it."
-    )
+    if instructions:
+        lines.append(
+            "Do not recalculate these figures. Where the model depends on an assumption, "
+            "state the assumption and cite the document or meeting note behind it."
+        )
     return "\n".join(lines)
 
 

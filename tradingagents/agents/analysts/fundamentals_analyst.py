@@ -488,9 +488,15 @@ Build an independent base case from operating evidence.
 Do not copy management guidance or consensus merely to make the forecast look
 reasonable.
 
-If the independent forecast equals guidance or consensus, state clearly that no
-forecast edge exists for that metric and explain why the evidence does not support
-a different value.
+If the independent forecast equals guidance or consensus, state once, neutrally, that the
+model has no independent forecast differentiation for that metric, and explain why the
+evidence does not support a different value. Do not repeat it as a bearish argument.
+
+Never call an operating-profit growth rate an incremental margin. Growth is
+current / prior - 1; incremental margin is (change in operating profit) / (change in
+revenue). Label the number you quote: "operating profit +97% year on year" and
+"incremental operating margin 42%" are different claims, and a report that swaps them
+overstates the profitability of growth.
 
 Forecast only to the extent the evidence supports.
 
@@ -632,8 +638,17 @@ Do not use an incremental margin without explaining:
 - Whether depreciation and startup costs are included;
 - Why the margin is reasonable.
 
+A historical *group* incremental margin is not a forward margin. Do not apply it to a
+future year without normalising for segment mix, utilisation, pricing, depreciation,
+capacity start-up and yield. If you use it to size a downside, present the result as a
+labelled stress case with the inputs stated, never as the base forecast or the reason for
+the rating.
+
 If a residual is required to reach the forecast, disclose it as a residual rather
-than presenting it as a business driver.
+than presenting it as a business driver. A residual widens the forecast range; it does
+not select the bear case. Label it *unsupported* unless the evidence contradicts it; an
+unsupported residual lowers confidence in the forecast, it does not prove the forecast is
+too high.
 
 ============================================================
 14. OPERATING PROFIT TO NET INCOME
@@ -744,6 +759,16 @@ They do not automatically prove:
 - Sustainable free cash flow;
 - Guaranteed future utilization;
 - Elimination of customer concentration risk.
+
+A falling advance balance is not a warning by itself. Distinguish the cause:
+
+- Ordinary delivery, milestone completion or revenue recognition as the contracted
+  work proceeds (neutral);
+- A refund, cancellation, renegotiated customer terms or a decline alongside
+  capacity delays and reduced commitments (a warning).
+
+When advances are used as a monitoring signal, state which cause the evidence supports
+rather than reading the direction of the balance as confirmation or deterioration.
 
 Assess:
 

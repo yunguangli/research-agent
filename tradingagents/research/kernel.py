@@ -51,6 +51,9 @@ class ModelResult:
     market_cap: float | None = None
     pe: dict[str, dict[str, float]] = field(default_factory=dict)
     quarterly_comparison: list[str] = field(default_factory=list)
+    # Record-only: where the model, guidance and consensus state different
+    # numbers for the same metric-period. See research/conflicts.py.
+    conflicts: list = field(default_factory=list)
 
     def row(self, label: str) -> PeriodRow:
         for row in self.rows:
@@ -100,6 +103,12 @@ def market_cap(price: float, shares_m: float, unit: str) -> float:
     return price * shares_m * cap_factor
 
 
+def per_share(value: float, shares_m: float, unit: str) -> float:
+    """A model-unit value expressed per share (the inverse of :func:`market_cap`)."""
+    per_share_factor, _ = _unit_scale(unit)
+    return value * per_share_factor / shares_m
+
+
 def _margin(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator in (None, 0):
         return None
@@ -117,10 +126,51 @@ def _warn(spec: ModelSpec, message: str) -> None:
         spec.warnings.append(message)
 
 
-def run(spec: ModelSpec) -> ModelResult:
-    """Build every period row and validate the model's arithmetic."""
+def run(spec: ModelSpec, *, strict: bool = True) -> ModelResult:
+    """Build every period row and validate the model's arithmetic.
+
+    ``strict=False`` is for a historical replay: it keeps the checks but turns
+    the one rule a replay may legitimately violate — a scenario priced on a
+    different year than the band — into a warning, because the archived report
+    published that mix and a replay must reproduce it, not correct it.
+    """
     checks: list[Check] = []
     errors: list[str] = []
+
+    from . import capital
+
+    capital_issues = capital.validate(spec.capital_structure)
+    if capital_issues:
+        errors.extend(capital_issues)
+
+    for project in spec.projects:
+        def _pget(key: str, project=project):
+            return getattr(project, key, "") if not isinstance(project, dict) else project.get(key, "")
+
+        name = _pget("project_name") or _pget("project_id") or "project"
+        dated = [
+            (key, str(_pget(key) or ""))
+            for key in (
+                "construction_start",
+                "commissioning_start",
+                "production_start",
+                "revenue_contribution_start",
+                "depreciation_start",
+            )
+        ]
+        dated = [(key, value) for key, value in dated if value]
+        for (first_key, first), (second_key, second) in zip(dated, dated[1:], strict=False):
+            if second < first:
+                errors.append(
+                    f"{name}: {second_key.replace('_', ' ')} {second} precedes "
+                    f"{first_key.replace('_', ' ')} {first}"
+                )
+        if _pget("capex") and not _pget("commissioning_start"):
+            _warn(
+                spec,
+                f"{name} states capex but no commissioning date: its contribution timing "
+                "is unverified.",
+            )
 
     declared = {p.label for p in spec.periods}
     for group_name, group in (
@@ -180,6 +230,14 @@ def run(spec: ModelSpec) -> ModelResult:
 
     # Bridges fill or confirm revenue / operating profit for the target period.
     for bridge in spec.bridges:
+        if bridge.base_period == bridge.target_period:
+            errors.append(
+                f"{bridge.metric} bridge goes from {bridge.base_period} to itself: a bridge "
+                "moves to a different period. Set base_period to the prior period and "
+                "base_value to that period's reported figure; the lines are the changes "
+                "that reach the target."
+            )
+            continue
         check = Check(
             name=f"{bridge.metric} bridge {bridge.base_period} -> {bridge.target_period}",
             expected=bridge.declared_total if bridge.declared_total is not None else bridge.total,
@@ -244,8 +302,16 @@ def run(spec: ModelSpec) -> ModelResult:
             )
 
     rows: list[PeriodRow] = []
+    from .shares import forecast_eps_basis
+
+    forecast_basis = forecast_eps_basis(spec)
     for period in spec.periods:
         fin = by_period.get(period.label, Financials())
+        eps_values: dict[str, float] = {}
+        for base in spec.share_bases:
+            shares = _effective_shares(spec, period, base.name, forecast_basis)
+            if fin.net_profit is not None and shares is not None:
+                eps_values[base.name] = eps(fin.net_profit, shares, spec.unit)
         row = PeriodRow(
             label=period.label,
             basis=period.basis,
@@ -254,11 +320,7 @@ def run(spec: ModelSpec) -> ModelResult:
             ordinary_profit=fin.ordinary_profit,
             net_profit=fin.net_profit,
             operating_margin=_margin(fin.operating_profit, fin.revenue),
-            eps={
-                base.name: eps(fin.net_profit, base.shares_m, spec.unit)
-                for base in spec.share_bases
-                if fin.net_profit is not None
-            },
+            eps=eps_values,
             sources=sources.get(period.label, {}),
         )
         rows.append(row)
@@ -352,9 +414,23 @@ def run(spec: ModelSpec) -> ModelResult:
                         )
 
     # --- segments --------------------------------------------------------
+    order = {period.label: index for index, period in enumerate(spec.periods)}
     for label, segments in spec.segments.items():
         revenue = by_period.get(label, Financials()).revenue
         operating = by_period.get(label, Financials()).operating_profit
+        for segment in segments:
+            # A contribution before the disclosed commissioning period is not a
+            # forecast, it is a timing error: the repair gate can zero it, and
+            # the report must never publish it silently.
+            starts = order.get(segment.commissioning) if segment.commissioning else None
+            here = order.get(label)
+            if starts is not None and here is not None and here < starts and abs(segment.revenue) > TOL:
+                _warn(
+                    spec,
+                    f"{label} books {segment.revenue:g} of {segment.name} revenue but "
+                    f"{segment.name} is commissioned in {segment.commissioning}: remove the "
+                    "unsupported contribution or mark the period unverified.",
+                )
         if revenue is not None:
             total = sum(s.revenue for s in segments)
             checks.append(_check(f"{label} segment revenue", revenue, total, spec.unit))
@@ -403,11 +479,41 @@ def run(spec: ModelSpec) -> ModelResult:
         basis = spec.share_bases[0].name
         spec.eps_basis = basis
 
+    # --- disclosed EPS ---------------------------------------------------
+    # The computed EPS reuses net profit and the share count, so recomputing it
+    # from the same three inputs proves nothing. A stated EPS is the one
+    # independent check on the denominator; without one there is nothing to
+    # compare, and that is reported as no check rather than as a pass.
+    for period in spec.periods:
+        fin = by_period.get(period.label)
+        row = next((candidate for candidate in rows if candidate.label == period.label), None)
+        if fin is None or fin.eps is None or row is None:
+            continue
+        computed = row.eps.get(basis)
+        if computed is None:
+            continue
+        check = _check(
+            f"{period.label} stated EPS ({basis})", fin.eps, computed, spec.currency, tol=EPS_TOL
+        )
+        checks.append(check)
+        if not check.passed:
+            errors.append(
+                f"{period.label} states EPS {fin.eps:g} but net profit {row.net_profit:g} "
+                f"on {basis} ({spec.share_base(basis).shares_m:g}m shares) gives {computed:g}: "
+                "one of the three inputs is wrong"
+            )
+
     market_caps: dict[str, float] = {}
     pe: dict[str, dict[str, float]] = {}
+    from .shares import market_cap_basis
+
     cap_shares = spec.valuation.market_cap_shares_m
     if cap_shares is None:
-        cap_shares = spec.share_base(basis).shares_m
+        from . import capital
+
+        cap_shares = capital.market_cap_shares(
+            spec, spec.share_base(market_cap_basis(spec)).shares_m
+        )
     market_cap_value = market_cap(spec.valuation.price, cap_shares, spec.unit)
     for base in spec.share_bases:
         market_caps[base.name] = market_cap_value
@@ -416,21 +522,6 @@ def run(spec: ModelSpec) -> ModelResult:
             value = row.eps.get(base.name)
             if value:
                 pe[base.name][row.label] = spec.valuation.price / value
-
-    for base in spec.share_bases:
-        for row in rows:
-            if row.net_profit is None:
-                continue
-            expected = eps(row.net_profit, base.shares_m, spec.unit)
-            actual = row.eps[base.name]
-            check = Check(
-                name=f"{row.label} EPS ({base.name})",
-                expected=expected,
-                actual=actual,
-                passed=True,
-                unit=f" {spec.currency}",
-            )
-            checks.append(check)
 
     # Fair-value range: the declared numbers are rounded to a round figure, so
     # compare within 1% rather than to the yen. A wrong multiple is far outside it.
@@ -456,16 +547,77 @@ def run(spec: ModelSpec) -> ModelResult:
             )
         )
 
-    for scenario in spec.scenarios:
-        checks.append(
-            Check(
-                name=f"scenario {scenario.name} target",
-                expected=scenario.eps * scenario.multiple,
-                actual=scenario.target_price,
-                passed=True,
-                unit=f" {spec.currency}",
+    # --- one valuation period --------------------------------------------
+    # The band, the scenarios and the case table must price the same year. The
+    # 4062.T base scenario used FY3/28 EPS while the band used FY3/27, so the
+    # two numbers could not be compared and the case engine inherited a
+    # multiple from one year and applied it to another.
+    valuation_row = _valuation_row(rows, spec)
+    if valuation_row is not None:
+        valuation_basis = spec.valuation.fair_value_basis or basis
+        valuation_eps = valuation_row.eps.get(valuation_basis)
+        for scenario in spec.scenarios:
+            declared = (scenario.period or "").strip()
+            if declared:
+                if declared != valuation_row.label:
+                    errors.append(
+                        f"scenario {scenario.name} prices {declared} but the fair-value range "
+                        f"is on {valuation_row.label}: one model, one valuation period"
+                    )
+                continue
+            if valuation_eps is not None and _same_eps(scenario.eps, valuation_eps):
+                continue
+            other = next(
+                (
+                    row
+                    for row in rows
+                    if row.label != valuation_row.label
+                    and row.eps.get(valuation_basis) is not None
+                    and _same_eps(scenario.eps, row.eps[valuation_basis])
+                ),
+                None,
             )
+            if other is not None:
+                message = (
+                    f"scenario {scenario.name} EPS {scenario.eps:g} is {other.label}'s EPS "
+                    f"while the fair-value range is on {valuation_row.label} "
+                    f"({valuation_eps:g}): state the period, or move the scenario to it"
+                )
+                if strict:
+                    errors.append(message)
+                else:
+                    _warn(spec, message + " (historical replay: kept as published)")
+
+    for scenario in spec.scenarios:
+        expected = scenario.eps * scenario.multiple
+        if scenario.target_price is None:
+            # Derived, and said so: a check that compares a derived value with
+            # the formula that produced it would pass whatever the inputs were.
+            # The spec is left as it was; `resolved_target` computes on demand.
+            checks.append(
+                Check(
+                    name=f"scenario {scenario.name} target (derived)",
+                    expected=expected,
+                    actual=expected,
+                    passed=True,
+                    unit=f" {spec.currency}",
+                )
+            )
+            continue
+        check = _check(
+            f"scenario {scenario.name} target",
+            expected,
+            scenario.target_price,
+            spec.currency,
+            tol=max(1.0, abs(expected) * 0.001),
         )
+        checks.append(check)
+        if not check.passed:
+            errors.append(
+                f"scenario {scenario.name} states a target of {scenario.target_price:g} but "
+                f"EPS {scenario.eps:g} x {scenario.multiple:g}x = {expected:g}: the target, "
+                "the EPS or the multiple is wrong"
+            )
 
     # Two valuations that cannot both be right: a Base scenario outside the
     # declared fair-value band. The report would print both with nothing bridging
@@ -479,11 +631,12 @@ def run(spec: ModelSpec) -> ModelResult:
             band_low = base_eps * low_multiple
             band_high = base_eps * high_multiple
             for scenario in spec.scenarios:
-                if "base" not in scenario.name.lower() or scenario.target_price is None:
+                if "base" not in scenario.name.lower():
                     continue
-                if scenario.target_price < band_low * 0.95 or scenario.target_price > band_high * 1.05:
+                target = scenario.resolved_target
+                if target < band_low * 0.95 or target > band_high * 1.05:
                     errors.append(
-                        f"Base scenario target {scenario.target_price:g} sits outside the "
+                        f"Base scenario target {target:g} sits outside the "
                         f"fair-value range {band_low:g}-{band_high:g}: reconcile the scenario "
                         "multiple with the declared fair-value multiples — one model cannot "
                         "publish two valuations that cannot both be right."
@@ -492,7 +645,16 @@ def run(spec: ModelSpec) -> ModelResult:
     if errors:
         raise ModelError("Model does not tie:\n  - " + "\n  - ".join(errors))
 
-    return ModelResult(
+    # Period-label and share-basis findings are warnings: the dates and counts
+    # the model uses are what every computation runs on, so a company-specific
+    # label is usable, it just must not be quoted as the canonical year.
+    from .periods import audit_periods
+    from .shares import basis_warnings
+
+    for message in (*audit_periods(spec), *basis_warnings(spec)):
+        _warn(spec, message)
+
+    result = ModelResult(
         spec=spec,
         rows=rows,
         checks=checks,
@@ -500,10 +662,55 @@ def run(spec: ModelSpec) -> ModelResult:
         pe=pe,
         quarterly_comparison=comparison,
     )
+    from .conflicts import register
+
+    result.conflicts = register(result)
+    return result
+
+
+def _effective_shares(
+    spec: ModelSpec, period, base_name: str, forecast_basis: str
+) -> float | None:
+    """The share count for one period's EPS on one base.
+
+    A capital structure's period weighted average wins for the forecast-EPS basis;
+    every other base keeps its declared count. When the structure exists but the
+    period's diluted count cannot be resolved (an undated convertible), the count
+    is None and the EPS for that basis is simply absent — never a silent fallback.
+    """
+    if (
+        spec.capital_structure is not None
+        and base_name == forecast_basis
+        and period.basis == "forecast"
+    ):
+        from . import capital
+
+        value, _reason = capital.forecast_shares(
+            spec.capital_structure, period.label, period.end
+        )
+        if value is not None:
+            return value
+        return None
+    return spec.share_base(base_name).shares_m
+
+
+def _same_eps(left: float, right: float) -> bool:
+    """Whether two EPS figures are the same number at one-decimal precision.
+
+    ``EPS_TOL`` is too loose here: 0.15 separates a 0.8 from a 0.9, which are
+    different prices, while a 157.25 and a 157.2 are the same rounded figure.
+    """
+    return abs(left - right) <= max(0.02, abs(left) * 0.001)
 
 
 def _valuation_row(rows: list[PeriodRow], spec: ModelSpec) -> PeriodRow | None:
-    """The row the fair-value range refers to: the first forecast period."""
+    """The row the fair-value range refers to: the declared period, else the first forecast."""
+    declared = (spec.valuation.fair_value_period or "").strip()
+    if declared:
+        for row in rows:
+            if row.label == declared:
+                return row
+        raise ModelError(f"fair_value_period {declared!r} is not a declared period")
     for period in spec.periods:
         if period.basis == "forecast":
             for row in rows:
@@ -528,7 +735,7 @@ def _present(fin: Financials) -> list[str]:
 
 def _merge(base: Financials | None, extra: Financials) -> Financials:
     merged = base or Financials()
-    for metric in ("revenue", "operating_profit", "ordinary_profit", "net_profit"):
+    for metric in ("revenue", "operating_profit", "ordinary_profit", "net_profit", "eps"):
         value = extra.get(metric)
         if value is not None:
             setattr(merged, metric, value)

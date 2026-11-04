@@ -11,6 +11,7 @@ from rich.markup import escape
 
 from cli.display import console
 from cli.models import AnalystType, AssetType
+from tradingagents.dataflows.date_window import get_current_date
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import get_model_options
 from tradingagents.llm_clients.openai_client import OPENAI_COMPATIBLE_PROVIDERS, SIGNED_IN_PROVIDERS
@@ -87,7 +88,7 @@ def parse_analysis_date(value: str) -> str:
         day = datetime.datetime.strptime(value.strip(), "%Y-%m-%d").date()
     except ValueError:
         raise ValueError(f"not a date: {value!r}; use YYYY-MM-DD") from None
-    if day > datetime.date.today():
+    if day > datetime.date.fromisoformat(get_current_date()):
         raise ValueError(f"{value} is in the future")
     return day.isoformat()
 
@@ -192,8 +193,8 @@ def select_research_depth(default=None) -> int:
 
     DEPTH_OPTIONS = [
         ("Shallow - Quick research, few debate and strategy discussion rounds", 1),
-        ("Medium - Middle ground, moderate debate rounds and strategy discussion", 3),
-        ("Deep - Comprehensive research, in depth debate and strategy discussion", 5),
+        ("Medium - Middle ground, moderate debate rounds and strategy discussion", 2),
+        ("Deep - Comprehensive research, in depth debate and strategy discussion", 3),
     ]
 
     choice = questionary.select(

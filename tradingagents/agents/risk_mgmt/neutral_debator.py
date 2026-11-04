@@ -1,10 +1,25 @@
 from tradingagents.agents.context import (
+    EVIDENCE_DISCIPLINE,
     SIZING_RULE,
+    case_availability,
+    fundamentals_with_repair_notice,
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
     opponent_argument_or_opening,
     report_or_absent,
+)
+
+ROLE = (
+    "Internal routing label: Neutral. That label is a routing identifier, not an "
+    "analytical stance. Act as the investment team's risk analyst. Evaluate the downside "
+    "operating path; the free-cash-flow and balance-sheet consequences; execution and "
+    "financing risk; customer, competitive and cycle concentration; technical volatility "
+    "and implementation risk; the fundamental thesis-invalidation conditions; and the "
+    "position-size constraint. Distinguish normal price volatility from evidence that "
+    "delays entry and from evidence that invalidates the thesis. Technical evidence may "
+    "change entry timing and sizing; it must not change fundamental fair value unless you "
+    "justify a change in the valuation multiple.\n\n"
 )
 
 
@@ -24,13 +39,13 @@ def create_neutral_debator(llm):
         market_research_report = report_or_absent(state["market_report"], "market")
         sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
         news_report = report_or_absent(state["news_report"], "news")
-        fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
+        fundamentals_report = fundamentals_with_repair_notice(state)
         instrument_context = get_instrument_context_from_state(state)
         portfolio_context = get_portfolio_context_from_state(state)
 
         trader_decision = state["trader_investment_plan"]
 
-        prompt = f"""As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies.Here is the trader's decision:
+        prompt = f"""{ROLE}As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies.Here is the trader's decision:
 
 {trader_decision}
 
@@ -44,7 +59,7 @@ Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
 Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the conservative analyst: {current_conservative_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
 
-Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. {SIZING_RULE}Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
+Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. {SIZING_RULE}{EVIDENCE_DISCIPLINE}{case_availability(state)}Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
         response = llm.invoke(prompt)
 

@@ -41,8 +41,8 @@ def test_a_bear_arguing_growth_is_turned_round():
     row = model.row(valuation.period)
     case = cases.Case(stance="bearish", revenue_pct=6.5, operating_profit_pct=6.5)
     result = cases.apply_case(model, valuation, case)
-    # Flipped to -6.5% and then capped at -5%.
-    assert result.applied["revenue_pct"] == pytest.approx(-cases.CAP_FORECAST_PCT)
+    # Flipped to -6.5%; with the 25% ceiling that is inside the cap, so it applies.
+    assert result.applied["revenue_pct"] == pytest.approx(-6.5)
     assert result.revenue < row.revenue
     assert any("applied as" in note and "bear case argues below" in note for note in result.notes)
     assert result.target < cases.base_multiple(valuation) * row.eps[valuation.basis]
@@ -152,6 +152,17 @@ def test_a_bull_cannot_argue_a_lower_multiple_than_the_base():
     result = cases.apply_case(model, valuation, cases.Case(stance="aggressive", multiple=base * 0.8, evidence=["doc-peers"]))
     assert result.multiple == pytest.approx(base, rel=1e-6)
     assert any("cannot argue a lower multiple" in note for note in result.notes)
+
+
+def test_a_long_note_is_published_whole_not_cut_at_sixty_characters():
+    """The 4062.T case table published 'a bull case cannot argue ' and stopped."""
+    model, valuation = _base()
+    base = cases.base_multiple(valuation)
+    table = cases.render_results(
+        model, valuation,
+        [{"stance": "aggressive", "multiple": base * 0.8, "evidence": ["doc-peers"]}],
+    )
+    assert "a bull case cannot argue a lower multiple" in table
 
 
 def test_case_figures_are_known_to_the_audit():

@@ -211,7 +211,10 @@ def summarize(source: BacktestResult | str | Path) -> BacktestSummary:
     # Report the window the outcomes were actually measured over, from the log.
     windows = {f"{e['holding'][:-1]} trading days" for e, _ in resolved
                if (e.get("holding") or "").endswith("d")}
+    # The pending count is the entries still waiting for their window, not the
+    # residual: a settled entry whose alpha could not be parsed is neither
+    # resolved nor unscored, and re-running would never settle it.
     return BacktestSummary(resolved=len(resolved),
-                           pending=len(entries) - len(resolved) - unscored,
+                           pending=sum(1 for e in entries if e["pending"]),
                            by_rating=by_rating, unscored=unscored,
                            holding=", ".join(sorted(windows)) or "the configured window")

@@ -165,6 +165,35 @@ class TestTradingMemoryLogCore:
         assert len(entries) == 1
         assert entries[0]["pending"] is False  # the settled record is kept, not replaced
 
+    def test_an_empty_placeholder_does_not_block_the_real_decision(self, tmp_path):
+        """A blank entry from an interrupted run used to suppress the real one.
+
+        The 4062.T log held '[2026-11-02 | 4062.T | Hold | pending]' with no
+        DECISION text; the guard matched its tag and silently dropped the run's
+        actual Underweight call, so the memory loop kept a Hold nobody made.
+        """
+        log = make_log(tmp_path)
+        log._log_path.write_text(
+            f"[2026-11-02 | 4062.T | Hold | pending]\n\nDECISION:\n{log._SEPARATOR}",
+            encoding="utf-8",
+        )
+
+        log.store_decision("4062.T", "2026-11-02", DECISION_BUY, rating="Underweight")
+
+        entries = log.load_entries()
+        assert len(entries) == 1
+        assert entries[0]["rating"] == "Underweight"
+        assert entries[0]["decision"].strip() == DECISION_BUY.strip()
+
+    def test_a_blank_entry_is_not_pending_for_settlement(self, tmp_path):
+        """A placeholder has nothing to reflect on, so settlement must skip it."""
+        log = make_log(tmp_path)
+        log._log_path.write_text(
+            f"[2026-11-02 | 4062.T | Hold | pending]\n\nDECISION:\n{log._SEPARATOR}",
+            encoding="utf-8",
+        )
+        assert log.get_pending_entries() == []
+
     def test_batch_update_resolves_multiple_entries(self, tmp_path):
         """batch_update_with_outcomes resolves multiple pending entries in one write."""
         log = make_log(tmp_path)
@@ -834,11 +863,45 @@ class TestPortfolioManagerInjection:
         pm_node = create_portfolio_manager(llm)
         result = pm_node(_make_pm_state())
         md = result["final_trade_decision"]
-        assert "**Rating**: Overweight" in md
+        # No benchmark was supplied: a relative Overweight is not published; the
+        # direction survives as the absolute view.
+        assert "**Rating**: Hold" in md
+        assert "**Absolute view**: Positive" in md
         assert "**Executive Summary**: Build position gradually" in md
         assert "**Investment Thesis**: AI capex cycle" in md
         assert "**Price Target**: 215.0" in md
         assert "**Time Horizon**: 3-6 months" in md
+
+    def test_a_supplied_benchmark_keeps_the_relative_rating(self):
+        """With a reference portfolio the 5-tier rating is defined and published."""
+        from tradingagents.dataflows.config import set_config
+
+        set_config({"benchmark_ticker": "SPY"})
+        captured = {}
+        decision = PortfolioDecision(
+            rating=PortfolioRating.OVERWEIGHT,
+            executive_summary="Build position gradually.",
+            investment_thesis="AI capex cycle remains intact.",
+        )
+        result = create_portfolio_manager(_structured_pm_llm(captured, decision))(
+            _make_pm_state()
+        )
+        assert "**Rating**: Overweight" in result["final_trade_decision"]
+
+    def test_underweight_without_a_benchmark_is_published_as_hold(self):
+        captured = {}
+        decision = PortfolioDecision(
+            rating=PortfolioRating.UNDERWEIGHT,
+            executive_summary="Reduce exposure.",
+            investment_thesis="Valuation is full.",
+        )
+        result = create_portfolio_manager(_structured_pm_llm(captured, decision))(
+            _make_pm_state()
+        )
+        md = result["final_trade_decision"]
+        assert "**Rating**: Hold" in md
+        assert "**Absolute view**: Negative" in md
+        assert result["final_rating"] == "Hold"
 
     def test_pm_falls_back_to_freetext_when_structured_unavailable(self):
         """If a provider does not support with_structured_output, the agent

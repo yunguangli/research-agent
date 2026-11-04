@@ -1,0 +1,2 @@
+MODEL UNAVAILABLE: the model spec at 4062.T.json failed its checks (Model does not tie:
+  - scenario Base EPS 215.4 is FY3/28's EPS while the fair-value range is on FY3/27 (157.161): state the period, or move the scenario to it). Report the model as unavailable; do not estimate its numbers.

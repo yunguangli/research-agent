@@ -1,5 +1,6 @@
 """Running one analysis from the CLI: build the graph, stream it into the live view, save the report."""
 
+import logging
 import os
 import sys
 import time
@@ -31,6 +32,17 @@ from tradingagents.graph.analyst_execution import (
     build_analyst_execution_plan,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+
+def _resolve_run_purpose(flags: dict, config: dict) -> str:
+    """The run purpose: an explicit flag, else the environment-derived config.
+
+    Typer's ``--run-purpose`` default is ``None`` on purpose. With the old
+    ``"production"`` default the flag was always truthy and overrode
+    ``TRADINGAGENTS_RUN_PURPOSE`` on every run, so a diagnostic run was recorded
+    as a production decision.
+    """
+    return str(flags.get("run_purpose") or config.get("run_purpose") or "production").strip().lower()
 
 
 def _run_directory(config: dict, ticker: str, trade_date: str) -> Path:
@@ -89,6 +101,11 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
         if selections.get(key) is not None:
             config[key] = selections[key]
     config["output_language"] = selections.get("output_language", "English")
+    if config["max_debate_rounds"] > 1:
+        console.print(
+            f"[dim]Deep mode: {config['max_debate_rounds']} research rounds. Rounds after "
+            "the first are delta-only and end early when nothing material changes.[/dim]"
+        )
     # The horizon is optional everywhere: the selection already carries the
     # env value, the remembered answer or the default.
     config["decision_horizon"] = selections.get("decision_horizon") or config["decision_horizon"]
@@ -99,7 +116,28 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
     return config
 
 
-def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
+def _configure_logging(level: str, log_file: Path) -> None:
+    """Send the library's warnings to a file beside the run's other artifacts.
+
+    Nothing configured logging before: a structured-output fallback or a vendor
+    failure was raised at WARNING and disappeared behind the live view. The file
+    is per ticker and date, next to ``message_tool.log``.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if isinstance(handler, logging.FileHandler) and Path(handler.baseFilename) == log_file:
+            root.setLevel(level.upper())
+            return
+    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    root.addHandler(handler)
+    root.setLevel(level.upper())
+
+
+def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None, log_level=None):
     flags = flags or {}
     # With no terminal nothing can answer a prompt: name every question still
     # open before any model is called, rather than stopping at the first one.
@@ -114,6 +152,17 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
     selections = get_user_selections(flags)
 
     config = _build_run_config(selections, checkpoint)
+    # The flag falls back to the environment-derived config: typer's default is
+    # None so TRADINGAGENTS_RUN_PURPOSE is not silently overwritten by
+    # "production" on every run.
+    config["run_purpose"] = _resolve_run_purpose(flags, config)
+
+    run_log = None
+    if log_level:
+        log_dir = _run_directory(config, selections["ticker"], selections["analysis_date"])
+        log_dir.mkdir(parents=True, exist_ok=True)
+        run_log = log_dir / "run.log"
+        _configure_logging(str(log_level), run_log)
 
     stats_handler = StatsCallbackHandler()
 
@@ -175,10 +224,14 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
             if section_name in obj.report_sections and obj.report_sections[section_name] is not None:
                 content = obj.report_sections[section_name]
                 if content:
+                    # The published tree strips the audit marks; this live copy
+                    # is what a user opens first, so it must strip them too.
+                    from tradingagents.research.audit import strip_marks
+
                     file_name = f"{section_name}.md"
                     text = "\n".join(str(item) for item in content) if isinstance(content, list) else content
                     with open(report_dir / file_name, "w", encoding="utf-8") as f:
-                        f.write(text)
+                        f.write(strip_marks(text))
         return wrapper
 
     message_buffer.add_message = save_message_decorator(message_buffer, "add_message")
@@ -240,6 +293,7 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
         # interrupted run instead of re-appending the initial state (#1249); the
         # try/finally tears the checkpointer down even if the stream raises.
         trace = []
+        max_risk_rounds = int(config.get("max_risk_discuss_rounds") or 1)
         try:
             for messages, chunk in graph.stream_run(graph.checkpoint_input(init_agent_state), **args):
                 for message in messages:
@@ -328,6 +382,21 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
                         message_buffer.update_report_section(
                             "final_trade_decision", f"### Neutral Analyst Analysis\n{neu_hist}"
                         )
+                    if (
+                        not judge
+                        and int(risk_state.get("count") or 0) >= 3 * max_risk_rounds
+                        and message_buffer.agent_status.get("Portfolio Manager") == "pending"
+                    ):
+                        # The risk loop is over; the next node is the Portfolio
+                        # Manager. Show it working instead of leaving the screen
+                        # on the last risk argument for the whole model call.
+                        for name in (
+                            "Aggressive Analyst",
+                            "Conservative Analyst",
+                            "Neutral Analyst",
+                        ):
+                            message_buffer.update_agent_status(name, "completed")
+                        message_buffer.update_agent_status("Portfolio Manager", "in_progress")
                     if judge and message_buffer.agent_status.get("Portfolio Manager") != "completed":
                         message_buffer.update_agent_status("Portfolio Manager", "in_progress")
                         message_buffer.update_report_section(
@@ -348,9 +417,10 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
             for chunk in trace:
                 final_state.update(chunk)
 
-            # Clean run: log the decision, then drop this run's checkpoint so a
-            # later run starts fresh. A mid-stream failure skips both, keeping
-            # the checkpoint for resume.
+            # Clean run: audit and repair, log the decision, then drop this run's
+            # checkpoint so a later run starts fresh. A mid-stream failure skips
+            # both, keeping the checkpoint for resume.
+            graph.prepare_final_state(final_state, selections["ticker"])
             graph.record_decision(selections["ticker"], selections["analysis_date"], final_state)
             graph.clear_checkpoint_on_success(
                 selections["ticker"], selections["analysis_date"], selections["asset_type"], portfolio
@@ -388,6 +458,8 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
 
     _offer_reports(final_state, graph, selections["ticker"],
                    save=flags.get("save"), show=flags.get("show"), html=flags.get("html"))
+    if run_log is not None:
+        console.print(f"[dim]Run log:[/dim] {run_log}")
 
 
 def _graphical_browser():
@@ -429,7 +501,7 @@ def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None):
     """
     asked = save is None
     if asked:
-        save = (_ask("Save report?") or "").strip().upper() in ("Y", "YES", "")
+        save = _yes("Save report?")
     if save:
         # Under results_dir, not the working directory: in Docker the working
         # directory is inside the container and the report goes with it, while
@@ -455,7 +527,7 @@ def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None):
                 _open_page(page)
 
     if show is None:
-        show = (_ask("\nDisplay full report on screen?") or "").strip().upper() in ("Y", "YES", "")
+        show = _yes("\nDisplay full report on screen?")
     if show:
         display_complete_report(final_state)
     console.print("[green]Run finished.[/green]")
