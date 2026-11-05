@@ -216,6 +216,40 @@ def test_a_mixed_basis_must_name_its_controlling_category():
     assert any("controlling category" in reason for reason in result["failure_reasons"])
 
 
+def test_a_mixed_basis_without_verified_technicals_falls_back_to_fundamental():
+    result = audit_action(
+        _audit(
+            [
+                _evidence("operating", "margin", ("doc-a",)),
+            ],
+            decision_basis="mixed",
+            controlling_category="operating",
+        ),
+        action="HOLD",
+        valuation_verified=True,
+    )
+
+    assert result["validation_passed"] is True
+    assert result["decision_basis"] == "fundamental"
+    assert result["technical_overlay"] == "advisory"
+    assert result["mixed_fallback"] is True
+
+
+def test_the_fallback_cannot_launder_a_missing_fundamental_leg():
+    result = audit_action(
+        _audit(
+            [_evidence("technical", "breakdown", ("doc-b",))],
+            decision_basis="mixed",
+            controlling_category="technical",
+        ),
+        action="HOLD",
+        valuation_verified=True,
+    )
+
+    assert result["validation_passed"] is False
+    assert result["decision_basis"] == "mixed"
+
+
 def test_using_suppressed_figures_fails_the_audit():
     result = audit_action(
         _audit([

@@ -320,11 +320,16 @@ def test_missing_model_spec_is_reported_not_ignored(monkeypatch, tmp_path):
 
 def test_the_report_gains_a_research_section_only_when_the_model_exists(tmp_path):
     write_report_tree({"research_package": PACKAGE, "fundamentals_report": "f"}, "TEST", tmp_path, html=False)
-    assert "Fundamental Research Package" in (tmp_path / "complete_report.md").read_text(encoding="utf-8")
+    main = (tmp_path / "complete_report.md").read_text(encoding="utf-8")
+    assert "## Forecast and Valuation" in main
+    assert "- FY26 (forecast): revenue 130.0" in main
+    assert "Valuation: price 20 USD" in main
 
     plain = tmp_path / "plain"
     write_report_tree({"fundamentals_report": "f"}, "TEST", plain, html=False)
-    assert "Fundamental Research Package" not in (plain / "complete_report.md").read_text(encoding="utf-8")
+    plain_main = (plain / "complete_report.md").read_text(encoding="utf-8")
+    assert PACKAGE.strip()[:20] not in plain_main
+    assert "No verified model in this run." in plain_main
 
 
 def test_checkpoint_signature_changes_only_when_a_corpus_is_configured(monkeypatch, tmp_path):

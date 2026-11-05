@@ -107,8 +107,13 @@ def test_the_contents_name_each_section_once_and_list_its_agents_beneath(tmp_pat
     page = _html(tmp_path)
     nav = page[page.index('<nav class="contents"'):page.index("</nav>")]
     assert "<ol" not in nav                     # no list numbers beside the sections' own I-V
-    assert re.search(r'<a href="#s1"><span class="num">I</span>\s*<span class="label">Analyst Team Reports</span></a>', nav)
-    assert re.search(r'<a href="#s1-1"><span class="bar"></span>\s*<span class="label">Market Analyst</span></a>', nav)
+    assert re.search(
+        r'<a href="#s1"><span class="num">Executive Summary</span>', nav
+    )
+    assert re.search(
+        r'<a href="#s1-1"><span class="bar"></span>\s*'
+        r'<span class="label">Executive Summary</span></a>', nav
+    )
 
 
 @pytest.mark.unit

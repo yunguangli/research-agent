@@ -43,6 +43,57 @@ def test_write_report_tree_creates_files(tmp_path):
 
 
 @pytest.mark.unit
+def test_the_main_report_is_a_summary_and_the_appendix_is_the_record(tmp_path):
+    state = _state()
+    state["fundamentals_report"] = "FUNDAMENTALS BODY"
+    state["sentiment_report"] = "SENTIMENT BODY"
+    state["debate_summary"] = "## Round 1\nDEBATE BODY"
+    out = write_report_tree(state, "AAPL", tmp_path, html=False)
+    main = out.read_text()
+    appendix = (tmp_path / "appendix.md").read_text()
+
+    assert "## Executive Summary" in main
+    assert "## Fundamental Summary" in main
+    assert "## Debate Summary" in main
+    assert "## Portfolio Manager Decision" in main
+    # Raw analyst reports and the full transcript are the appendix's job.
+    assert "## I. Analyst Team Reports" not in main
+    assert "### Market Analyst" not in main
+    assert "### Market Analyst" in appendix
+    assert "### Fundamentals Analyst" in appendix
+    assert "### Sentiment Analyst" in appendix
+
+
+@pytest.mark.unit
+def test_a_section_over_budget_points_to_the_appendix_instead_of_truncating(tmp_path):
+    state = _state()
+    state["final_trade_decision"] = (
+        "**Rating**: Hold\n\n"
+        "**Executive Summary**: " + "summary " * 500 + "\n\n"
+        "**Investment Thesis**: " + "thesis " * 800 + "\n\n"
+        "| Item | Assessment |\n|---|---|\n| New investor | Wait |\n| Existing holder | Hold |\n"
+    )
+    main = write_report_tree(state, "AAPL", tmp_path, html=False).read_text()
+
+    assert "truncated at" not in main
+    assert "Further detail is in `appendix.md`" in main
+
+
+@pytest.mark.unit
+def test_the_main_report_stays_under_five_thousand_words(tmp_path):
+    state = _state()
+    state["fundamentals_report"] = "analysis " * 4000
+    state["research_package_artifact"] = "model " * 6000
+    state["market_report"] = "chart " * 3000
+    state["debate_summary"] = "debate " * 2000
+    state["final_trade_decision"] = "**Rating**: Hold\n\n" + ("decision " * 1000)
+    main = write_report_tree(state, "AAPL", tmp_path, html=False).read_text()
+
+    # The header, the section headings and the closing note all count.
+    assert len(main.split()) <= 5000
+
+
+@pytest.mark.unit
 def test_the_published_package_prefers_the_artifact_rendering(tmp_path):
     """The prompt's imperative lines must not reach the reader (#finding B3)."""
     state = _state()

@@ -37,6 +37,24 @@ def get_language_instruction() -> str:
     )
 
 
+def dedupe_consecutive_paragraphs(text: str) -> tuple[str, int]:
+    """Keep the first of two identical consecutive paragraphs.
+
+    A model sometimes repeats its own answer inside one response. The copy is
+    dropped and counted for diagnostics; arguments repeated in a later round are
+    a different response and are never collapsed.
+    """
+    paragraphs = str(text or "").split("\n\n")
+    kept: list[str] = []
+    dropped = 0
+    for paragraph in paragraphs:
+        if kept and paragraph.strip() and paragraph.strip() == kept[-1].strip():
+            dropped += 1
+            continue
+        kept.append(paragraph)
+    return "\n\n".join(kept), dropped
+
+
 def opponent_argument_or_opening(text: str, opponent: str) -> str:
     """Opponent's latest argument, or an explicit opening marker when empty.
 
@@ -414,10 +432,11 @@ def fundamentals_with_repair_notice(state: Mapping[str, Any]) -> str:
     it was written against that model, so it can carry model EPS, multiples and a
     manual fair value that no downstream stage may use.
     """
-    from tradingagents.research.packets import UNVERIFIED_FUNDAMENTALS_NOTICE, model_verified
+    from tradingagents.research.packets import filter_decision_inputs
 
-    if not model_verified(dict(state)):
-        return UNVERIFIED_FUNDAMENTALS_NOTICE
+    packet = filter_decision_inputs(dict(state))
+    if not packet["verified"]:
+        return packet["fundamentals"]
     report = report_or_absent(state.get("fundamentals_report"), "fundamentals")
     note = str(state.get("model_repair_addendum") or "").strip()
     if not note:

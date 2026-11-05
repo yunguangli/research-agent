@@ -98,14 +98,14 @@ def test_net_shares_apply_issuance_and_buyback():
     assert shares == pytest.approx(103.0)      # 110 - 10 + 5 - 2
 
 
-def test_a_convertible_counts_only_after_its_conversion_date():
+def test_a_convertible_is_weighted_from_its_conversion_date():
     structure = spec().capital_structure
 
-    before, _ = capital.forecast_shares(structure, "FY25", "2025-12-31")
-    after, _ = capital.forecast_shares(structure, "FY26", "2026-12-31")
+    before, _ = capital.forecast_shares(structure, "FY25", "2025-12-31", "2025-01-01")
+    after, _ = capital.forecast_shares(structure, "FY26", "2026-12-31", "2026-01-01")
 
     assert before == pytest.approx(100.0)      # convertible converts after FY25
-    assert after == pytest.approx(108.0)       # 100 basic + 8 convertible
+    assert after == pytest.approx(100.0 + 8.0 * 184 / 364)   # half-year weight
 
 
 def test_full_conversion_adds_every_convertible():
@@ -114,15 +114,63 @@ def test_full_conversion_adds_every_convertible():
     assert shares == pytest.approx(111.0)      # 103 net + 8
 
 
+def test_a_basic_plus_convertible_count_is_classified_as_conservative_dilution():
+    from tradingagents.research.shares import basis_report, diluted_kind
+
+    model = spec()
+    model.capital_structure = None          # no ledger: the ShareBase is the source
+    model.share_bases = [
+        ShareBase("period_end_net", 100.0),
+        ShareBase("diluted_average", 108.0,
+                  basic_weighted_average=100.0, potential_cb_shares=8.0),
+        ShareBase("full_conversion", 108.0),
+    ]
+
+    assert diluted_kind(model) == "conservative_full_conversion"
+    assert "conservative full conversion" in basis_report(model)["forecast_eps_basis"]
+
+
+def test_a_declared_diluted_average_is_classified_as_a_weighted_average():
+    from tradingagents.research.shares import diluted_kind
+
+    model = spec()
+    model.capital_structure = None
+    model.share_bases = [
+        ShareBase("period_end_net", 100.0),
+        ShareBase("diluted_average", 104.0,
+                  basic_weighted_average=100.0, diluted_weighted_average=104.0,
+                  potential_cb_shares=8.0),
+        ShareBase("full_conversion", 108.0),
+    ]
+
+    assert diluted_kind(model) == "weighted_average"
+
+
+def test_a_diluted_label_equal_to_basic_plus_convertibles_is_conservative():
+    from tradingagents.research.shares import diluted_kind
+
+    model = spec()
+    model.capital_structure = None
+    model.share_bases = [
+        ShareBase("period_end_net", 100.0),
+        ShareBase("diluted_average", 108.0,
+                  basic_weighted_average=100.0, diluted_weighted_average=108.0,
+                  potential_cb_shares=8.0),
+        ShareBase("full_conversion", 108.0),
+    ]
+
+    assert diluted_kind(model) == "conservative_full_conversion"
+
+
 def test_a_split_after_the_period_restates_its_weighted_average():
     model = spec()
     model.capital_structure.split_history = [{"date": "2026-06-01", "factor": 2.0}]
 
-    before, _ = capital.forecast_shares(model.capital_structure, "FY25", "2025-12-31")
-    after, _ = capital.forecast_shares(model.capital_structure, "FY26", "2026-12-31")
+    before, _ = capital.forecast_shares(model.capital_structure, "FY25", "2025-12-31", "2025-01-01")
+    after, _ = capital.forecast_shares(model.capital_structure, "FY26", "2026-12-31", "2026-01-01")
 
     assert before == pytest.approx(200.0)     # pre-split average x 2
-    assert after == pytest.approx(108.0)      # period after the split: unchanged
+    assert after == pytest.approx(100.0 + 8.0 * 184 / 364)   # split does not change it
 
 
 def test_an_unverified_capital_structure_suppresses_the_share_bases():
@@ -157,7 +205,7 @@ def test_forecast_eps_uses_the_period_weighted_average_but_history_does_not():
     model = kernel.run(spec())
 
     assert model.row("FY25").eps["diluted_average"] == pytest.approx(10.0 / 100.0)
-    assert model.row("FY26").eps["diluted_average"] == pytest.approx(12.0 / 108.0)
+    assert model.row("FY26").eps["diluted_average"] == pytest.approx(12.0 / (100.0 + 8.0 * 184 / 364))
 
 
 def test_market_cap_uses_net_shares_from_the_capital_structure():
@@ -219,7 +267,7 @@ def test_missing_net_debt_makes_only_ev_ebitda_unavailable():
     value = valuation.value(kernel.run(model))
 
     assert value.ev_per_share is None
-    assert value.pe == pytest.approx(100.0 / (12.0 / 108.0))
+    assert value.pe == pytest.approx(100.0 / (12.0 / (100.0 + 8.0 * 184 / 364)))
 
     result = status.assess(
         model_status="VERIFIED",
@@ -253,6 +301,28 @@ def test_a_missing_cash_component_is_never_defaulted_to_zero():
     assert value.ev_equity_value is None
 
 
+def test_the_ev_per_share_output_reconciles_to_the_equity_value():
+    from tradingagents.research import valuation as valuation_module
+
+    model = spec()
+    value = valuation_module.value(kernel.run(model))
+
+    assert value.ev_per_share is not None
+    assert value.ev_per_share_reconciled is True
+    # The ledger's current net count is the verified equity-value basis.
+    shares = capital.market_cap_shares(model, model.share_base("period_end_net").shares_m)
+    restored = kernel.market_cap(value.ev_per_share, shares, model.unit)
+    assert restored == pytest.approx(value.ev_equity_value, abs=0.5)
+
+
+def test_a_per_share_value_that_does_not_return_its_equity_value_is_suppressed():
+    from tradingagents.research.valuation import _per_share_reconciles
+
+    # 100 / 10 = 10 per share; 11 per share returns 110, not 100.
+    assert _per_share_reconciles(10.0, 10.0, 100.0, "USD_m") is True
+    assert _per_share_reconciles(11.0, 10.0, 100.0, "USD_m") is False
+
+
 def test_a_bare_net_debt_figure_does_not_feed_a_verified_ev_ebitda():
     model = dataclasses.replace(spec(), net_debt=200.0)   # legacy single figure
 
@@ -264,7 +334,32 @@ def test_a_bare_net_debt_figure_does_not_feed_a_verified_ev_ebitda():
     assert value.pe > 0                         # P/E is untouched
 
 
-def test_an_undated_convertible_suppresses_forecast_eps_instead_of_diluting():
+def test_a_convertible_in_the_ledger_is_detected_as_unsettled_debt():
+    from tradingagents.research import capital as capital_module
+
+    model = spec()
+    assert capital_module.unsettled_convertibles(model) is True
+
+    model.capital_structure.convertibles = []
+    assert capital_module.unsettled_convertibles(model) is False
+
+    # A builder that leaves the list empty but warns about the dilutive
+    # instruments is in the same position: detected, not repaired.
+    model.warnings.append(
+        "the dilutive instruments are not itemized, so convertibles are left empty"
+    )
+    assert capital_module.unsettled_convertibles(model) is True
+
+
+def test_an_undated_convertible_publishes_a_conservative_full_conversion_count():
+    """Timing unresolved is a label, not a suppression.
+
+    The count falls back to basic plus every convertible, the denominator is
+    labelled ``conservative_full_conversion``, and the decision is provisional;
+    the P/E is still published as indicative.
+    """
+    from tradingagents.research.shares import diluted_kind
+
     model = spec()
     model.capital_structure.convertibles = [
         Convertible(name="CB", shares_m=8.0, conversion_date="")
@@ -272,11 +367,12 @@ def test_an_undated_convertible_suppresses_forecast_eps_instead_of_diluting():
     model.capital_structure.diluted_weighted_average = {}
 
     usable, reason = capital.validated(model)
-    assert usable is False
+    assert usable is True
     assert "timing is unresolved" in reason
 
     run = kernel.run(model)
-    assert "diluted_average" not in run.row("FY26").eps
+    assert "diluted_average" in run.row("FY26").eps
+    assert diluted_kind(model) == "conservative_full_conversion"
 
     result = status.assess(
         model_status="VERIFIED",
@@ -291,10 +387,11 @@ def test_an_undated_convertible_suppresses_forecast_eps_instead_of_diluting():
         has_net_debt=True,
         ev_ebitda_multiple=10.0,
         capital_verified=usable,
+        eps_basis_quality=diluted_kind(model),
     )
-    assert result["eps_model_status"] == "SUPPRESSED"
+    assert result["eps_model_status"] == "VERIFIED"
+    assert result["eps_basis_quality"] == "conservative_full_conversion"
     assert result["valuation_method_statuses"]["ev_ebitda"] == "VERIFIED"
-    assert result["ev_per_share_status"] == "SUPPRESSED"
 
 
 def test_a_stated_net_that_disagrees_with_issued_minus_treasury_is_rejected():

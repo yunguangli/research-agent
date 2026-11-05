@@ -138,9 +138,75 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
   A missing component is never defaulted to zero — the builder refuses a bare number and
   EV/EBITDA becomes UNAVAILABLE on its own, leaving P/E untouched. The EV/EBITDA multiple
   is `analyst_assumption` with a rationale and refs, never presented as company-reported.
+- EV input readiness is classified, not guessed (`research/input_probe.py`): a
+  deterministic corpus probe finds numbered cash/debt/depreciation lines independently
+  of the builder, using a table-aware extractor (`research/balance_sheet.py`) that maps
+  Japanese and English balance-sheet aliases, preserves column, unit, page and document,
+  and excludes receivables, repayments and narrative conversion notes.
+  `PRESENT_NOT_EXTRACTED_BY_BUILDER` is a corpus-extraction failure,
+  `ABSENT_IN_CORPUS` is genuine unavailability, and `EXTRACTED_NOT_RECONCILED` is model
+  insufficiency (unstated date, unit, scope, lease treatment, or a stated net that
+  disagrees with its components). The extracted rows are injected into the builder
+  prompt; only EV/EBITDA is affected.
+- Share basis quality: `shares.diluted_kind()` labels the forecast denominator
+  `weighted_average` or `conservative_full_conversion` (basic plus every convertible).
+  The latter keeps P/E and the band but forces `decision_status = PROVISIONAL`; the
+  ledger's per-period diluted average is weighted by conversion date, while full
+  conversion stays a separate dilution sensitivity.
+- Technical evidence is structured (`research/technical.py`): the Market Analyst appends
+  a `TECHNICAL_EVIDENCE:` JSON block of items with stable IDs
+  (`tech_close_below_50sma`, `tech_macd_negative`, …), two compared values, a direction,
+  a timeframe and source refs. The block is stripped from the report; an item verifies
+  only when its own numbers support its direction. The PM may cite only verified IDs,
+  and the audit drops a technical claim the analyst did not verify. A mixed basis whose
+  only defect is the technical leg falls back to `fundamental` plus an advisory technical
+  overlay instead of failing.
+- `decision_status` is derived, never forced: FINAL requires a production run purpose,
+  a verified valuation, a passed decision audit, a structured PM, no blocking issue and
+  a weighted-average EPS basis. A diagnostic run, a conservative full-conversion basis
+  or an advisory PM stays PROVISIONAL.
+- The decision stage receives purpose-specific packets (`research/packets.py`): a
+  fundamental packet (revenue/OP/net profit, no price or share count), a valuation
+  packet (only verified methods) and a technical packet (price/timing). When P/E is
+  suppressed, a deterministic check rejects any PM answer that states a P/E, market cap,
+  EPS-derived value, target or fair value; one retry is allowed, and a second violation
+  invalidates the controlling decision (Not Rated / PROVISIONAL) instead of scrubbing a
+  sentence. Net profit stays available to the fundamental packet.
+- The Trader schema reuses the shared action enums (`new_investor_action`:
+  Initiate/Wait/Avoid; `holder_action`: Add/Hold/Review/Reduce/Exit) plus
+  `entry_condition`, `deterioration_condition`, `evidence_ids`, `confidence`. It is
+  tactical and non-controlling: never execution prices, size or the fundamental rating.
+  Two structured attempts, then `trader_status = advisory` and an integrity reason.
+  The legacy BUY/HOLD/SELL line is derived from the action pair.
+- Rating and holder action must agree: a partial reduction is canonical Underweight
+  with holder action Reduce; Sell is reserved for a full exit. The PM sets
+  `downgrade_applicability` (APPLICABLE / ALREADY_AT_LOWEST_RATING / NOT_ASSESSED) and
+  `evidence_to_downgrade`, which is null at the lowest rating and required for a Reduce.
+- Controlling valuation source IDs carry the method and model version
+  (`pe_model_band_v1`); a generic `model_band` is rejected.
+- Sensitivities (`research/sensitivity.py`): a shock moves its period and every later
+  period built on it (bridges rebased, forecast rows and net profit carried, revenue
+  shocks landing as an explicit pass-through line), so a multi-year model yields a
+  ranked table instead of silent zeros. Each item records `valuation_method` and
+  `verification_status`; a shock that cannot propagate is a named failure
+  (`SENSITIVITY_PROPAGATION_FAILED`, `RESEARCH_GAP_NO_PROPAGATION`) rather than a
+  zero. IDs are stable (`<metric>_<target period>_<assumption line>` with `bridge_id`
+  and `model_field_id`); legacy driver slugs are aliases that resolve with a warning,
+  never a second item. The top three are published and the reviewer must cite one ID.
 - Debate cases: the Adversarial Reviewer appends both capped deltas
   (aggressive + bearish, `research/cases.py`); the managers get the model and the
-  case table. Caps are ±25% on revenue/operating profit, ±20% on the multiple.
+  case table. Caps are ±25% on revenue/operating profit, ±20% on the multiple. A case
+  is a delta chain — operating profit → pretax → tax → net income → EPS on the period's
+  diluted count → value — and a case whose figures do not reconcile is rejected. Tax
+  hierarchy: a stated rate (verified), else the base year's implied rate (INDICATIVE),
+  else the case stops at operating profit. A scenario multiple records its source id
+  (`pe_model_band_v1` or `analyst_case_multiple_v1`) and whether it was shocked.
+- Publication: `complete_report.md` is a concise investor report (executive summary,
+  fundamental summary, forecast and verified valuation, debate summary, technical
+  summary, PM decision, catalysts/risks), capped at 5,000 words with a visible notice
+  when a section is truncated. The full analyst reports, full debate transcript, model
+  diagnostics, audit findings, retry logs, source conflicts and rejected scenarios are
+  in `appendix.md`. Do not concatenate raw reports into the main report.
 - Reported actuals come from the vendor's annual statement (`research/vendor_facts.py`),
   not from the model: a fiscal year is used only when it ended at least 90 days before
   the run date, and a >25% disagreement is treated as a scale/currency error and refused.

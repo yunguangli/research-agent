@@ -11,6 +11,7 @@ from tradingagents.agents.researchers.adversarial_reviewer import (
 from tradingagents.research import kernel, repair, sensitivity
 from tradingagents.research.schemas import (
     Bridge,
+    CashFlow,
     Financials,
     Line,
     ModelSpec,
@@ -85,7 +86,7 @@ def test_a_bridge_line_with_a_driver_is_shocked_and_ranked():
     assert drivers["tax rate"].fair_value_impact is not None
     assert drivers["tax rate"].fair_value_impact > 0
     assert drivers["operating leverage"].operating_profit_impact == pytest.approx(2.0)
-    assert "growth" in gaps          # no driver and no alternative -> research gap
+    assert any("growth" in gap for gap in gaps)          # no driver and no alternative -> research gap
 
 
 def test_an_operating_shock_uses_the_models_tax_rate_to_reach_eps():
@@ -109,7 +110,7 @@ def test_a_line_without_an_alternative_is_not_estimated():
     items, gaps = sensitivity.rank(model)
 
     assert [item.driver for item in items] == ["tax rate"]
-    assert "margin" in gaps
+    assert any("margin" in gap for gap in gaps)
 
 
 def test_the_sensitivity_table_names_the_shock():
@@ -117,7 +118,9 @@ def test_the_sensitivity_table_names_the_shock():
 
     table = sensitivity.render(items)
 
-    assert "| tax_rate |" in table
+    assert "net_profit_fy26_tax" in table          # the stable bridge + field id
+    assert "| tax_rate |" not in table             # the display slug is not the id
+    assert sensitivity.alias_map(items)["tax_rate"] == "net_profit_fy26_tax"
     assert "operating leverage" in table
 
 
@@ -163,8 +166,8 @@ class _Decision:
 def test_a_range_that_matches_the_band_is_traced_to_it():
     decision = _Decision(8.0, 8.8, 9.6)
 
-    assert _range_error(decision, 8.0, 9.6) is None
-    assert decision.controlling_low_source_id == "model_band"
+    assert _range_error(decision, 8.0, 9.6, {"active_model_version": "v2"}) is None
+    assert decision.controlling_low_source_id == "pe_model_band_v2"
 
 
 def test_a_range_that_does_not_match_and_cites_nothing_is_rejected():
@@ -175,7 +178,7 @@ def test_a_range_that_does_not_match_and_cites_nothing_is_rejected():
 
 def test_a_rejected_scenario_cannot_supply_a_bound():
     decision = _Decision(
-        8.0, 8.8, 9.6, low_id="Bear", base_id="model_band", high_id="model_band",
+        8.0, 8.8, 9.6, low_id="Bear", base_id="pe_model_band_v1", high_id="pe_model_band_v1",
         rejected=["Bear"],
     )
 
@@ -184,16 +187,48 @@ def test_a_rejected_scenario_cannot_supply_a_bound():
 
 def test_an_override_must_reproduce_from_its_inputs():
     good = _Decision(
-        7.0, 8.8, 9.6, low_id="override", base_id="model_band", high_id="model_band",
+        7.0, 8.8, 9.6, low_id="override", base_id="pe_model_band_v1", high_id="pe_model_band_v1",
         override={"source_model_value": 8.0, "adjustment_amount": -1.0},
     )
     bad = _Decision(
-        7.0, 8.8, 9.6, low_id="override", base_id="model_band", high_id="model_band",
+        7.0, 8.8, 9.6, low_id="override", base_id="pe_model_band_v1", high_id="pe_model_band_v1",
         override={"source_model_value": 8.0, "adjustment_amount": -2.0},
     )
 
     assert _range_error(good, 8.0, 9.6) is None
     assert "does not reproduce" in (_range_error(bad, 8.0, 9.6) or "")
+
+
+def test_a_generic_model_band_id_is_not_a_valid_source():
+    decision = _Decision(
+        8.0, 8.8, 9.6, low_id="model_band", base_id="model_band", high_id="model_band"
+    )
+
+    error = _range_error(decision, 8.0, 9.6, {"active_model_version": "v1"})
+
+    assert "not a known valuation source" in (error or "")
+
+
+def test_the_decision_status_is_derived_not_forced():
+    from tradingagents.agents.managers.portfolio_manager import _decision_status
+
+    def status(**overrides):
+        state = {"run_purpose": "production"}
+        state.update(overrides.pop("state", {}))
+        return _decision_status(
+            state,
+            structured=overrides.pop("structured", True),
+            valuation_verified=overrides.pop("valuation_verified", True),
+            audit_passed=overrides.pop("audit_passed", True),
+        )
+
+    assert status() == "FINAL"
+    assert status(state={"run_purpose": "comparison"}) == "PROVISIONAL"
+    assert status(state={"run_purpose": "research"}) == "PROVISIONAL"
+    assert status(audit_passed=False) == "PROVISIONAL"
+    assert status(valuation_verified=False) == "PROVISIONAL"
+    assert status(structured=False) == ""
+    assert status(state={"eps_basis_quality": "conservative_full_conversion"}) == "PROVISIONAL"
 
 
 def test_a_base_outside_the_range_is_rejected():
@@ -237,3 +272,56 @@ def test_conclusion_pairs_are_parsed_from_the_addendum():
         ("The shares are moderately attractive at 34.8x.",
          "On the repaired basis they are approximately full.")
     ]
+
+def _three_year_spec() -> ModelSpec:
+    return ModelSpec(
+        ticker="TEST", company="Test", currency="USD", unit="USD_m",
+        fiscal_year_end_month=12,
+        periods=[
+            Period("FY25", "2025-01-01", "2025-12-31", "actual"),
+            Period("FY26", "2026-01-01", "2026-12-31", "forecast"),
+            Period("FY27", "2027-01-01", "2027-12-31", "forecast"),
+        ],
+        actuals={"FY25": Financials(revenue=100.0, operating_profit=10.0, net_profit=8.0)},
+        guidance={},
+        forecast={
+            "FY26": Financials(revenue=120.0, operating_profit=14.0, net_profit=10.0),
+            "FY27": Financials(revenue=140.0, operating_profit=18.0, net_profit=13.0),
+        },
+        bridges=[
+            Bridge("operating_profit", "FY25", "FY26", 10.0,
+                   [Line("volume", 4.0, driver="volume", alternative=2.0)], declared_total=14.0),
+            Bridge("operating_profit", "FY26", "FY27", 14.0,
+                   [Line("volume", 4.0, driver="volume", alternative=3.0)], declared_total=18.0),
+        ],
+        cashflow={"FY27": CashFlow(
+            net_profit=13.0, depreciation=3.0, working_capital_change=0.0, capex=2.0)},
+        share_bases=[ShareBase("full_share", 10.0)],
+        eps_basis="full_share",
+        valuation=ValuationSpec(
+            price=20.0, fair_value_multiple_low=10.0, fair_value_multiple_high=12.0,
+            fair_value_basis="full_share", fair_value_period="FY27",
+        ),
+    )
+
+
+def test_a_shock_propagates_into_later_periods():
+    items, _gaps = sensitivity.rank(_three_year_spec(), top=5)
+
+    shocked = [item for item in items if item.driver == "volume"]
+    assert shocked
+    assert any(item.operating_profit_impact not in (None, 0) for item in shocked)
+    assert any(item.net_income_impact not in (None, 0) for item in shocked)
+    assert any(item.eps_impact not in (None, 0) for item in shocked)
+    assert any(item.fair_value_impact not in (None, 0) for item in shocked)
+
+
+def test_a_suppressed_eps_removes_the_per_share_sensitivity_output():
+    items, _gaps = sensitivity.rank(
+        _three_year_spec(), top=5, eps_verified=False, pe_verified=False
+    )
+
+    assert items
+    assert all(item.eps_impact is None for item in items)
+    assert all(item.fair_value_impact is None for item in items)
+    assert all(item.verification_status == "SUPPRESSED" for item in items)

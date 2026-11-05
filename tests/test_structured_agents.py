@@ -17,13 +17,14 @@ from pydantic import ValidationError
 from tradingagents.agents.analysts.sentiment_analyst import create_sentiment_analyst
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.schemas import (
+    DecisionConfidence,
+    HolderAction,
+    NewInvestorAction,
     PortfolioDecision,
     PortfolioRating,
     ResearchPlan,
     SentimentBand,
     SentimentReport,
-    TraderAction,
-    TraderIntent,
     TraderProposal,
     render_research_plan,
     render_sentiment_report,
@@ -38,85 +39,99 @@ from tradingagents.agents.trader.trader import create_trader
 
 @pytest.mark.unit
 class TestRenderTraderProposal:
-    def test_minimal_required_fields(self):
-        p = TraderProposal(action=TraderAction.HOLD, reasoning="Balanced setup; no edge.")
-        md = render_trader_proposal(p)
-        assert "**Action**: Hold" in md
-        assert "**Reasoning**: Balanced setup; no edge." in md
-        # The trailing FINAL TRANSACTION PROPOSAL line is preserved for the
-        # analyst stop-signal text and any external code that greps for it.
+    def _proposal(self, **overrides):
+        base = {
+            "new_investor_action": NewInvestorAction.WAIT,
+            "holder_action": HolderAction.HOLD,
+            "entry_condition": "A close above the 50-day average on volume.",
+            "deterioration_condition": "A close below the 200-day average.",
+            "evidence_ids": ["tech_close_below_50sma"],
+            "confidence": DecisionConfidence.MEDIUM,
+        }
+        base.update(overrides)
+        return TraderProposal(**base)
+
+    def test_the_six_fields_render(self):
+        md = render_trader_proposal(self._proposal())
+
+        assert "**New Investor Action**: Wait" in md
+        assert "**Holder Action**: Hold" in md
+        assert "**Entry Condition**: A close above" in md
+        assert "**Deterioration Condition**: A close below" in md
+        assert "**Evidence**: tech_close_below_50sma" in md
+        assert "**Confidence**: Medium" in md
         assert "FINAL TRANSACTION PROPOSAL: **HOLD**" in md
 
-    def test_optional_fields_included_when_present(self):
-        p = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="Strong technicals + fundamentals.",
-            entry_price=189.5,
-            stop_loss=178.0,
-            position_sizing="6% of portfolio",
+    def test_no_execution_levels_are_published(self):
+        md = render_trader_proposal(
+            self._proposal(
+                new_investor_action=NewInvestorAction.INITIATE, holder_action=HolderAction.ADD
+            )
         )
-        md = render_trader_proposal(p)
-        assert "**Action**: Buy" in md
-        assert "**Entry Price**: 189.5" in md
-        assert "**Stop Loss**: 178.0" in md
-        assert "**Position Sizing**: 6% of portfolio" in md
-        assert "FINAL TRANSACTION PROPOSAL: **BUY**" in md
 
-    def test_optional_fields_are_named_as_not_provided(self):
-        """An omitted line reads as a field nobody asked for; the reader cannot
-        tell it from a level the trader declined to set."""
-        p = TraderProposal(action=TraderAction.SELL, reasoning="Guidance cut.")
-        md = render_trader_proposal(p)
-        for field in ("Entry Price", "Stop Loss", "Position Sizing"):
-            assert f"**{field}**: not provided" in md
-        assert "FINAL TRANSACTION PROPOSAL: **SELL**" in md
+        for field in ("Entry Price", "Stop Loss", "Position Sizing", "Intent"):
+            assert field not in md
 
-    def test_a_level_above_the_entry_is_a_reassessment_level_not_a_stop(self):
-        """4062.T published entry 8,045 and 'Stop Loss 9,126' — above the entry."""
-        p = TraderProposal(
-            action=TraderAction.SELL,
-            intent=TraderIntent.REDUCE_LONG,
-            reasoning="Uptrend broken.",
-            entry_price=8045.0,
-            stop_loss=9126.0,
+    def test_missing_evidence_is_named(self):
+        md = render_trader_proposal(self._proposal(evidence_ids=[]))
+
+        assert "**Evidence**: not provided" in md
+
+    def test_the_action_pair_drives_the_legacy_signal_line(self):
+        add = render_trader_proposal(
+            self._proposal(holder_action=HolderAction.ADD)
         )
-        md = render_trader_proposal(p)
-        assert "**Reassessment Level**: 9126.0" in md
-        assert "**Stop Loss**" not in md
-
-    def test_a_normal_stop_for_a_long_keeps_its_label(self):
-        p = TraderProposal(
-            action=TraderAction.BUY, reasoning="x", entry_price=189.5, stop_loss=178.0
+        exit_ = render_trader_proposal(
+            self._proposal(holder_action=HolderAction.EXIT)
         )
-        assert "**Stop Loss**: 178.0" in render_trader_proposal(p)
+        hold = render_trader_proposal(self._proposal())
 
-    def test_the_intent_is_published_with_a_sell(self):
-        p = TraderProposal(
-            action=TraderAction.SELL, intent=TraderIntent.REDUCE_LONG, reasoning="x"
-        )
-        assert "**Intent**: reduce long" in render_trader_proposal(p)
+        assert "FINAL TRANSACTION PROPOSAL: **BUY**" in add
+        assert "FINAL TRANSACTION PROPOSAL: **SELL**" in exit_
+        assert "FINAL TRANSACTION PROPOSAL: **HOLD**" in hold
 
 
 @pytest.mark.unit
-class TestNullishFloatCoercion:
-    """A weak LLM may write "None"/"N/A" into an optional float field (#1058);
-    coerce those to None so the structured call validates instead of erroring."""
+class TestRatingAlignment:
+    def _decision(self, **overrides):
+        base = {
+            "rating": PortfolioRating.BUY,
+            "executive_summary": "s",
+            "investment_thesis": "t",
+        }
+        base.update(overrides)
+        return PortfolioDecision(**base)
 
-    def test_trader_nullish_strings_coerce_to_none(self):
-        for sentinel in ("None", "N/A", "null", "-", "", "TBD"):
-            p = TraderProposal(
-                action=TraderAction.HOLD,
-                reasoning="x",
-                entry_price=sentinel,
-                stop_loss=sentinel,
-            )
-            assert p.entry_price is None
-            assert p.stop_loss is None
+    def test_a_reduce_action_turns_a_buy_into_canonical_underweight(self):
+        from tradingagents.agents.managers.portfolio_manager import (
+            _align_rating_with_holder_action,
+        )
 
-    def test_trader_real_numeric_string_still_parses(self):
-        p = TraderProposal(action=TraderAction.BUY, reasoning="x", entry_price="189.5")
-        assert p.entry_price == 189.5
+        decision = self._decision(existing_holder_action=HolderAction.REDUCE)
+        notes = _align_rating_with_holder_action(decision)
 
+        assert decision.rating == PortfolioRating.UNDERWEIGHT
+        assert decision.downgrade_applicability == "APPLICABLE"
+        assert any("Reduce" in note for note in notes)
+
+    def test_an_exit_reserves_sell_and_needs_no_further_downgrade(self):
+        from tradingagents.agents.managers.portfolio_manager import (
+            _align_rating_with_holder_action,
+        )
+
+        decision = self._decision(
+            existing_holder_action=HolderAction.EXIT,
+            evidence_to_downgrade=["stale data"],
+        )
+        _align_rating_with_holder_action(decision)
+
+        assert decision.rating == PortfolioRating.SELL
+        assert decision.downgrade_applicability == "ALREADY_AT_LOWEST_RATING"
+        assert decision.evidence_to_downgrade is None
+
+
+@pytest.mark.unit
+class TestOptionalCoercion:
     def test_pm_nullish_price_target_coerces_to_none(self):
         d = PortfolioDecision(
             rating=PortfolioRating.OVERWEIGHT,
@@ -125,43 +140,6 @@ class TestNullishFloatCoercion:
             price_target="N/A",
         )
         assert d.price_target is None
-
-    def test_percentage_answer_to_a_price_field_becomes_none(self):
-        # The Trader is asked for concrete levels and may answer a price field
-        # with a distance ("15%"), which failed the whole proposal (#1288).
-        # A percentage cannot be salvaged: 15% must not become a $15 stop.
-        for pct in ("15%", " 7.5% ", "-10%"):
-            p = TraderProposal(
-                action=TraderAction.BUY,
-                reasoning="x",
-                entry_price=pct,
-                stop_loss=pct,
-            )
-            assert p.entry_price is None
-            assert p.stop_loss is None
-
-    def test_human_formatted_price_is_reduced_to_its_number(self):
-        p = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="x",
-            entry_price="$1,234.50",
-            stop_loss="1,180",
-        )
-        assert p.entry_price == 1234.50
-        assert p.stop_loss == 1180.0
-
-    def test_one_bad_field_no_longer_fails_the_whole_proposal(self):
-        # Previously a single '15%' raised, forcing a free-text retry that lost
-        # the action and reasoning; now the rest of the proposal survives.
-        p = TraderProposal(
-            action=TraderAction.SELL,
-            reasoning="downgrade on margin compression",
-            entry_price="612.40",
-            stop_loss="15%",
-        )
-        assert p.action is TraderAction.SELL
-        assert p.entry_price == 612.40
-        assert p.stop_loss is None
 
 
 @pytest.mark.unit
@@ -207,8 +185,10 @@ def _structured_trader_llm(captured: dict, proposal: TraderProposal | None = Non
     """
     if proposal is None:
         proposal = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="Strong setup.",
+            new_investor_action=NewInvestorAction.INITIATE, holder_action=HolderAction.ADD,
+            entry_condition="A close above the 50-day average.",
+            deterioration_condition="A close below the 200-day average.",
+            evidence_ids=["tech_close_above_50sma"],
         )
     structured = MagicMock()
     structured.invoke.side_effect = lambda prompt: (
@@ -262,11 +242,11 @@ class TestTraderAgent:
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}
         proposal = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="AI capex cycle intact; institutional flows constructive.",
-            entry_price=189.5,
-            stop_loss=178.0,
-            position_sizing="6% of portfolio",
+            new_investor_action=NewInvestorAction.INITIATE, holder_action=HolderAction.ADD,
+            entry_condition="A close above 189.5 with volume expansion.",
+            deterioration_condition="A close below 178.0.",
+            evidence_ids=["tech_close_above_50sma"],
+            confidence=DecisionConfidence.HIGH,
         )
         llm = _structured_trader_llm(captured, proposal)
         trader = create_trader(llm)
@@ -274,8 +254,9 @@ class TestTraderAgent:
         state["portfolio_context"] = "Current position in NVDA: 100 units"
         result = trader(state)
         plan = result["trader_investment_plan"]
-        assert "**Action**: Buy" in plan
-        assert "**Entry Price**: 189.5" in plan
+        assert "**New Investor Action**: Initiate" in plan
+        assert "**Holder Action**: Add" in plan
+        assert "**Entry Condition**: A close above 189.5" in plan
         assert "FINAL TRANSACTION PROPOSAL: **BUY**" in plan
         # The same rendered markdown is also added to messages for downstream agents.
         assert plan in result["messages"][0].content
@@ -314,34 +295,33 @@ class TestTraderAgent:
         assert "Ground concrete price levels" not in text
         assert "Proposed Investment Plan" in text  # still present
 
-    def test_no_portfolio_context_removes_an_invented_size(self):
+    def test_no_portfolio_context_does_not_add_execution_fields(self):
         captured = {}
         proposal = TraderProposal(
-            action=TraderAction.SELL,
-            reasoning="x",
-            position_sizing="5% of portfolio",
-            entry_price=189.5,
-            stop_loss=178.0,
+            new_investor_action=NewInvestorAction.AVOID, holder_action=HolderAction.EXIT,
+            entry_condition="A close below support.",
+            deterioration_condition="A close back above resistance.",
         )
         result = create_trader(_structured_trader_llm(captured, proposal))(_make_trader_state())
         plan = result["trader_investment_plan"]
-        assert "**Position Sizing**: not provided" in plan
-        assert "**Entry Price**: not provided" in plan
-        assert "**Stop Loss**: not provided" in plan
+        assert "**Position Sizing**" not in plan
+        assert "**Entry Price**" not in plan
+        assert "**Stop Loss**" not in plan
 
     def test_an_unverified_valuation_downgrades_a_buy(self):
         captured = {}
         proposal = TraderProposal(
-            action=TraderAction.BUY, reasoning="x", entry_price=189.5, stop_loss=178.0
+            new_investor_action=NewInvestorAction.INITIATE, holder_action=HolderAction.ADD,
+            entry_condition="A close above 189.5.",
+            deterioration_condition="A close below 178.0.",
         )
         state = _make_trader_state()
         state["research_model_source"] = "unavailable"
         plan = create_trader(_structured_trader_llm(captured, proposal))(state)[
             "trader_investment_plan"
         ]
-        assert "**Action**: Hold" in plan
-        assert "downgraded" in plan.lower()
-        assert "**Entry Price**: not provided" in plan
+        assert "**New Investor Action**: Wait" in plan
+        assert "downgraded to Wait" in plan
 
     def test_an_unverified_valuation_forces_low_confidence(self):
         from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
@@ -690,13 +670,22 @@ def test_a_field_the_model_did_not_give_says_so():
 
 
 @pytest.mark.unit
-def test_the_trader_names_the_levels_it_did_not_give():
-    from tradingagents.agents.schemas import TraderAction, TraderProposal, render_trader_proposal
+def test_the_trader_does_not_publish_execution_levels():
+    from tradingagents.agents.schemas import (
+        HolderAction,
+        NewInvestorAction,
+        TraderProposal,
+        render_trader_proposal,
+    )
 
-    rendered = render_trader_proposal(TraderProposal(action=TraderAction.HOLD, reasoning="r"))
-    for field in ("Entry Price", "Stop Loss", "Position Sizing"):
-        assert field in rendered
-    assert rendered.lower().count("not provided") == 3
+    rendered = render_trader_proposal(TraderProposal(
+        new_investor_action=NewInvestorAction.WAIT, holder_action=HolderAction.HOLD,
+        entry_condition="A close above the 50-day average.",
+        deterioration_condition="A close below the 200-day average.",
+    ))
+    for field in ("Entry Price", "Stop Loss", "Position Sizing", "Intent"):
+        assert field not in rendered
+    assert rendered.lower().count("not provided") == 1      # evidence only
 
 
 @pytest.mark.unit
@@ -894,3 +883,37 @@ def test_the_rm_retries_on_the_minimal_schema_before_free_text():
     assert "**Recommendation**: Hold" in result["investment_plan"]
     assert "FREE TEXT" not in result["investment_plan"]
     assert "minimal schema" in result["structured_fallbacks"]["Research Manager"]
+
+@pytest.mark.unit
+def test_the_trader_retries_once_then_remains_advisory():
+    from langchain_core.messages import AIMessage
+
+    structured = MagicMock()
+    structured.invoke.side_effect = ValueError("no parsed result")
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+    llm.invoke.return_value = AIMessage("**Technical Action**: Buy\n\nsomething")
+
+    result = create_trader(llm)(_make_trader_state())
+
+    assert structured.invoke.call_count == 2
+    assert result["trader_status"] == "advisory"
+
+
+@pytest.mark.unit
+def test_the_trader_recovers_on_the_second_structured_attempt():
+    proposal = TraderProposal(
+        new_investor_action=NewInvestorAction.INITIATE, holder_action=HolderAction.ADD,
+        entry_condition="A close above the 50-day average.",
+        deterioration_condition="A close below the 200-day average.",
+    )
+    structured = MagicMock()
+    structured.invoke.side_effect = [ValueError("no parsed result"), proposal]
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+
+    result = create_trader(llm)(_make_trader_state())
+
+    assert structured.invoke.call_count == 2
+    assert result["trader_status"] == "structured"
+    assert "**New Investor Action**: Initiate" in result["trader_investment_plan"]

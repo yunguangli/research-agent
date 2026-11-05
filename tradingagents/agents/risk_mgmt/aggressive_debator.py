@@ -1,7 +1,10 @@
+import logging
+
 from tradingagents.agents.context import (
     EVIDENCE_DISCIPLINE,
     SIZING_RULE,
     case_availability,
+    dedupe_consecutive_paragraphs,
     fundamentals_with_repair_notice,
     get_instrument_context_from_state,
     get_language_instruction,
@@ -9,6 +12,8 @@ from tradingagents.agents.context import (
     opponent_argument_or_opening,
     report_or_absent,
 )
+
+logger = logging.getLogger(__name__)
 
 ROLE = (
     "Internal routing label: Aggressive. That label is a routing identifier, not an "
@@ -64,7 +69,10 @@ Engage actively by addressing any specific concerns raised, refuting the weaknes
 
         response = llm.invoke(prompt)
 
-        argument = f"Aggressive Analyst: {response.content}"
+        content, dropped = dedupe_consecutive_paragraphs(response.content)
+        if dropped:
+            logger.info("Aggressive Analyst: dropped %d repeated paragraph(s)", dropped)
+        argument = f"Aggressive Analyst: {content}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,

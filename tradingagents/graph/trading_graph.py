@@ -23,7 +23,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.llm_clients import create_tier_client, tier_provider
 from tradingagents.memory import TradingMemoryLog, settlement
 from tradingagents.memory.reflection import Reflector
-from tradingagents.reporting import write_report_tree
+from tradingagents.reporting import debt_provisional_reason, write_report_tree
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
@@ -35,6 +35,144 @@ logger = logging.getLogger(__name__)
 
 class _ModelUnavailable(RuntimeError):
     """The research model cannot be used for this run; the text is the reason."""
+
+
+def _feature_enabled(name: str) -> bool:
+    """A feature flag read from the environment, never from config.
+
+    Keeping flags out of `config` leaves `_run_signature`, checkpoints and the
+    saved-report header unchanged whether a flag is on or off.
+    """
+    value = os.environ.get(f"TRADINGAGENTS_FEATURE_{name}", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def price_conflict_reason(model_price, market_close) -> str:
+    """A dated model price and the market's close, when they disagree by >1%.
+
+    The model price is an input, not a vendor quote: comparing it with the
+    MarketSnapshot is a different check from comparing two vendors, and only the
+    snapshot carries the session. Either value missing is no conflict.
+    """
+    try:
+        model = float(model_price)
+        close = float(market_close)
+    except (TypeError, ValueError):
+        return ""
+    if not model or not close:
+        return ""
+    if abs(model - close) / abs(close) <= 0.01:
+        return ""
+    return (
+        f"model price {model:,.0f} vs market close {close:,.0f} "
+        f"({model / close - 1:+.1%}); the PM must choose the controlling price"
+    )
+
+
+def apply_price_conflict(final_state: dict) -> None:
+    """Degrade the decision and make it provisional; never stop the run."""
+    conflict = str(final_state.get("price_conflict") or "").strip()
+    if not conflict:
+        return
+    integrity = str(final_state.get("decision_integrity") or "validated")
+    if integrity == "validated":
+        final_state["decision_integrity"] = f"DEGRADED: {conflict}"
+    elif conflict not in integrity:
+        final_state["decision_integrity"] = f"{integrity}; {conflict}"
+    if final_state.get("decision_status") == "FINAL":
+        final_state["decision_status"] = "PROVISIONAL"
+
+
+def build_component_status(statuses: dict, *, propagation_ok: bool,
+                           diagnostics: dict | None = None,
+                           controlling: dict | None = None,
+                           failed_rows: int = 0) -> dict:
+    """One status object built only from a validated component assessment."""
+    diagnostics = diagnostics or {}
+    controlling = controlling or {
+        "status": statuses.get("controlling_sensitivity_status", ""),
+        "verified": 0,
+        "expected": 0,
+    }
+    return {
+        "operating_forecast": {"status": statuses["operating_model_status"]},
+        "forecast_eps": {"status": statuses["eps_model_status"]},
+        "pe_valuation": {
+            "status": statuses["valuation_method_statuses"].get("pe", ""),
+            "role": "controlling",
+        },
+        "ev_ebitda_method": {
+            "status": statuses["valuation_method_statuses"].get("ev_ebitda", ""),
+        },
+        "ev_per_share_comparison": {
+            "status": statuses.get("ev_per_share_status", ""),
+            "reason": diagnostics.get("cross_method_basis", ""),
+        },
+        "controlling_valuation": {"use": "pe only", "ev_controlling": False},
+        "sensitivity": {
+            "status": statuses["sensitivity_model_status"],
+            "failed_rows": failed_rows,
+            "propagation_ok": propagation_ok,
+        },
+        "controlling_sensitivity": controlling,
+        "decision_use": {"failed_rows_excluded": True},
+        "technical": {"status": "ADVISORY"},
+    }
+
+
+def repair_component_status(pre_status, post_status: dict, repair_id: str,
+                            validated_at: str) -> dict:
+    """Replace, never merge: the post-repair object is the only live one.
+
+    ``pre_repair_status`` is kept for the audit trail only; header, appendix and
+    the PM read the top-level post-repair components.
+    """
+    return {
+        **post_status,
+        "pre_repair_status": pre_status if isinstance(pre_status, dict) else {},
+        "post_repair_status": post_status,
+        "repair_id": repair_id,
+        "validated_at": validated_at,
+    }
+
+
+def repaired_status_object(pre_status, post_status: dict, repair_id: str,
+                           validated_at: str) -> dict:
+    """The post-repair object, or the existing one when this repair already ran."""
+    if isinstance(pre_status, dict) and pre_status.get("repair_id") == repair_id:
+        return pre_status
+    return repair_component_status(pre_status, post_status, repair_id, validated_at)
+
+
+def provisional_reason(final_state: dict) -> str:
+    """Why a decision is provisional, for the header and the shared status."""
+    if str(final_state.get("decision_status") or "") != "PROVISIONAL":
+        return ""
+    if str(final_state.get("run_purpose") or "production").lower() != "production":
+        return "diagnostic run purpose"
+    if str(final_state.get("eps_basis_quality") or "") == "conservative_full_conversion":
+        return "conservative full-conversion share basis"
+    if str(final_state.get("action_status") or "") in {"advisory", "invalidated"}:
+        return "decision action is advisory"
+    if _audit_failed(final_state):
+        return "decision audit failed"
+    if str(final_state.get("model_status") or "") == "UNVERIFIED":
+        return "deterministic model unverified"
+    return "derived status"
+
+
+def _audit_failed(final_state: dict) -> bool:
+    """Whether the PM's decision-basis audit recorded a failure."""
+    raw = final_state.get("decision_audit_result")
+    if not raw:
+        return False
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return False
+    if not isinstance(data, dict) or not data:
+        return False
+    return not bool(data.get("validation_passed", True))
 
 
 def _configured_spec(company_name: str):
@@ -209,8 +347,10 @@ class TradingAgentsGraph:
         self._basis_names: dict[str, str] = {}
         self._spec_sector = ""
         self._sensitivity_items: list[dict] = []
+        self._sensitivity_alias_map: dict[str, str] = {}
         self._sensitivity_gaps: list[str] = []
         self._sensitivity_table = ""
+        self._component_status: dict = {}
 
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock",
                                    trade_date: str | None = None) -> str:
@@ -498,6 +638,15 @@ class TradingAgentsGraph:
                     final_state["metrics_table"] = render_metrics(metrics)
             except Exception as exc:  # noqa: BLE001 - a report must still be written
                 logger.info("Metrics table could not be computed: %s", exc)
+        debt_provisional = debt_provisional_reason(final_state)
+        if debt_provisional:
+            try:
+                diagnostics = json.loads(str(final_state.get("ev_input_diagnostics") or "{}"))
+            except ValueError:
+                diagnostics = {}
+            if isinstance(diagnostics, dict) and diagnostics.get("inputs"):
+                diagnostics["provisional"] = debt_provisional
+                final_state["ev_input_diagnostics"] = json.dumps(diagnostics)
         self._apply_decision_integrity(final_state)
         # A superseded conclusion that survives verbatim in the decision is
         # replaced by its repair text; anything the repair could not match is
@@ -567,6 +716,13 @@ class TradingAgentsGraph:
             if (
                 final_state.get("valuation_status") != status_module.VERIFIED
                 or final_state.get("decision_status") == "PROVISIONAL"
+                or final_state.get("action_status") in {"advisory", "invalidated"}
+                or _audit_failed(final_state)
+                or (
+                    str(final_state.get("eps_basis_quality") or "")
+                    == "conservative_full_conversion"
+                )
+                or str(final_state.get("run_purpose") or "production").lower() != "production"
             ):
                 final_state["decision_status"] = "PROVISIONAL"
             else:
@@ -620,6 +776,20 @@ class TradingAgentsGraph:
         risk = final_state.get("risk_debate_state") or {}
         final_state["research_rounds_used"] = int(debate.get("count") or 0)
         final_state["risk_rounds_used"] = int(risk.get("count") or 0) // 3
+        # Applied last: it upgrades the derived status to PROVISIONAL and adds
+        # the reason to an integrity string the earlier steps may have written.
+        apply_price_conflict(final_state)
+        try:
+            component = json.loads(str(final_state.get("component_status") or "{}"))
+        except ValueError:
+            component = {}
+        if isinstance(component, dict):
+            component["decision"] = {
+                "integrity": final_state.get("decision_integrity", ""),
+                "status": final_state.get("decision_status", ""),
+                "provisional_reason": provisional_reason(final_state),
+            }
+            final_state["component_status"] = json.dumps(component)
         return final_state
 
     # An exact size in prose: a percentage of a position, a share count, or a
@@ -718,6 +888,11 @@ class TradingAgentsGraph:
                 "the Trader answered in free text after two schema attempts, so its "
                 "levels and size are advisory"
             )
+        if _feature_enabled("COMPONENT_STATUS_V1") and any(
+            str(final_state.get(key) or "").upper() == "INVALID"
+            for key in ("operating_model_status", "eps_model_status", "valuation_status")
+        ):
+            reasons.append("a controlling component failed validation")
 
         final_state["decision_integrity"] = (
             "DEGRADED: " + "; ".join(reasons) if reasons else "validated"
@@ -784,7 +959,8 @@ class TradingAgentsGraph:
 
         stats: dict = {}
         findings = audit.audit_state(
-            final_state, model, valuation, stats=stats, superseded=superseded_values(final_state)
+            final_state, model, valuation, stats=stats, superseded=superseded_values(final_state),
+            sensitivity_items=getattr(self, "_sensitivity_items", None),
         )
         if any(finding.kind in {"relation", "percentage"} for finding in findings):
             # A claim its own figures contradict is caught before publication:
@@ -803,6 +979,7 @@ class TradingAgentsGraph:
                     findings = audit.audit_state(
                         final_state, model, valuation, stats=stats,
                         superseded=superseded_values(final_state),
+                        sensitivity_items=getattr(self, "_sensitivity_items", None),
                     )
         return audit.render(findings, stats=stats)
 
@@ -832,7 +1009,19 @@ class TradingAgentsGraph:
         package, artifact, price, spec_path = self._research_package(company_name, trade_date)
         state["research_package"] = package
         state["research_package_artifact"] = artifact
+        state["fundamental_packet"] = getattr(self, "_fundamental_packet", "")
+        state["valuation_packet"] = getattr(self, "_valuation_packet", "")
         state["research_price"] = price or 0.0
+        state["price_conflict"] = ""
+        if _feature_enabled("PRICE_SNAPSHOT_V1") and price:
+            try:
+                from tradingagents.dataflows.prices import last_close
+
+                market_close = last_close(company_name, str(trade_date))
+            except Exception as exc:  # noqa: BLE001 - a snapshot failure is a gap
+                logger.info("Price snapshot unavailable for %s: %s", company_name, exc)
+                market_close = None
+            state["price_conflict"] = price_conflict_reason(price, market_close)
         state["research_model_path"] = spec_path
         state["research_model_path_v1"] = spec_path
         state["active_model_version"] = "v1" if spec_path else ""
@@ -858,6 +1047,7 @@ class TradingAgentsGraph:
             "eps_model_status", "UNVERIFIED" if spec_path else "SUPPRESSED"
         )
         state["eps_status"] = state["eps_model_status"]          # alias
+        state["eps_basis_quality"] = output_status.get("eps_basis_quality", "")
         state["valuation_method_statuses"] = json.dumps(
             output_status.get("valuation_method_statuses", {})
         )
@@ -866,9 +1056,16 @@ class TradingAgentsGraph:
         )
         state["sensitivity_model_status"] = output_status.get("sensitivity_model_status", "UNAVAILABLE")
         state["sensitivity_status"] = state["sensitivity_model_status"]   # alias
+        state["ev_per_share_status"] = output_status.get("ev_per_share_status", "")
         state["research_fair_value_verified"] = bool(output_status.get("valuation_controlling"))
         state["action_status"] = "controlling"
         state["trader_status"] = "structured"
+        state["run_purpose"] = str(
+            self.config.get("run_purpose") or "production"
+        ).strip().lower()
+        state["ev_input_diagnostics"] = json.dumps(
+            getattr(self, "_ev_diagnostic", {}) or {}
+        )
         state["sector"] = getattr(self, "_spec_sector", "") or ""
         state["decision_basis"] = ""
         state["decision_audit_result"] = ""
@@ -876,7 +1073,9 @@ class TradingAgentsGraph:
         state["overall_status"] = ""
         state["decision_status"] = (
             "NOT_RATED" if state["model_status"] == "UNVERIFIED"
-            else "PROVISIONAL" if state["valuation_status"] != "VERIFIED"
+            else "PROVISIONAL"
+            if state["valuation_status"] != "VERIFIED"
+            or state["run_purpose"] != "production"
             else "FINAL"
         ) if spec_path else ""
         state["blocking_issue"] = ""
@@ -886,8 +1085,16 @@ class TradingAgentsGraph:
         state["unresolved_blocking"] = 0
         state["unresolved_material"] = 0
         state["sensitivity_table"] = getattr(self, "_sensitivity_table", "")
-        state["sensitivity_ids"] = json.dumps(
-            [item.get("sensitivity_id") for item in getattr(self, "_sensitivity_items", [])]
+        state["component_status"] = json.dumps(
+            getattr(self, "_component_status", {}) or {}
+        )
+        state["sensitivity_ids"] = json.dumps([
+            item.get("sensitivity_id")
+            for item in getattr(self, "_sensitivity_items", [])
+            if item.get("decision_eligible")
+        ])
+        state["sensitivity_alias_map"] = json.dumps(
+            getattr(self, "_sensitivity_alias_map", {}) or {}
         )
         state["sensitivity_gaps"] = json.dumps(getattr(self, "_sensitivity_gaps", []))
         state["controlling_fair_value_low"] = None
@@ -933,6 +1140,39 @@ class TradingAgentsGraph:
         """
         return self._research_package(company_name, trade_date, price)[0]
 
+    def _ev_diagnostics(self, spec, valuation_period: str, company_name: str,
+                        trade_date: str | None) -> dict:
+        """Which EV input is missing, and whether the corpus actually states it."""
+        from tradingagents.research import input_probe
+
+        debt = spec.net_debt
+        needs_scan = (
+            debt is None
+            or not debt.components_verified()
+            or not str(debt.as_of or "").strip()
+            or not str(debt.source_unit or "").strip()
+            or not str(debt.scope or "").strip()
+            or spec.cashflow.get(valuation_period) is None
+        )
+        probe = None
+        if needs_scan:
+            root = research_dir_from_env()
+            if root is not None:
+                try:
+                    from tradingagents.dataflows.vendors.research_corpus import CorpusStore
+
+                    corpus = resolve_corpus_root(root, company_name)
+                    store = CorpusStore(corpus, company_name)
+                    probe = input_probe.scan(store, trade_date)
+                except Exception:  # noqa: BLE001 - the diagnostic must not break a run
+                    logger.warning("EV input probe could not scan the corpus", exc_info=True)
+        return input_probe.diagnose(
+            spec,
+            valuation_period=valuation_period,
+            trade_date=trade_date or "",
+            probe=probe,
+        )
+
     def _research_package(self, company_name: str, trade_date: str | None = None,
                           price: float | None = None) -> tuple[str, str, float, str]:
         """The package text, the published version of it, the price and the spec path.
@@ -956,14 +1196,53 @@ class TradingAgentsGraph:
             sensitivity,
             status as status_module,
         )
-        from tradingagents.research.shares import basis_report
+        from tradingagents.research.shares import basis_report, diluted_kind
 
-        items, gaps = sensitivity.rank(model.spec, top=5)
+        eps_ok, _eps_reason = capital.eps_basis_ready(model.spec, valuation.period)
+        cap_ok, _cap_reason = capital.market_cap_ready(model.spec)
+        equity_ok, _equity_reason = capital.equity_basis_ready(model.spec)
+        publishable_eps = bool(eps_ok and valuation.eps_available)
+        items, gaps = sensitivity.rank(
+            model.spec, top=3, eps_verified=publishable_eps, pe_verified=publishable_eps
+        )
         table = sensitivity.render(items)
         basis = basis_report(model.spec)
+        diagnostics = self._ev_diagnostics(model.spec, valuation.period, company_name,
+                                           trade_date)
+        if capital.unsettled_convertibles(model.spec):
+            # The convertible is detected but cannot be included: there is no
+            # convertible-debt field to recalculate net debt from. Say so rather
+            # than implying it was repaired.
+            diagnostics = {
+                **diagnostics,
+                "provisional": "convertible instruments detected but unresolved; not repaired",
+            }
+        if not valuation.cross_method_comparable:
+            ev_count, pe_count, gap = capital.cross_method_basis(model.spec)
+            conflicts = capital.treatment_conflicts(model.spec)
+            reason = (
+                f"EV per-share uses {ev_count:,.1f}m shares; P/E uses {pe_count:,.1f}m "
+                f"({gap:.1%} apart); cross-method comparison unverified"
+                if gap is not None and ev_count and pe_count
+                else "; ".join(conflicts) or "share bases are not reconciled"
+            )
+            if conflicts:
+                reason = f"{reason}; {'; '.join(conflicts)}"
+            diagnostics = {**diagnostics, "cross_method_basis": reason}
+        self._ev_diagnostic = diagnostics
+        propagation_ok = all(
+            item.verification_status == "VERIFIED" for item in items
+        )
+        controlling_rows = [item for item in items if item.controlling_candidate]
+        controlling_verified = sum(1 for item in controlling_rows if item.decision_eligible)
+        controlling_expected = len(controlling_rows)
+        controlling_ok = controlling_expected > 0 and controlling_verified == controlling_expected
+        failed_rows = sum(1 for item in items if not item.decision_eligible)
         statuses = status_module.assess(
             model_status="VERIFIED",
             basis=basis,
+            propagation_ok=propagation_ok,
+            controlling_propagation_ok=controlling_ok,
             has_band=(
                 valuation.fair_value_low is not None and valuation.fair_value_high is not None
             ),
@@ -975,14 +1254,38 @@ class TradingAgentsGraph:
                 and model.spec.net_debt.components_verified()
             ),
             ev_ebitda_multiple=model.spec.valuation.ev_ebitda_multiple,
-            capital_verified=capital.validated(model.spec)[0],
+            capital_verified=capital.validated(model.spec, valuation.period)[0],
+            eps_basis_quality=diluted_kind(model.spec),
+            ev_inputs_ready=diagnostics.get("status") == "EXTRACTED",
+            market_cap_verified=cap_ok,
+            eps_basis_verified=eps_ok,
+            equity_basis_verified=equity_ok,
         )
-        if statuses["sensitivity_model_status"] != status_module.VERIFIED:
-            table = ""
-            items = []
+        if statuses["valuation_method_statuses"].get("ev_ebitda") != status_module.VERIFIED:
+            # No enterprise value was produced: there is nothing to compare.
+            statuses["ev_per_share_status"] = status_module.UNAVAILABLE
+            diagnostics.pop("provisional", None)
+            diagnostics["cross_method_basis"] = "EV/EBITDA method unavailable"
+        elif not valuation.ev_per_share_reconciled:
+            # The enterprise value stands; only the per-share figure it cannot
+            # reproduce is withheld.
+            statuses["ev_per_share_status"] = status_module.SUPPRESSED
+        elif not valuation.cross_method_comparable:
+            # Arithmetic valid, comparison not: publish the number, label it.
+            statuses["ev_per_share_status"] = status_module.UNVERIFIED
         self._output_status = statuses
+        self._component_status = build_component_status(
+            statuses, propagation_ok=propagation_ok, diagnostics=diagnostics,
+            controlling={
+                "status": statuses.get("controlling_sensitivity_status", ""),
+                "verified": controlling_verified,
+                "expected": controlling_expected,
+            },
+            failed_rows=failed_rows,
+        )
         self._basis_names = basis
         self._sensitivity_items = [item.to_dict() for item in items]
+        self._sensitivity_alias_map = sensitivity.alias_map(items)
         self._sensitivity_gaps = gaps
         self._sensitivity_table = table
         include_per_share = statuses["eps_model_status"] == status_module.VERIFIED
@@ -990,16 +1293,32 @@ class TradingAgentsGraph:
             statuses["valuation_method_statuses"].get("ev_ebitda") == status_module.VERIFIED
         )
         include_ev_per_share = bool(
-            include_ev and statuses.get("ev_per_share_status") == status_module.VERIFIED
+            include_ev
+            and valuation.ev_per_share is not None
+            and valuation.ev_per_share_reconciled
+        )
+        ev_note = ""
+        if statuses["valuation_method_statuses"].get("ev_ebitda") != status_module.VERIFIED:
+            from tradingagents.research import input_probe
+
+            ev_note = input_probe.render(diagnostics)
+        self._fundamental_packet = research_report.compact_summary(
+            model, valuation, instructions=False,
+            include_per_share=False, include_ev_ebitda=False, include_valuation=False,
+        )
+        self._valuation_packet = research_report.valuation_packet(
+            model, valuation, statuses
         )
         package = research_report.compact_summary(
             model, valuation, include_per_share=include_per_share,
             include_ev_ebitda=include_ev, include_ev_per_share=include_ev_per_share,
+            ev_note=ev_note,
         )
         artifact = research_report.compact_summary(
             model, valuation, instructions=False,
             include_per_share=include_per_share,
             include_ev_ebitda=include_ev, include_ev_per_share=include_ev_per_share,
+            ev_note=ev_note,
         )
         if table:
             gaps_line = (
@@ -1008,6 +1327,12 @@ class TradingAgentsGraph:
             )
             package = f"{package}\n\n{table}{gaps_line}"
             artifact = f"{artifact}\n\n{table}{gaps_line}"
+        if not valuation.cross_method_comparable:
+            basis_note = (
+                f"\n\nCross-method basis: {diagnostics.get('cross_method_basis', '')}."
+            )
+            package += basis_note
+            artifact += basis_note
         return package, artifact, valuation.price, str(spec_path)
 
     def _research_model(self, company_name: str, trade_date: str | None = None,
@@ -1471,13 +1796,29 @@ class TradingAgentsGraph:
         )
         # The repaired model gets its own sensitivities: v1's table would price
         # the superseded share count and EPS.
-        from tradingagents.research import sensitivity as sensitivity_module
+        from tradingagents.research import (
+            capital as capital_module,
+            sensitivity as sensitivity_module,
+        )
 
-        items, gaps = sensitivity_module.rank(repaired)
+        eps_ok = capital_module.eps_basis_ready(repaired, valuation.period)[0]
+        cap_ok = capital_module.market_cap_ready(repaired)[0]
+        equity_ok = capital_module.equity_basis_ready(repaired)[0]
+        items, gaps = sensitivity_module.rank(
+            repaired, top=3, eps_verified=eps_ok, pe_verified=eps_ok
+        )
         table = sensitivity_module.render(items)
+        propagation_ok = all(
+            item.verification_status == "VERIFIED" for item in items
+        )
+        controlling_rows = [item for item in items if item.controlling_candidate]
+        controlling_verified = sum(1 for item in controlling_rows if item.decision_eligible)
+        controlling_expected = len(controlling_rows)
+        controlling_ok = controlling_expected > 0 and controlling_verified == controlling_expected
+        failed_rows = sum(1 for item in items if not item.decision_eligible)
         low, high = valuation.fair_value_low, valuation.fair_value_high
-        from tradingagents.research import capital as capital_module, status as status_module
-        from tradingagents.research.shares import basis_report
+        from tradingagents.research import status as status_module
+        from tradingagents.research.shares import basis_report, diluted_kind
 
         bases = basis_report(repaired)
         statuses = status_module.assess(
@@ -1488,40 +1829,45 @@ class TradingAgentsGraph:
                 field for challenge in unresolved for field in challenge.affected_fields
             ],
             sensitivity_count=len(items),
+            propagation_ok=propagation_ok,
+            controlling_propagation_ok=controlling_ok,
             price=valuation.price,
             has_depreciation=bool(repaired.cashflow),
             has_net_debt=bool(
                 repaired.net_debt is not None and repaired.net_debt.components_verified()
             ),
             ev_ebitda_multiple=repaired.valuation.ev_ebitda_multiple,
-            capital_verified=capital_module.validated(repaired)[0],
+            capital_verified=eps_ok,
+            eps_basis_quality=diluted_kind(repaired),
+            market_cap_verified=cap_ok,
+            eps_basis_verified=eps_ok,
+            equity_basis_verified=equity_ok,
         )
-        if statuses["sensitivity_model_status"] != status_module.VERIFIED:
-            table = ""
-            items = []
-            statuses = status_module.assess(
-                model_status="VERIFIED",
-                basis=bases,
-                has_band=low is not None and high is not None,
-                challenge_fields=[
-                    field for challenge in unresolved for field in challenge.affected_fields
-                ],
-                sensitivity_count=0,
-                price=valuation.price,
-                has_depreciation=bool(repaired.cashflow),
-                has_net_debt=bool(
-                    repaired.net_debt is not None
-                    and repaired.net_debt.components_verified()
-                ),
-                ev_ebitda_multiple=repaired.valuation.ev_ebitda_multiple,
-                capital_verified=capital_module.validated(repaired)[0],
+        if statuses["valuation_method_statuses"].get("ev_ebitda") != status_module.VERIFIED:
+            statuses["ev_per_share_status"] = status_module.UNAVAILABLE
+            cross_reason = "EV/EBITDA method unavailable"
+        elif not valuation.cross_method_comparable:
+            ev_count, pe_count, gap = capital_module.cross_method_basis(repaired)
+            statuses["ev_per_share_status"] = status_module.UNVERIFIED
+            cross_reason = (
+                f"EV per-share uses {ev_count:,.1f}m shares; P/E uses {pe_count:,.1f}m "
+                f"({gap:.1%} apart); cross-method comparison unverified"
+                if gap is not None and ev_count and pe_count
+                else "share bases are not reconciled"
             )
+        else:
+            cross_reason = ""
+        diagnostics = self._ev_diagnostics(repaired, valuation.period, company, trade_date)
+        if cross_reason:
+            diagnostics = {**diagnostics, "cross_method_basis": cross_reason}
         include_per_share = statuses["eps_model_status"] == status_module.VERIFIED
         include_ev = (
             statuses["valuation_method_statuses"].get("ev_ebitda") == status_module.VERIFIED
         )
         include_ev_per_share = bool(
-            include_ev and statuses.get("ev_per_share_status") == status_module.VERIFIED
+            include_ev
+            and valuation.ev_per_share is not None
+            and valuation.ev_per_share_reconciled
         )
         package_v2 = research_report.compact_summary(
             result, valuation, include_per_share=include_per_share,
@@ -1542,6 +1888,26 @@ class TradingAgentsGraph:
         unresolved_texts = [c.proposed_correction or c.challenge_type for c in unresolved]
         addendum = self._repair_addendum(llm, report_text, changes, result, unresolved_texts)
         logger.info("Model repaired for %s: %s field(s) changed", company, len(changes))
+        try:
+            pre_status = json.loads(str(state.get("component_status") or "{}"))
+        except ValueError:
+            pre_status = {}
+        repair_id = "repair:" + hashlib.sha256(
+            json.dumps(changes, sort_keys=True, default=str).encode()
+        ).hexdigest()[:12]
+        post_status = build_component_status(
+            statuses, propagation_ok=propagation_ok, diagnostics=diagnostics,
+            controlling={
+                "status": statuses.get("controlling_sensitivity_status", ""),
+                "verified": controlling_verified,
+                "expected": controlling_expected,
+            },
+            failed_rows=failed_rows,
+        )
+        component = repaired_status_object(
+            pre_status, post_status, repair_id,
+            datetime.now().isoformat(timespec="seconds"),
+        )
         return {
             "fundamentals_challenge_check": "repaired",
             "active_model_version": "v2",
@@ -1562,7 +1928,11 @@ class TradingAgentsGraph:
             "sensitivity_model_status": statuses["sensitivity_model_status"],
             "sensitivity_status": statuses["sensitivity_model_status"],
             "sensitivity_table": table,
-            "sensitivity_ids": json.dumps([item.sensitivity_id for item in items]),
+            "sensitivity_ids": json.dumps([
+                item.sensitivity_id for item in items if item.decision_eligible
+            ]),
+            "sensitivity_alias_map": json.dumps(sensitivity_module.alias_map(items)),
+            "component_status": json.dumps(component),
             "sensitivity_gaps": json.dumps(gaps),
             "market_cap_basis": bases["market_cap_basis"],
             "forecast_eps_basis": bases["forecast_eps_basis"],
@@ -1708,6 +2078,19 @@ class TradingAgentsGraph:
             "case_table": "",
             "metrics_table": "",
             "model_challenges": repair_mod.to_json(list(challenges or [])),
+            # A failed repair leaves every controlling component unverified; the
+            # repaired numbers stay in diagnostics only.
+            "component_status": json.dumps({
+                "operating_forecast": {"status": "UNVERIFIED", "reason": reason},
+                "forecast_eps": {"status": "UNVERIFIED", "reason": reason},
+                "pe_valuation": {"status": "UNVERIFIED", "reason": reason},
+                "ev_ebitda_method": {"status": "UNAVAILABLE", "reason": "model unverified"},
+                "ev_per_share_comparison": {"status": "UNAVAILABLE", "reason": "model unverified"},
+                "controlling_valuation": {"use": "none", "ev_controlling": False},
+                "sensitivity": {"status": "UNAVAILABLE", "propagation_ok": False},
+                "technical": {"status": "ADVISORY"},
+                "repair_failure": {"stage": stage, "reason": reason},
+            }),
         }
 
     def _memory_step(self, state):

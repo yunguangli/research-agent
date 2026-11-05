@@ -95,8 +95,7 @@ def invoke_structured(
         if status is not None:
             status["reason"] = f"{type(exc).__name__}: {exc}"[:200]
         logger.warning(
-            "%s: structured-output invocation failed (%s); retrying once as free text",
-            agent_name, exc,
+            "%s: structured-output attempt failed (%s)", agent_name, exc
         )
         return None
 

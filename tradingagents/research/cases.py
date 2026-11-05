@@ -35,6 +35,9 @@ class Case:
     revenue_pct: float = 0.0
     operating_profit_pct: float = 0.0
     multiple: float | None = None
+    # A multiple argument needs provenance: "pe_model_band_v1" when the case
+    # keeps the model's own multiple, a versioned case source when it shocks it.
+    multiple_source_id: str = ""
     momentum: str = ""
     sentiment: str = ""
     evidence: list[str] = field(default_factory=list)
@@ -50,6 +53,7 @@ class Case:
             revenue_pct=float(data.get("revenue_pct", 0.0) or 0.0),
             operating_profit_pct=float(data.get("operating_profit_pct", 0.0) or 0.0),
             multiple=_opt_float(data.get("multiple")),
+            multiple_source_id=str(data.get("multiple_source_id", "") or ""),
             momentum=str(data.get("momentum", "") or ""),
             sentiment=str(data.get("sentiment", "") or ""),
             evidence=[str(item) for item in (data.get("evidence") or [])][:6],
@@ -62,6 +66,7 @@ class Case:
             "revenue_pct": self.revenue_pct,
             "operating_profit_pct": self.operating_profit_pct,
             "multiple": self.multiple,
+            "multiple_source_id": self.multiple_source_id,
             "momentum": self.momentum,
             "sentiment": self.sentiment,
             "evidence": self.evidence,
@@ -74,12 +79,18 @@ class CaseResult:
     probability: float
     revenue: float
     operating_profit: float
-    net_profit: float
-    eps: float
+    net_profit: float | None
+    eps: float | None
     multiple: float
-    target: float
+    target: float | None
     applied: dict[str, float]
     notes: list[str] = field(default_factory=list)
+    # "verified" (stated tax), "indicative" (implied from the base year) or
+    # "insufficient" (stopped at operating profit).
+    basis: str = "verified"
+    reconciled: bool = True
+    multiple_source_id: str = ""
+    multiple_changed: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -93,6 +104,10 @@ class CaseResult:
             "target": self.target,
             "applied": self.applied,
             "notes": self.notes,
+            "basis": self.basis,
+            "reconciled": self.reconciled,
+            "multiple_source_id": self.multiple_source_id,
+            "multiple_changed": self.multiple_changed,
         }
 
 
@@ -134,6 +149,50 @@ def _stance_sign(stance: str, value: float, label: str, notes: list[str]) -> flo
     return value
 
 
+def _tax_basis(model: ModelResult, period: str) -> tuple[float | None, str]:
+    """(rate, basis) for the scenario's tax step.
+
+    Hierarchy: a stated forecast rate (verified), else the rate implied by the
+    base year's own ordinary-profit and net-profit rows (indicative), else no
+    rate — the case then stops at operating profit instead of inventing one.
+    """
+    spec = model.spec
+    if spec.effective_tax_rate is not None:
+        return float(spec.effective_tax_rate), "verified"
+    row = model.row(period)
+    if row.ordinary_profit and row.net_profit is not None and row.ordinary_profit > 0:
+        return 1 - row.net_profit / row.ordinary_profit, "indicative"
+    return None, "insufficient"
+
+
+def _eps_shares(model: ModelResult, period: str, basis: str) -> float | None:
+    """The period's forecast diluted count, else the named basis.
+
+    The scenarios use the same denominator as the published EPS, so a case's
+    per-share value reconciles with the base row it argues against.
+    """
+    from . import capital
+
+    structure = model.spec.capital_structure
+    if structure is not None:
+        try:
+            target = model.spec.period(period)
+        except ModelError:
+            target = None
+        value, _reason = capital.forecast_shares(
+            structure,
+            period,
+            getattr(target, "end", "") if target else "",
+            getattr(target, "start", "") if target else "",
+        )
+        if value:
+            return value
+    try:
+        return model.spec.share_base(basis).shares_m
+    except ModelError:
+        return None
+
+
 def apply_case(model: ModelResult, valuation: Valuation, case: Case) -> CaseResult:
     """Recompute the base model under a case's capped deltas."""
     notes: list[str] = []
@@ -161,9 +220,53 @@ def apply_case(model: ModelResult, valuation: Valuation, case: Case) -> CaseResu
     revenue = row.revenue * (1 + revenue_pct / 100)
     operating_profit = row.operating_profit * (1 + op_pct / 100)
 
-    # Net profit moves with operating profit; tax and interest held at the base
-    # ratio, because a case argues about operations, not about the tax line.
-    net_profit = row.net_profit * (operating_profit / row.operating_profit)
+    # The scenario chain, one step at a time: operating-profit delta → pretax →
+    # tax → net income → EPS → value. A ratio shortcut (total OP x net/OP)
+    # silently prices tax, non-operating items and minority interest as if they
+    # scaled with operations, which is exactly what a scenario must not do.
+    from . import kernel
+
+    op_delta = operating_profit - row.operating_profit
+    tax, basis = _tax_basis(model, valuation.period)
+    net_profit = None
+    eps = None
+    target = None
+    shares = None
+    reconciled = True
+    if tax is None:
+        basis = "insufficient"
+        notes.append(
+            "SENSITIVITY_PROPAGATION_FAILED: no tax basis is stated or implied, so net "
+            "income, EPS and fair value are withheld; the case stops at operating profit"
+        )
+    else:
+        net_profit = row.net_profit + op_delta * (1 - tax)
+        shares = _eps_shares(model, valuation.period, valuation.basis)
+        if shares:
+            eps = kernel.per_share(net_profit, shares, model.spec.unit)
+        else:
+            reconciled = False
+            notes.append("case rejected: no verified share count for the EPS step")
+        if basis == "indicative":
+            notes.append(
+                "tax basis is implied from the base year: net income, EPS and fair "
+                "value are INDICATIVE"
+            )
+        if model.spec.net_debt is not None and model.spec.net_debt.minority_interest:
+            notes.append("minority interest is held at its base level, not re-estimated")
+        # The chain must return the numbers it published, or the case is rejected.
+        expected_net = row.net_profit + op_delta * (1 - tax)
+        if abs(net_profit - expected_net) > max(0.5, abs(expected_net) * 1e-6):
+            reconciled = False
+        if eps is not None and shares:
+            restored = kernel.market_cap(eps, shares, model.spec.unit)
+            if abs(restored - net_profit) > max(0.5, abs(net_profit) * 1e-6):
+                reconciled = False
+        if not reconciled:
+            notes.append(
+                "case rejected: operating profit, net income, EPS and value do not reconcile"
+            )
+            net_profit = eps = None
 
     base = base_multiple(valuation)
     multiple = case.multiple if case.multiple else base
@@ -189,8 +292,15 @@ def apply_case(model: ModelResult, valuation: Valuation, case: Case) -> CaseResu
             f"base {base:.1f}x ±{CAP_MULTIPLE_PCT:.0f}%)"
         )
 
-    shares = model.spec.share_base(valuation.basis).shares_m
-    eps = net_profit * 1000.0 / shares if model.spec.unit.endswith("bn") else net_profit / shares
+    target = eps * clamped_multiple if eps is not None else None
+    # A scenario multiple carries its provenance: the model's own band when it
+    # is unchanged, a versioned case source when it is deliberately shocked.
+    multiple_changed = bool(
+        argues_multiple and abs(clamped_multiple - base) > max(0.05, base * 0.005)
+    )
+    multiple_source_id = case.multiple_source_id or (
+        "analyst_case_multiple_v1" if multiple_changed else "pe_model_band_v1"
+    )
     return CaseResult(
         stance=case.stance,
         probability=case.probability,
@@ -199,9 +309,13 @@ def apply_case(model: ModelResult, valuation: Valuation, case: Case) -> CaseResu
         net_profit=net_profit,
         eps=eps,
         multiple=clamped_multiple,
-        target=eps * clamped_multiple,
+        target=target,
         applied={"revenue_pct": revenue_pct, "operating_profit_pct": op_pct},
         notes=notes,
+        basis=basis,
+        reconciled=reconciled,
+        multiple_source_id=multiple_source_id,
+        multiple_changed=multiple_changed,
     )
 
 
@@ -331,10 +445,17 @@ def render_results(model: ModelResult, valuation: Valuation, cases: list[dict]) 
     ]
     for result in results:
         notes = "; ".join(result.notes).replace("|", "\\|") or "—"
+        if not result.reconciled or result.eps is None:
+            eps_text = target_text = "REJECTED"
+        else:
+            eps_text = f"{result.eps:,.1f}"
+            target_text = (
+                f"{result.target:,.0f} {currency}" if result.target is not None else "n/a"
+            )
         lines.append(
             f"| {result.stance} | {result.probability:.0%} | {result.revenue:,.1f} | "
-            f"{result.operating_profit:,.1f} | {result.eps:,.1f} | {result.multiple:,.1f}x | "
-            f"{result.target:,.0f} {currency} | {notes} |"
+            f"{result.operating_profit:,.1f} | {eps_text} | {result.multiple:,.1f}x | "
+            f"{target_text} | {notes} |"
         )
     lines.append("")
     lines.append(

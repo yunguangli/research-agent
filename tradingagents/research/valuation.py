@@ -8,11 +8,17 @@ valuation automatically instead of leaving a stale table behind.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from . import kernel
 from .kernel import ModelResult
 from .schemas import ModelError
+
+
+def _feature(name: str) -> bool:
+    value = os.environ.get(f"TRADINGAGENTS_FEATURE_{name}", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -46,6 +52,13 @@ class Valuation:
     ev_equity_value: float | None = None
     ev_per_share: float | None = None
     ev_period: str = ""
+    # False when the per-share figure does not reconcile to the equity value on
+    # the verified share basis; the enterprise-value result is still valid.
+    ev_per_share_reconciled: bool = True
+    # The P/E and EV per-share methods can use different counts. When they do,
+    # the cross-method comparison is unverified even though each is valid alone.
+    cross_method_share_gap: float | None = None
+    cross_method_comparable: bool = True
 
     @property
     def upside_to_mid(self) -> float:
@@ -120,7 +133,20 @@ def value(model: ModelResult) -> Valuation:
         for scenario in spec.scenarios
     ]
 
-    ev_multiple, ebitda, ev, equity, ev_per_share = _ev_ebitda(model, row, price)
+    ev_multiple, ebitda, ev, equity, ev_per_share, ev_reconciled = _ev_ebitda(model, row, price)
+    from . import capital
+
+    share_gap = None
+    comparable = True
+    if _feature("CAPITAL_MODES_V1"):
+        _ev_count, _pe_count, share_gap = capital.cross_method_basis(model.spec)
+        # Different counts are not a defect in either method, but they make the
+        # cross-method comparison unverified, whether or not a convertible is
+        # the cause.
+        comparable = not (
+            (share_gap is not None and share_gap > 0.01)
+            or capital.treatment_conflicts(model.spec)
+        )
 
     return Valuation(
         basis=basis,
@@ -141,6 +167,9 @@ def value(model: ModelResult) -> Valuation:
         ev_equity_value=equity,
         ev_per_share=ev_per_share,
         ev_period=row.label,
+        ev_per_share_reconciled=ev_reconciled,
+        cross_method_share_gap=share_gap,
+        cross_method_comparable=comparable,
     )
 
 
@@ -156,10 +185,24 @@ def _ebitda(model: ModelResult, label: str) -> float | None:
     return row.operating_profit + flow.depreciation
 
 
+def _per_share_reconciles(
+    per_share_value: float | None, shares_m: float | None, equity_value: float, unit: str
+) -> bool:
+    """Whether ``per_share x shares`` returns the equity value it was divided from.
+
+    ``per_share`` converts between the model's unit and a currency amount, so the
+    round trip goes through ``kernel.market_cap`` rather than a bare multiply.
+    """
+    if per_share_value is None or not shares_m:
+        return False
+    restored = kernel.market_cap(per_share_value, shares_m, unit)
+    return abs(restored - equity_value) <= max(0.5, abs(equity_value) * 1e-6)
+
+
 def _ev_ebitda(
     model: ModelResult, row, price: float
-) -> tuple[float | None, float | None, float | None, float | None, float | None]:
-    """(multiple, EBITDA, enterprise value, equity value, per-share value).
+) -> tuple[float | None, float | None, float | None, float | None, float | None, bool]:
+    """(multiple, EBITDA, EV, equity value, per-share value, per-share reconciled).
 
     EV = multiple x EBITDA; equity = EV - net debt, once. The per-share figure
     divides by the declared equity-value share basis, so a missing share basis
@@ -181,13 +224,23 @@ def _ev_ebitda(
         or spec.net_debt is None
         or not spec.net_debt.components_verified()
     ):
-        return multiple, ebitda, None, None, None
+        return multiple, ebitda, None, None, None, True
+    from . import capital
+    from .shares import equity_value_basis, forecast_eps_basis, market_cap_basis
+
+    mode = capital.valuation_mode(spec) if _feature("CAPITAL_MODES_V1") else "unknown"
+    if mode == "debt" and spec.capital_structure is not None:
+        face = sum(
+            float(item.face_value) for item in spec.capital_structure.convertibles
+            if item.face_value is not None
+        )
+        net_debt = net_debt + face
     enterprise = multiple * ebitda
     equity = enterprise - net_debt
-    from . import capital
-    from .shares import market_cap_basis
-
-    denominator = (spec.valuation.equity_value_share_basis or "").strip() or market_cap_basis(spec)
+    denominator = equity_value_basis(spec)
+    if mode == "assumed_converted":
+        # The converted shares carry the dilution, so debt excludes the face.
+        denominator = forecast_eps_basis(spec)
     try:
         shares = spec.share_base(denominator).shares_m
     except ModelError:
@@ -195,9 +248,16 @@ def _ev_ebitda(
     if shares is not None and denominator == market_cap_basis(spec):
         shares = capital.market_cap_shares(spec, shares)
     per_share_value = None
+    reconciled = True
     if shares and price:
         per_share_value = kernel.per_share(equity, shares, spec.unit)
-    return multiple, ebitda, enterprise, equity, per_share_value
+        # The per-share output is the only EV figure that depends on a share
+        # count, so a figure that does not return its own equity value is
+        # suppressed rather than published. EV/EBITDA itself stays verified.
+        if not _per_share_reconciles(per_share_value, shares, equity, spec.unit):
+            per_share_value = None
+            reconciled = False
+    return multiple, ebitda, enterprise, equity, per_share_value, reconciled
 
 
 def _forecast_row(model: ModelResult):

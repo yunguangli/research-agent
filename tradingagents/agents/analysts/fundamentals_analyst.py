@@ -1,4 +1,5 @@
 import logging
+import os
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
@@ -1493,6 +1494,15 @@ def create_fundamentals_analyst(llm, tools=None):
         }
 
         system_message = fill_placeholders(TEMPLATE, values) + get_language_instruction()
+        if os.environ.get("TRADINGAGENTS_FEATURE_EVIDENCE_ATTRIBUTES_V1", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }:
+            # The runtime renders the broker count from structured source ids;
+            # a free-text numeric count cannot be checked.
+            system_message += (
+                " Do not state a numeric broker count in prose: the runtime renders the "
+                "count and the broker list from structured source ids."
+            )
 
         prompt = ChatPromptTemplate.from_messages(
             [

@@ -31,8 +31,9 @@ That prints every path below with an `exists` flag and the newest report folders
 
 ```
 reports\5803.T_20261028_104355\
-  complete_report.md            the whole report, all teams, one document  <- read this
+  complete_report.md            the concise investor report (summaries + PM decision)  <- read this
   complete_report.html          same content, one page
+  appendix.md                   full analyst reports, full debate transcript, diagnostics, audit
   1_analysts\fundamentals.md    the LLM-written analyst report
   1b_research\research_package.md   the verified model (computed, no prose)
   1c_audit\numbers.md           figures in the prose that do not match the model
@@ -51,7 +52,7 @@ The folder name is `<TICKER>_<YYYYMMDD>_<HHMMSS>`. Sorting by name sorts by time
 2. **Filing parser** — reads a Japanese earnings release into disclosed facts (actuals, guidance, issued and treasury shares) with page citations. Other markets skip this step; the model reads the filing itself.
 3. **Model spec** — either `model.json` (hand-maintained or `extract --merge`d) or built by the LLM from the corpus. The kernel validates it: bridges must sum, margins recompute, EPS divides, segments tie, citations must exist in the corpus.
 4. **Research package** — the spec rendered to `1b_research\research_package.md` and injected into the Fundamentals Analyst prompt, and into the Research Manager and Portfolio Manager prompts.
-5. **Report** — analyst prose plus the package plus the debate, written to `logs\reports\<TICKER>_<stamp>`.
+5. **Report** — the investor report (`complete_report.md`) selects and caps summaries plus the PM decision; the full analyst prose, package and debate are written to `appendix.md` and the numbered section folders under `logs\reports\<TICKER>_<stamp>`.
 6. **Number audit** — compares figures in the prose with the model's; anything unmatched is listed in `1c_audit\numbers.md`.
 7. **Cases** — each debate pitch becomes capped deltas on the model; `1d_cases\cases.md` shows base plus each case, recomputed.
 

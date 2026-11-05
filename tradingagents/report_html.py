@@ -294,7 +294,15 @@ def render_report(ticker: str, final_state: dict, settings: dict | None, parts) 
                         f'<span class="label">{escape(name)}</span></a><ul>{agents}</ul></li>')
         body.append(f'<section id="s{n}"><h2>{escape(heading)}</h2>')
         for m, (agent, _filename, text) in enumerate(written, 1):
-            body.append(f'<h3 id="s{n}-{m}">{escape(agent)}</h3>\n{_render_agent_text(md, text)}')
+            if agent == heading:
+                # Main-report sections already carry their own subheadings; a
+                # second h3 with the section name is noise, and the text's
+                # natural levels (###/####) sit correctly under the h2.
+                body.append(f'<div id="s{n}-{m}">{md.render(text)}</div>')
+            else:
+                body.append(
+                    f'<h3 id="s{n}-{m}">{escape(agent)}</h3>\n{_render_agent_text(md, text)}'
+                )
         body.append("</section>")
 
     page_title = " ".join(x for x in (ticker, date, rating) if x)

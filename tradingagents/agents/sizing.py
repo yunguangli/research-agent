@@ -37,6 +37,11 @@ _EXACT = re.compile(
     # "half of a full/normal/standard position"
     r"|\b(?:half|one-third|two-thirds|a third)\s+of\s+(?:a\s+)?"
     r"(?:full|normal|standard|neutral|approved|current|existing)\b"
+    # "half a standard weight", "double weight", "full position", "quarter
+    # position": a relative size is still a size and needs portfolio context.
+    r"|\b(?:half|quarter|one-third|two-thirds|a third|double|triple|full)\s+"
+    r"(?:a\s+)?(?:standard\s+|normal\s+|neutral\s+|full\s+)?"
+    r"(?:weight|position|allocation|exposure|sleeve)\b"
     # "two tranches"
     r"|\b(?:two|three|four|five)\s+tranches?\b",
     re.IGNORECASE,

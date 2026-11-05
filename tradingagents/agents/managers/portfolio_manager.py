@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 
@@ -101,8 +102,17 @@ Independent fundamental analysis:
 Model audit:
 {{model_audit_or_null}}
 
+Fundamental packet (earnings facts; no price, no per-share output):
+{{fundamental_packet_or_null}}
+
+Valuation packet (verified valuation outputs only):
+{{valuation_packet_or_null}}
+
 Technical analysis:
 {{technical_analysis_or_null}}
+
+Verified technical evidence (stable IDs):
+{{technical_evidence_or_null}}
 
 Adversarial review:
 {{adversarial_review_or_null}}
@@ -193,8 +203,14 @@ Stable / Falling), technical timing (Favorable / Neutral / Unfavorable), the
 new-investor action (Initiate / Wait / Avoid), the existing-holder action (Add / Hold /
 Review / Reduce / Exit), the position-size constraint (what caps the position, never a
 size), the fundamental thesis-invalidation conditions, and the evidence that would
-upgrade or downgrade the stance. Confidence (High / Medium / Low). Do not compress all
-of them into the rating.
+upgrade or downgrade the stance. Confidence (High / Medium / Low). Also set
+`downgrade_applicability`: at the lowest rating (Sell/Exit) it is
+ALREADY_AT_LOWEST_RATING and no evidence-to-downgrade is required; a Reduce must name
+the evidence that would trigger an Exit, with APPLICABLE. Do not compress all of them
+into the rating.
+
+Rating and holder action must agree: a partial reduction is Underweight with the holder
+action Reduce; Sell is reserved for a full exit.
 
 RESOLUTION
 
@@ -230,6 +246,18 @@ needs three independent clusters, one cash-flow/balance-sheet/event or severe-op
 leg, and two independent primary disclosures. Technical evidence alone cannot support a
 fundamental Buy or Sell; a mixed basis must name the controlling category.
 
+For category "technical", cite only an evidence_id printed in VERIFIED TECHNICAL
+EVIDENCE, with `underlying_driver_id` equal to that id, `verified: true`, and
+`primary_source_refs` copied from the item. Do not invent a technical item. A mixed
+basis is controlled by a fundamental or event category, never by "technical"; if the
+technical leg is weak, use decision_basis "fundamental" and say the technical view is
+an advisory overlay rather than failing the whole basis.
+
+If the valuation packet says P/E is SUPPRESSED, the rating must not rely on a multiple:
+do not state a P/E, market cap, EPS-derived value, price target or fair-value range, and
+do not combine the price in the technical packet with net profit in the fundamental
+packet. A reconstruction invalidates the decision.
+
 POSITION CONTEXT
 
 If current holdings and cost are supplied:
@@ -257,6 +285,10 @@ Distinguish fundamental invalidation from ordinary price volatility.
 TARGET AND VALUATION
 
 {{valuation_sources_or_null}}
+
+{{price_conflict_block}}
+{{cross_method_block}}
+{{component_status_block}}
 
 Use a target range or rounded target consistent with forecast uncertainty.
 
@@ -287,6 +319,8 @@ Give priority to catalysts and risks that can reasonably emerge within
 
 Long-term optionality may support valuation, but must not substitute for evidence
 relevant to the decision horizon.
+
+{{resolution_block}}
 
 OUTPUT
 
@@ -365,7 +399,185 @@ Before responding, verify:
 - The report is concise enough to support an investment decision."""
 
 
+def _feature(name: str) -> bool:
+    return os.environ.get(f"TRADINGAGENTS_FEATURE_{name}", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+_CONTROLLING_STATUS_KEYS = (
+    "operating_model_status", "eps_model_status", "valuation_status",
+)
+
+
+def controlling_invalid(state: dict) -> bool:
+    """Whether a controlling valuation component failed validation."""
+    return any(
+        str(state.get(key) or "").upper() == "INVALID"
+        for key in _CONTROLLING_STATUS_KEYS
+    )
+
+
+def _component_status_note(state: dict) -> str:
+    """The shared component status, rendered for the PM prompt."""
+    try:
+        component = json.loads(str(state.get("component_status") or "{}"))
+    except ValueError:
+        return ""
+    if not isinstance(component, dict) or not component:
+        return ""
+    lines = ["COMPONENT STATUS"]
+    method = (component.get("ev_ebitda_method") or {}).get("status")
+    comparison = component.get("ev_per_share_comparison") or {}
+    if method:
+        lines.append(f"- EV/EBITDA enterprise-value method: {method}")
+    if comparison.get("status"):
+        lines.append(
+            f"- EV/EBITDA per-share comparison: {comparison['status']}"
+            + (f" ({comparison['reason']})" if comparison.get("reason") else "")
+        )
+    lines.append("- Controlling valuation use: pe only; EV/EBITDA is a cross-check")
+    sensitivity = component.get("sensitivity") or {}
+    controlling_sensitivity = component.get("controlling_sensitivity") or {}
+    if sensitivity.get("failed_rows"):
+        lines.append(
+            f"- Sensitivity: {sensitivity.get('status')} — "
+            f"{sensitivity.get('failed_rows')} failed rows excluded from decision evidence"
+        )
+    if controlling_sensitivity.get("status"):
+        lines.append(
+            f"- Controlling sensitivities: {controlling_sensitivity['status']}, "
+            f"{controlling_sensitivity.get('verified', 0)} of "
+            f"{controlling_sensitivity.get('expected', 0)} verified"
+        )
+    return "\n".join(lines)
+
+
+def _cross_method_note(state: dict) -> str:
+    """The share-basis mismatch between EV/EBITDA and P/E, when present."""
+    try:
+        diagnostics = json.loads(str(state.get("ev_input_diagnostics") or "{}"))
+    except ValueError:
+        return ""
+    if not isinstance(diagnostics, dict):
+        return ""
+    return str(diagnostics.get("cross_method_basis") or "")
+
+
+def _technical_block(state: dict) -> str:
+    """The verified technical items, or an explicit absence.
+
+    The PM may cite only what is printed here; an item the analyst did not
+    retrieve is absent rather than restated from prose.
+    """
+    from tradingagents.research import technical
+
+    raw = state.get("technical_evidence")
+    if not raw:
+        return "No verified technical evidence was produced in this run."
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        data = []
+    items = [
+        technical.TechnicalEvidence.from_dict(entry)
+        for entry in data
+        if isinstance(entry, dict)
+    ]
+    if not any(item.verification_status == technical.VERIFIED for item in items):
+        return "No verified technical evidence was produced in this run."
+    return technical.render(items)
+
+
+_TECH_LEVEL_IDS = {
+    "10": ("tech_close_below_10ema", "tech_close_above_10ema"),
+    "50": ("tech_close_below_50sma", "tech_close_above_50sma"),
+    "200": ("tech_close_below_200sma", "tech_close_above_200sma"),
+}
+def _level_pattern(term: str) -> re.Pattern[str]:
+    return re.compile(
+        r"\b" + re.escape(term)
+        + r"\s*(?:-?\s*day)?\s*(?:sma|ema)\b[^\d]{0,24}([\d,]+(?:\.\d+)?)",
+        re.IGNORECASE,
+    )
+
+
+def _verified_levels(state: dict) -> dict[str, float]:
+    """The moving-average levels printed in the verified technical evidence."""
+    from tradingagents.research import technical
+
+    raw = state.get("technical_evidence")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return {}
+    levels: dict[str, float] = {}
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("verification_status") or "") != technical.VERIFIED:
+            continue
+        for term, ids in _TECH_LEVEL_IDS.items():
+            if str(entry.get("evidence_id") or "") in ids:
+                value = entry.get("comparison_value")
+                if isinstance(value, (int, float)):
+                    levels[term] = float(value)
+    return levels
+
+
+def _technical_mismatches(text: str, state: dict) -> list[str]:
+    """PM levels that disagree with the verified evidence for the same indicator.
+
+    Only a number attached to a named moving average is checked; a level the PM
+    calculates (a gap midpoint, say) is not an indicator claim.
+    """
+    findings: list[str] = []
+    for term, value in _verified_levels(state).items():
+        for match in _level_pattern(term).finditer(text or ""):
+            try:
+                stated = float(match.group(1).replace(",", ""))
+            except ValueError:
+                continue
+            if abs(stated - value) > max(1.0, abs(value) * 0.005):
+                findings.append(
+                    f"the {term}-period level {stated:,.0f} disagrees with the verified "
+                    f"{value:,.0f}"
+                )
+    return findings
+
+
+def _packet_block(state: dict, kind: str) -> str:
+    """The purpose-specific model packet, never the undifferentiated package."""
+    from tradingagents.research import packets
+
+    if kind == "fundamental":
+        return packets.fundamental_packet(state)
+    return packets.valuation_packet(state)
+
+
+def _verified_technical_ids(state: dict) -> set[str]:
+    from tradingagents.research import technical
+
+    raw = state.get("technical_evidence")
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return set()
+    return {
+        str(entry.get("evidence_id") or "")
+        for entry in data
+        if isinstance(entry, dict)
+        and str(entry.get("verification_status") or "") == technical.VERIFIED
+    }
+
+
 def _fill(state: dict, ticker: str, analysis_date: str) -> str:
+    from tradingagents.research import packets
+
     caps = _PROMPT_CAPS
     package = _clip(str(state.get("research_package") or "").strip(), caps["package"])
     debate = state.get("investment_debate_state") or {}
@@ -396,7 +608,15 @@ def _fill(state: dict, ticker: str, analysis_date: str) -> str:
             package + "\n" + FIGURE_MARKER_RULE if package
             else "null — no verified model was built for this run."
         ),
-        "technical_analysis_or_null": report_or_absent(state.get("market_report"), "market"),
+        "fundamental_packet_or_null": _packet_block(state, "fundamental"),
+        "valuation_packet_or_null": _packet_block(state, "valuation"),
+        # The technical packet carries price and verified evidence only; it may
+        # not carry net income, EPS, shares or valuation output.
+        "technical_analysis_or_null": (
+            packets.technical_packet(state).strip()
+            or report_or_absent(state.get("market_report"), "market")
+        ),
+        "technical_evidence_or_null": _technical_block(state),
         "adversarial_review_or_null": review or "null — no adversarial review in this run.",
         "decision_horizon_or_null": str(state.get("decision_horizon") or "").strip() or "null",
         "current_position_or_null": position,
@@ -424,6 +644,31 @@ def _fill(state: dict, ticker: str, analysis_date: str) -> str:
         # line is what the free-text parser requires.
         "rating_framework_or_null": _rating_framework(),
         "valuation_sources_or_null": _valuation_sources(state),
+        "price_conflict_block": (
+            "PRICE CONFLICT\n"
+            f"{state.get('price_conflict')}\n"
+            "Name the controlling price once and explain why it controls. Do not "
+            "present the other price as controlling."
+            if str(state.get("price_conflict") or "").strip()
+            else ""
+        ),
+        "component_status_block": _component_status_note(state),
+        "resolution_block": (
+            "Also fill the resolution fields: controlling_price (the price that controls), "
+            "controlling_valuation (P/E band or EV cross-check), entry_condition (the observable "
+            "trigger, including its price when stated), and resolution (why the action makes "
+            "sense if the entry is above base fair value)."
+            if _feature("PM_RESOLUTION_V1")
+            else ""
+        ),
+        "cross_method_block": (
+            "CROSS-METHOD BASIS\n"
+            f"{_cross_method_note(state)}\n"
+            "The EV/EBITDA per-share figure is a cross-check, not a controlling "
+            "valuation. Do not use it to set the rating or fair value."
+            if _cross_method_note(state)
+            else ""
+        ),
     }
     return fill_placeholders(TEMPLATE, values)
 
@@ -442,6 +687,16 @@ def _package_fair_value_range(state: dict) -> tuple[float | None, float | None]:
     return fair_value_range_from_summary(str(state.get("research_package") or ""))
 
 
+def _model_band_source_id(state: dict, method: str = "pe") -> str:
+    """A source id that names both the valuation method and the active model version.
+
+    ``model_band`` alone cannot be audited: six months later nobody can tell
+    which method or which spec produced the number.
+    """
+    version = str(state.get("active_model_version") or "v1").strip() or "v1"
+    return f"{method}_model_band_{version}"
+
+
 def _valuation_sources(state: dict) -> str:
     """The only controlling sources a published bound may cite."""
     low = state.get("research_fair_value_low")
@@ -458,14 +713,16 @@ def _valuation_sources(state: dict) -> str:
             "NON-CONTROLLING because the per-share basis is not verified. Set valuation_status "
             "to unavailable and leave the fair-value and source fields empty."
         )
+    band_id = _model_band_source_id(state or {})
     return (
         f"Active model {version}. The only valid controlling sources are:\n"
-        f"- model_band: low {float(low):,.0f}, high {float(high):,.0f}\n"
+        f"- {band_id}: low {float(low):,.0f}, high {float(high):,.0f}\n"
         "- override: set valuation_override with source_model_value, adjusted_value, "
         "adjustment_type, adjustment_amount, rationale and evidence_refs; the adjusted "
         "value must reproduce from those inputs.\n"
         "Set controlling_low_source_id, controlling_base_source_id and "
-        "controlling_high_source_id to one of them. List every scenario you rejected in "
+        "controlling_high_source_id to one of them. A generic id such as model_band is "
+        "not a valid source. List every scenario you rejected in "
         "rejected_scenarios; a rejected scenario cannot supply a bound."
     )
 
@@ -477,7 +734,7 @@ def _matches(value: float | None, target: float | None) -> bool:
     return abs(value - target) <= max(0.01, abs(target) * 0.005)
 
 
-def _range_error(decision, low, high) -> str | None:
+def _range_error(decision, low, high, state: dict | None = None) -> str | None:
     """Why the decision's controlling range is not traceable, or None when it is."""
     if low is None or high is None:
         return None     # no verified band to trace to; the unavailable path clears it
@@ -504,16 +761,18 @@ def _range_error(decision, low, high) -> str | None:
     if not any(ids.values()):
         # A range identical to the verified model band is traceable to it.
         if _matches(decision.fair_value_low, low) and _matches(decision.fair_value_high, high):
-            decision.controlling_low_source_id = "model_band"
-            decision.controlling_high_source_id = "model_band"
+            band_id = _model_band_source_id(state or {})
+            decision.controlling_low_source_id = band_id
+            decision.controlling_high_source_id = band_id
             if base is not None:
-                decision.controlling_base_source_id = "model_band"
+                decision.controlling_base_source_id = band_id
             return None
         return (
             "the controlling range cites no source and does not match the verified model "
             "band"
         )
     rejected = {str(item) for item in decision.rejected_scenarios}
+    band_id = _model_band_source_id(state or {})
     for label, source in ids.items():
         value = values[label]
         if value is None:
@@ -522,7 +781,7 @@ def _range_error(decision, low, high) -> str | None:
             return f"the {label} bound has no source id"
         if source in rejected:
             return f"the {label} bound cites the rejected scenario {source!r}"
-        if source == "model_band":
+        if source == band_id:
             target = low if label == "low" else high if label == "high" else None
             if target is not None and not _matches(value, target):
                 return f"the {label} bound does not match the verified model band"
@@ -571,6 +830,37 @@ EVENT_BASES = {
 }
 
 
+def _decision_status(
+    state: dict,
+    *,
+    structured: bool,
+    valuation_verified: bool,
+    audit_passed: bool,
+) -> str:
+    """FINAL only when every controlling condition holds; otherwise PROVISIONAL.
+
+    A diagnostic run is not a production decision even when every check passes,
+    and a free-text PM decision is not a decision the runtime may stamp FINAL.
+    """
+    if not structured:
+        return ""
+    purpose = str(
+        state.get("run_purpose") or get_config().get("run_purpose") or "production"
+    ).strip().lower()
+    model_ok = str(state.get("model_status") or "VERIFIED").upper() == "VERIFIED"
+    blocking = bool(state.get("unresolved_blocking") or state.get("blocking_issue"))
+    if (
+        purpose != "production"
+        or not valuation_verified
+        or not audit_passed
+        or not model_ok
+        or blocking
+        or str(state.get("eps_basis_quality") or "") == "conservative_full_conversion"
+    ):
+        return "PROVISIONAL"
+    return "FINAL"
+
+
 def _valid_non_model_basis(state: dict) -> bool:
     """Whether a deterministic, event-driven basis permits a directional call.
 
@@ -584,6 +874,41 @@ def _valid_non_model_basis(state: dict) -> bool:
         and basis.get("deterministic_validation_passed") is True
         and basis.get("depends_on_model_figures") is False
     )
+
+
+def _invalidated_decision(state: dict, violations: list[str]) -> dict:
+    """No controlling decision is published after a repeated reconstruction.
+
+    A sentence scrub would leave the rest of a decision built on a suppressed
+    method. The deterministic Not Rated decision replaces it instead.
+    """
+    text = _provisional_decision(state) + (
+        "\n\n**Decision invalidated**: the Portfolio Manager reconstructed the "
+        "suppressed P/E after one retry ("
+        + "; ".join(violations)
+        + "). No controlling rating is published for this run."
+    )
+    return {
+        "final_trade_decision": text,
+        "final_rating": RATING_REVIEW,
+        "controlling_fair_value_low": None,
+        "controlling_fair_value_base": None,
+        "controlling_fair_value_high": None,
+        "action_status": "invalidated",
+        "decision_status": "PROVISIONAL",
+        "decision_findings": json.dumps(
+            [{"code": "PM_RECONSTRUCTED_SUPPRESSED_PE", "detail": "; ".join(violations)}]
+        ),
+        "decision_audit_result": json.dumps(
+            {
+                "validation_passed": False,
+                "failure_reasons": [
+                    "the decision reconstructed a suppressed P/E after one retry"
+                ]
+                + violations,
+            }
+        ),
+    }
 
 
 def _provisional_decision(state: dict) -> str:
@@ -692,6 +1017,31 @@ def _normalize_actions(decision) -> list[str]:
     return notes
 
 
+def _align_rating_with_holder_action(decision) -> list[str]:
+    """Keep the headline rating consistent with the holder action.
+
+    A partial reduction is canonical Underweight (holder action Reduce); Sell is
+    reserved for a full exit. The reverse also holds: an Exit cannot be published
+    under a Buy/Overweight headline.
+    """
+    notes: list[str] = []
+    if decision.existing_holder_action == HolderAction.EXIT:
+        if decision.rating != PortfolioRating.SELL:
+            decision.rating = PortfolioRating.SELL
+            notes.append("rating set to Sell because the holder action is Exit")
+        decision.downgrade_applicability = "ALREADY_AT_LOWEST_RATING"
+        decision.evidence_to_downgrade = None
+    elif decision.existing_holder_action == HolderAction.REDUCE:
+        if decision.rating in {PortfolioRating.BUY, PortfolioRating.OVERWEIGHT}:
+            decision.rating = PortfolioRating.UNDERWEIGHT
+            notes.append("rating set to Underweight because the holder action is Reduce")
+        if decision.downgrade_applicability != "APPLICABLE":
+            decision.downgrade_applicability = "APPLICABLE"
+        if not decision.evidence_to_downgrade:
+            notes.append("Reduce without evidence that would trigger an Exit")
+    return notes
+
+
 def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
     minimal_llm = bind_structured(llm, PortfolioDecisionMinimal, "Portfolio Manager (minimal)")
@@ -699,6 +1049,10 @@ def create_portfolio_manager(llm):
     def portfolio_manager_node(state) -> dict:
         ticker = str(state.get("company_of_interest") or "").strip()
         analysis_date = str(state.get("trade_date") or "")
+        valuation_verified = bool(state.get("research_fair_value_verified", True))
+        audit_result: dict = {}
+        decision_basis = ""
+        technical_overlay = ""
 
         if str(state.get("model_status") or "").upper() == "UNVERIFIED" and not _valid_non_model_basis(state):
             # No verified valuation and no audited non-model basis: the decision
@@ -759,6 +1113,41 @@ def create_portfolio_manager(llm):
                 status = {"reason": "full schema failed; minimal schema used"}
             else:
                 status = minimal_status or status
+
+        if decision is not None:
+            from tradingagents.research import packets
+
+            if packets.pe_suppressed(state):
+                violation = packets.reconstruction_findings(
+                    f"{decision.executive_summary} {decision.investment_thesis}", state
+                )
+                if violation:
+                    logger.info("Portfolio Manager: P/E reconstruction retry (%s)", violation)
+                    retry_status = {}
+                    retried = invoke_structured(
+                        structured_llm,
+                        prompt
+                        + "\n\nRECONSTRUCTION VIOLATION: the P/E is suppressed in this "
+                        "run, but your answer "
+                        + "; ".join(violation)
+                        + ". Do not state a P/E, market cap, EPS-derived value, price "
+                        "target or fair-value range, and do not combine price with net "
+                        "profit. Rewrite the decision; keep the evidence-based rating.",
+                        "Portfolio Manager",
+                        status=retry_status,
+                    )
+                    if retried is not None:
+                        violation = packets.reconstruction_findings(
+                            f"{retried.executive_summary} {retried.investment_thesis}",
+                            state,
+                        )
+                        if not violation:
+                            decision = retried
+                        else:
+                            return _invalidated_decision(state, violation)
+                    else:
+                        return _invalidated_decision(state, violation)
+
         if decision is not None:
             action_status = "controlling"
             # The runtime knows the horizon the run was given; a model that
@@ -769,6 +1158,55 @@ def create_portfolio_manager(llm):
                 decision.time_horizon = horizon
             action_status = "controlling"
             action_note_from_retry = ""
+            resolution_note = ""
+            if _feature("PM_RESOLUTION_V1"):
+                from tradingagents.agents.resolution import (
+                    contradiction_detected,
+                    entry_price,
+                )
+
+                entry = entry_price(decision.entry_condition or "")
+                if contradiction_detected(entry, decision.fair_value_base):
+                    decision.contradiction_detected = True
+                    if not decision.resolution.strip():
+                        resolution_note = (
+                            "\n\n**Decision conflict**: the entry condition is above base "
+                            "fair value and no resolution was supplied."
+                        )
+                        status["reason"] = (
+                            (status.get("reason") or "") + "; entry above fair value"
+                        ).strip("; ")
+            technical_note = ""
+            mismatches = _technical_mismatches(
+                f"{decision.executive_summary} {decision.investment_thesis}", state
+            )
+            if mismatches:
+                logger.info(
+                    "Portfolio Manager: technical level retry (%s)", "; ".join(mismatches)
+                )
+                corrected = invoke_structured(
+                    structured_llm,
+                    prompt
+                    + "\n\nTECHNICAL CHECK FAILED: "
+                    + "; ".join(mismatches)
+                    + ". Use only the levels printed in VERIFIED TECHNICAL EVIDENCE. A "
+                    "level you calculate yourself must be marked [computed] with its "
+                    "formula and the evidence ids it uses. Keep every other field.",
+                    "Portfolio Manager",
+                    status={},
+                )
+                if corrected is not None and not _technical_mismatches(
+                    f"{corrected.executive_summary} {corrected.investment_thesis}", state
+                ):
+                    decision = corrected
+                else:
+                    # A claim the evidence contradicts does not control the
+                    # decision; the technical leg becomes an advisory overlay.
+                    technical_note = (
+                        "\n\n**Technical note**: the technical levels stated above are not "
+                        "confirmed by the verified evidence (" + "; ".join(mismatches)
+                        + "); the technical overlay is advisory."
+                    )
             missing_actions = _missing_actions(
                 decision, f"{decision.executive_summary} {decision.investment_thesis}"
             )
@@ -792,12 +1230,24 @@ def create_portfolio_manager(llm):
                         "\n\n**Action note**: the narrative's new-investor, existing-holder or "
                         "technical actions are advisory, not schema-validated."
                     )
-            valuation_verified = bool(state.get("research_fair_value_verified", True))
             range_note = ""
             from tradingagents.research import decision_audit
 
             action = _action_from_decision(decision)
             audit_input = dict(decision.decision_audit or {})
+            # A technical claim the analyst did not verify cannot enter the audit,
+            # even when the PM marks it verified.
+            verified_tech = _verified_technical_ids(state)
+            evidence = []
+            for item in audit_input.get("evidence") or []:
+                if (
+                    isinstance(item, dict)
+                    and str(item.get("category") or "") == "technical"
+                    and str(item.get("underlying_driver_id") or "") not in verified_tech
+                ):
+                    continue
+                evidence.append(item)
+            audit_input["evidence"] = evidence
             audit_input.setdefault("decision_basis", decision.decision_basis or "fundamental")
             audit_input.setdefault(
                 "horizon", str(state.get("decision_horizon") or "").strip()
@@ -837,7 +1287,20 @@ def create_portfolio_manager(llm):
                     f"clusters, {audit_result['independent_primary_source_count']} primary "
                     "disclosures."
                 )
-            decision_basis = str(audit_input.get("decision_basis") or "fundamental")
+            decision_basis = str(
+                audit_result.get("decision_basis")
+                or audit_input.get("decision_basis")
+                or "fundamental"
+            )
+            technical_overlay = str(audit_result.get("technical_overlay") or "")
+            if technical_note:
+                technical_overlay = "advisory"
+            if technical_overlay:
+                audit_note += (
+                    "\n\n**Technical overlay**: advisory — the fundamental evidence "
+                    "carries the rating; the technical leg did not verify and does not "
+                    "control it."
+                )
             if decision_basis == "technical":
                 # A technical call is not a fundamental rating.
                 decision.rating = PortfolioRating.HOLD
@@ -904,6 +1367,7 @@ def create_portfolio_manager(llm):
                 decision,
                 state.get("research_fair_value_low"),
                 state.get("research_fair_value_high"),
+                state,
             )
             if range_error:
                 # One corrective call, then publish no controlling value rather
@@ -924,6 +1388,7 @@ def create_portfolio_manager(llm):
                     corrected,
                     state.get("research_fair_value_low"),
                     state.get("research_fair_value_high"),
+                    state,
                 ):
                     decision = corrected
                 else:
@@ -949,11 +1414,17 @@ def create_portfolio_manager(llm):
                 status.get("reason") or "schema",
             )
             action_notes = _normalize_actions(decision)
+            action_notes += _align_rating_with_holder_action(decision)
             action_note = action_note_from_retry
             if action_notes:
                 action_note += "\n\n**Action note**: " + "; ".join(action_notes) + "."
             final_trade_decision = (
-                render_pm_decision(decision) + range_note + action_note + audit_note
+                render_pm_decision(decision)
+                + range_note
+                + action_note
+                + audit_note
+                + technical_note
+                + resolution_note
             )
             if (
                 str(state.get("eps_status") or "VERIFIED") != "VERIFIED"
@@ -1004,6 +1475,16 @@ def create_portfolio_manager(llm):
             )
             final_rating = "Hold"
 
+        if _feature("COMPONENT_STATUS_V1") and controlling_invalid(state):
+            # A failed controlling component cannot carry a directional call.
+            final_rating = RATING_REVIEW
+            final_trade_decision = (
+                "**Rating**: Not Rated\n\n"
+                "**Invalidation**: a controlling component failed validation, so no "
+                "directional call is published for this run.\n\n"
+                + final_trade_decision
+            )
+
         new_risk_debate_state = {
             "history": risk_debate_state["history"],
             "aggressive_history": risk_debate_state["aggressive_history"],
@@ -1029,14 +1510,15 @@ def create_portfolio_manager(llm):
         result["controlling_fair_value_high"] = high
         result["action_status"] = action_status if decision is not None else "advisory"
         result["decision_basis"] = decision_basis if decision is not None else ""
+        result["technical_overlay"] = technical_overlay if decision is not None else ""
         result["decision_audit_result"] = (
             json.dumps(audit_result) if decision is not None else ""
         )
-        result["decision_status"] = (
-            "PROVISIONAL"
-            if decision is not None
-            and (not valuation_verified or not audit_result.get("validation_passed", True))
-            else ""
+        result["decision_status"] = _decision_status(
+            state,
+            structured=decision is not None,
+            valuation_verified=valuation_verified,
+            audit_passed=bool(audit_result.get("validation_passed", True)),
         )
         if status.get("reason"):
             result["structured_fallbacks"] = {"Portfolio Manager": status["reason"]}

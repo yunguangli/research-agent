@@ -103,18 +103,25 @@ def assess(
 
     if basis not in {"fundamental", "event", "technical", "mixed"}:
         failures.append("the decision basis is not one of fundamental/event/technical/mixed")
+    mixed_failures: list[str] = []
     if basis == "mixed":
         controlling = str(data.get("controlling_category") or "")
+        fundamental_categories = categories - {"technical"}
         if not controlling:
-            failures.append("a mixed basis must name the controlling category")
+            mixed_failures.append("a mixed basis must name the controlling category")
         elif controlling not in categories:
-            failures.append("the controlling category has no verified evidence")
-        if not (categories & {"operating", "earnings_revision", "consensus_gap",
-                             "cash_flow", "balance_sheet", "capital_allocation",
-                             "regulatory_legal_accounting", "catalyst"}):
-            failures.append("a mixed basis needs at least one fundamental or event category")
+            mixed_failures.append("the controlling category has no verified evidence")
+        elif controlling == "technical":
+            mixed_failures.append(
+                "a mixed basis must be controlled by a fundamental or event category"
+            )
+        if not fundamental_categories:
+            mixed_failures.append(
+                "a mixed basis needs at least one fundamental or event category"
+            )
         if "technical" not in categories:
-            failures.append("a mixed basis needs verified technical evidence")
+            mixed_failures.append("a mixed basis needs verified technical evidence")
+        failures.extend(mixed_failures)
     if basis == "technical" and action not in {"HOLD", "NOT_RATED"}:
         failures.append("a technical-only basis cannot publish a fundamental Buy or Sell")
 
@@ -139,6 +146,29 @@ def assess(
         failures.append("no confirmation condition is stated")
     if not (data.get("invalidation_conditions") or []):
         failures.append("no invalidation condition is stated")
+
+    # A mixed basis whose only defect is the technical leg is still a
+    # fundamental decision: drop the overlay to advisory instead of failing the
+    # whole audit. Nothing else may be failing, and real fundamental evidence
+    # must exist, so this can never launder a missing thesis.
+    technical_overlay = ""
+    mixed_fallback = False
+    technical_only = {
+        "a mixed basis needs verified technical evidence",
+        "a mixed basis must be controlled by a fundamental or event category",
+    }
+    if (
+        basis == "mixed"
+        and mixed_failures
+        and set(mixed_failures) <= technical_only
+        and categories - {"technical"}
+    ):
+        remaining = [failure for failure in failures if failure not in mixed_failures]
+        if not remaining:
+            failures = remaining
+            basis = "fundamental"
+            technical_overlay = "advisory"
+            mixed_fallback = True
 
     has_risk_category = bool(categories & RISK_CATEGORIES) or severe
 
@@ -168,6 +198,9 @@ def assess(
     return {
         "validation_passed": passed,
         "failure_reasons": failures,
+        "decision_basis": basis,
+        "technical_overlay": technical_overlay,
+        "mixed_fallback": mixed_fallback,
         "independent_category_count": clusters,
         "independent_primary_source_count": clustered_sources,
         "has_risk_category": has_risk_category,

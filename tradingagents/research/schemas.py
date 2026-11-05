@@ -429,6 +429,12 @@ class Convertible:
     conversion_price: float | None = None
     conversion_date: str = ""       # empty means outstanding throughout
     note: str = ""
+    # Debt/equity classification for valuation. ``unknown`` is the default so a
+    # spec written before these fields loads unchanged; treatment is never
+    # inferred when the required fields are absent.
+    face_value: float | None = None
+    accounting_classification: str = ""   # debt | equity | unknown
+    valuation_treatment: str = "unknown"  # debt | assumed_converted | unknown
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -441,6 +447,9 @@ class Convertible:
             conversion_price=_opt(data.get("conversion_price")),
             conversion_date=str(data.get("conversion_date") or ""),
             note=str(data.get("note") or ""),
+            face_value=_opt(data.get("face_value")),
+            accounting_classification=str(data.get("accounting_classification") or ""),
+            valuation_treatment=str(data.get("valuation_treatment") or "unknown"),
         )
 
 
@@ -533,7 +542,13 @@ class NetDebt:
     minority_interest: float | None = None
     minority_treatment: str = ""       # included | excluded
     reported_net_debt: float | None = None
+    # Provenance the reconciliation checks need: which balance-sheet date, which
+    # scope (consolidated or parent), and the unit the source printed.
+    as_of: str = ""
+    scope: str = ""                    # consolidated | parent | unknown
+    source_unit: str = ""
     source_refs: list[str] = field(default_factory=list)
+    component_sources: dict[str, str] = field(default_factory=dict)
     verification_status: str = ""
 
     def components_verified(self) -> bool:
@@ -572,7 +587,11 @@ class NetDebt:
             minority_interest=_opt(data.get("minority_interest")),
             minority_treatment=str(data.get("minority_treatment") or ""),
             reported_net_debt=_opt(data.get("reported_net_debt")),
+            as_of=str(data.get("as_of") or ""),
+            scope=str(data.get("scope") or ""),
+            source_unit=str(data.get("source_unit") or ""),
             source_refs=list(data.get("source_refs") or []),
+            component_sources=dict(data.get("component_sources") or {}),
             verification_status=str(data.get("verification_status") or ""),
         )
 

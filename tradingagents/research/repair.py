@@ -173,10 +173,6 @@ def shown(value) -> str:
         return str(value)
 
 
-def is_material(challenges: list[ModelChallenge]) -> bool:
-    return any(c.severity in MATERIAL_SEVERITIES for c in challenges)
-
-
 def _coerce_numbers(values: dict[str, float]) -> dict[str, float]:
     clean: dict[str, float] = {}
     for path, value in (values or {}).items():

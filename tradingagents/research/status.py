@@ -17,7 +17,6 @@ Statuses:
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 VERIFIED = "VERIFIED"
@@ -25,13 +24,27 @@ SUPPRESSED = "SUPPRESSED"
 UNAVAILABLE = "UNAVAILABLE"
 UNVERIFIED = "UNVERIFIED"
 NOT_APPLICABLE = "NOT_APPLICABLE"
+# Validation failed (as distinct from "could not be validated"): a controlling
+# component in this state is what forces REVIEW.
+INVALID = "INVALID"
 
-# A challenge that touches these fields blocks per-share outputs, not the
-# operating model.
-_PER_SHARE = re.compile(
-    r"\bEPS\b|share|dilut|per[- ]share|P/E|multiple|valuation", re.IGNORECASE
-)
+# Worst-first. A controlling component's worst status is the overall one.
+_SEVERITY = {
+    NOT_APPLICABLE: 0,
+    VERIFIED: 1,
+    UNAVAILABLE: 2,
+    SUPPRESSED: 3,
+    UNVERIFIED: 4,
+    INVALID: 5,
+}
 
+
+def worst_status(statuses) -> str:
+    """The most severe status in a collection, ignoring empty values."""
+    present = [str(value).upper() for value in statuses if str(value or "").strip()]
+    if not present:
+        return NOT_APPLICABLE
+    return max(present, key=lambda value: _SEVERITY.get(value, 1))
 
 def basis_verified(text: str) -> bool:
     """Whether a printed basis was actually declared and verified."""
@@ -41,10 +54,6 @@ def basis_verified(text: str) -> bool:
     return "fallback" not in value and "not verified" not in value
 
 
-def _material_per_share(fields: list[str]) -> bool:
-    return any(_PER_SHARE.search(field) for field in fields or [])
-
-
 def assess(
     *,
     model_status: str,
@@ -52,11 +61,18 @@ def assess(
     has_band: bool,
     challenge_fields: list[str] | None = None,
     sensitivity_count: int = 0,
+    propagation_ok: bool = True,
+    controlling_propagation_ok: bool = True,
     price: float | None = None,
     has_depreciation: bool = False,
     has_net_debt: bool = False,
     ev_ebitda_multiple: float | None = None,
     capital_verified: bool = True,
+    eps_basis_quality: str = "",
+    ev_inputs_ready: bool | None = None,
+    market_cap_verified: bool | None = None,
+    eps_basis_verified: bool | None = None,
+    equity_basis_verified: bool | None = None,
 ) -> dict[str, Any]:
     """The component statuses for this run, plus what each suppression means.
 
@@ -80,6 +96,10 @@ def assess(
         ev_ebitda_multiple=ev_ebitda_multiple,
         challenge_fields=challenge_fields,
         capital_verified=capital_verified,
+        ev_inputs_ready=ev_inputs_ready,
+        market_cap_verified=market_cap_verified,
+        eps_basis_verified=eps_basis_verified,
+        equity_basis_verified=equity_basis_verified,
     )
     operating = statuses["operating_forecast"]
     eps = statuses["forecast_eps"]
@@ -96,8 +116,15 @@ def assess(
         valuation = dependencies.UNAVAILABLE
 
     sensitivities = dependencies.UNAVAILABLE
+    controlling_sensitivities = dependencies.UNAVAILABLE
     if sensitivity_count > 0 and eps == dependencies.VERIFIED and valuation == dependencies.VERIFIED:
-        sensitivities = dependencies.VERIFIED
+        sensitivities = (
+            dependencies.VERIFIED if propagation_ok else dependencies.UNVERIFIED
+        )
+        controlling_sensitivities = (
+            dependencies.VERIFIED
+            if controlling_propagation_ok else dependencies.UNVERIFIED
+        )
 
     reasons: dict[str, str] = {}
     if operating != dependencies.VERIFIED:
@@ -124,11 +151,13 @@ def assess(
         "operating_model_status": operating,
         "eps_model_status": eps,
         "eps_status": eps,                       # alias
+        "eps_basis_quality": eps_basis_quality,
         "valuation_method_statuses": methods,
         "ev_per_share_status": statuses["ev_per_share"],
         "valuation_status": valuation,
         "sensitivity_model_status": sensitivities,
         "sensitivity_status": sensitivities,     # alias
+        "controlling_sensitivity_status": controlling_sensitivities,
         "valuation_controlling": "pe" in verified_methods,
         "verified_methods": verified_methods,
         "reasons": reasons,

@@ -61,6 +61,9 @@ def spec(**overrides) -> ModelSpec:
             "FY25": CashFlow(net_profit=9.0, depreciation=4.0, working_capital_change=-2.0, capex=3.0)
         },
         share_bases=[ShareBase("basic", 10.0)],
+        # Scenarios need a tax basis to reach net income; the fixture states one
+        # rather than borrowing a ratio from the base year.
+        effective_tax_rate=0.25,
         scenarios=[
             Scenario("Base", "steady", eps=1.0, multiple=12.0),
             Scenario("Bear", "weak demand", eps=0.8, multiple=10.0),
@@ -490,3 +493,13 @@ def test_a_historical_replay_keeps_the_published_mix_as_a_warning():
     ])
     model = run(model_spec, strict=False)
     assert any("historical replay" in warning for warning in model.spec.warnings)
+
+
+def test_a_per_share_figure_must_multiply_back_to_its_total():
+    from tradingagents.research.kernel import reconciles_per_share
+
+    assert reconciles_per_share(10.0, 10.0, 100.0, "USD_m") is True
+    # Rounding in the printed share count is allowed up to 1%.
+    assert reconciles_per_share(10.05, 10.0, 100.0, "USD_m") is True
+    assert reconciles_per_share(10.2, 10.0, 100.0, "USD_m") is False
+    assert reconciles_per_share(None, 10.0, 100.0, "USD_m") is False

@@ -220,6 +220,49 @@ Only if a stance's numbers changed, append the same two case JSON objects as bef
 updated; otherwise append nothing."""
 
 
+DELTA_TEMPLATE_V2 = r"""You are the Adversarial Investment Reviewer, round {{round}}.
+
+Your previous review:
+{{prior_review}}
+
+No new source evidence has arrived: the analyst reports, the verified model and the
+decision horizon are unchanged. Report ONLY what changed, under exactly these headings:
+
+POSITION CHANGE:
+- the stance you now hold vs the one you held, or "none"
+
+STRONGEST UNRESOLVED OBJECTION:
+- the single objection still capable of changing the decision
+
+DIRECT ANSWER:
+- answer that objection, or state why it cannot be answered
+
+CONCESSION:
+- what you concede, or "none"
+
+NEW EVIDENCE OR CALCULATION:
+- a fact or calculation not in your earlier review, or "none"
+
+DECISION IMPACT:
+- how this changes the rating, target or timing, or "none"
+
+Limit the answer to 150 words. Do not repeat a prior fact unless it is used in a new
+calculation. If nothing material changed, answer exactly:
+
+NO MATERIAL UPDATE
+
+Only if a stance's numbers changed, append the same two case JSON objects as before,
+updated; otherwise append nothing."""
+
+
+def _feature(name: str) -> bool:
+    import os
+
+    return os.environ.get(f"TRADINGAGENTS_FEATURE_{name}", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 RETRY_TEMPLATE = r"""Your review of {{instrument_ticker}} omitted the mandatory rebuttal. Here is
 the review:
 
@@ -314,15 +357,31 @@ def _is_substantive(value: str) -> bool:
     return bool(value.strip()) and value.strip().lower() not in _PLACEHOLDERS
 
 
-def decisive_sensitivity(argument: str, valid: set[str]) -> str:
-    """The ranked sensitivity the review cites, or "" when none is valid."""
+def cited_sensitivity(argument: str) -> str:
+    """The id exactly as the review wrote it (an alias, possibly)."""
     match = _SENSITIVITY_LINE.search(argument or "")
     if not match:
         return ""
     value = match.group(1)
-    if value.lower() == "not":
+    return "" if value.lower() == "not" else value
+
+
+def decisive_sensitivity(
+    argument: str, valid: set[str], aliases: dict[str, str] | None = None
+) -> str:
+    """The ranked sensitivity the review cites, canonicalised, or "".
+
+    A legacy alias resolves to its canonical id; the caller records that id, so
+    an alias never becomes a second sensitivity in the state.
+    """
+    value = cited_sensitivity(argument)
+    if not value:
         return ""
-    return value if (not valid or value in valid) else ""
+    if not valid:
+        return value
+    if value in valid:
+        return value
+    return (aliases or {}).get(value, "")
 
 
 def merge_sections(raw: str, repair: str) -> str:
@@ -390,8 +449,9 @@ def _fill(state: dict, ticker: str) -> str:
     # whole debate, and is asked for changes only. Re-reading the full history is
     # what made Deep mode repeat itself (#finding: repetition).
     if int(debate.get("count") or 0) >= 1:
+        template = DELTA_TEMPLATE_V2 if _feature("REVIEWER_DELTA_V2") else DELTA_TEMPLATE
         return fill_placeholders(
-            DELTA_TEMPLATE,
+            template,
             {
                 "round": int(debate.get("count") or 0) + 1,
                 "prior_review": prior or "none — no earlier review was recorded.",
@@ -466,13 +526,28 @@ def create_adversarial_reviewer(llm):
         challenge = str(debate.get("challenge_history") or "")
         issue = unresolved_issue(argument)
         valid_ids: set[str] = set()
+        alias_ids: dict[str, str] = {}
         try:
             valid_ids = {
                 str(value) for value in json.loads(str(state.get("sensitivity_ids") or "[]"))
             }
+            alias_ids = {
+                str(key): str(value)
+                for key, value in json.loads(
+                    str(state.get("sensitivity_alias_map") or "{}")
+                ).items()
+            }
         except ValueError:
-            valid_ids = set()
-        decisive = decisive_sensitivity(argument, valid_ids)
+            valid_ids, alias_ids = set(), {}
+        cited = cited_sensitivity(argument)
+        decisive = decisive_sensitivity(argument, valid_ids, alias_ids)
+        if cited and cited in alias_ids:
+            # A legacy id is accepted but recorded against its canonical key,
+            # and the report says the citation predates the stable ids.
+            argument += (
+                f"\n\nSensitivity id note: the legacy id {cited!r} resolves to "
+                f"{alias_ids[cited]!r}; the canonical id is used from here."
+            )
         if valid_ids and not decisive and first_round:
             # One focused retry: an id is the only thing the review is missing.
             try:

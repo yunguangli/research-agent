@@ -10,7 +10,11 @@ from tradingagents.agents.context import (
     get_portfolio_context_from_state,
     research_package_block,
 )
-from tradingagents.agents.schemas import TraderAction, TraderProposal, render_trader_proposal
+from tradingagents.agents.schemas import (
+    NewInvestorAction,
+    TraderProposal,
+    render_trader_proposal,
+)
 from tradingagents.agents.sizing import (
     downgrade_buy,
     gate_sizing,
@@ -58,20 +62,15 @@ def create_trader(llm):
             {
                 "role": "system",
                 "content": (
-                    "You are a trading agent analyzing market data to make investment decisions. "
-                    "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
+                    "You are a trading agent framing the technical stance on a name. "
+                    "Give a stance, the condition that would justify acting, and the "
+                    "condition that would end it. Do not state a position size, a stop "
+                    "price or a fundamental rating: the Portfolio Manager owns sizing "
+                    "and the rating. "
                     + grounding
-                    # Entry/stop are numeric price fields. Asking for concrete
-                    # levels invites a percentage ("15%"), which is not a price
-                    # and fails the structured parse (#1288).
-                    + "State entry price and stop-loss as absolute price levels in the "
-                    "instrument's quote currency (for example 189.5), never a percentage "
-                    "or a range; convert a percentage distance to the price level it "
-                    "implies, or omit the field if you cannot state a number. "
                     + ("" if portfolio_context.strip() else
-                       "No portfolio context was supplied: discuss trims, stops and position "
-                       "changes qualitatively — never a fixed trim percentage or a stop as a "
-                       "portfolio instruction. ")
+                       "No portfolio context was supplied: speak about the chart, not "
+                       "about a book you cannot see. ")
                     + NO_EXTERNAL_TOOLS
                     + get_language_instruction()
                 ),
@@ -85,26 +84,23 @@ def create_trader(llm):
                     f"{model_block}\n"
                     f"{portfolio_context}\n\n"
                     f"Proposed Investment Plan:\n{investment_plan}\n\n"
-                    "Make an informed, strategic trading decision.\n\n"
                     "## Output\n\n"
-                    "Write these sections, in this order, starting with the action "
-                    "on its own line:\n\n"
-                    "- **Action**: exactly one of Buy / Hold / Sell. Do not map a research "
-                    "rating mechanically: Underweight means reduce an existing long or avoid "
-                    "a new one, not a short; Sell requires an existing holding to exit or an "
-                    "explicit short mandate. Overweight is an add, not a mandate to chase. "
-                    "Conflict alone is not a Hold.\n"
-                    "- **Intent**: for a Sell, say whether it reduces an existing long "
-                    "(`reduce_long`) or opens a short (`initiate_short`, only with a short "
-                    "mandate). With no position, a Sell is an avoidance: leave the intent "
-                    "empty and do not describe a short entry.\n"
-                    "- **Reasoning**: why, against the plan and the price structure\n"
-                    "- **Entry Price**, **Stop Loss**, **Position Sizing**: when you can state them\n"
-                    "A level above the entry is an invalidation level, not a stop loss: "
-                    "name it as the price that would end the stance, not as protection. "
-                    "If ATR is available, a stop closer than about one ATR is not protection; "
-                    "state conditions instead. If your confirmation condition is not met, the "
-                    "action is Wait, not a first tranche."
+                    "- **New investor action**: exactly one of Initiate / Wait / Avoid.\n"
+                    "- **Holder action**: exactly one of Add / Hold / Review / Reduce / Exit. "
+                    "This is the tactical stance for an existing holder, not a fundamental "
+                    "rating. Do not map the research rating mechanically: Underweight means "
+                    "reduce an existing long or avoid a new one, not a short; Exit requires a "
+                    "holding to exit or an explicit short mandate. Conflict alone is not Hold. "
+                    "Use Wait/Review when the evidence is insufficient.\n"
+                    "- **Entry condition**: the observable condition that would justify "
+                    "acting (a close above a level, with the confirmation you require).\n"
+                    "- **Deterioration condition**: the observable condition that ends the "
+                    "stance. This is an invalidation, not a protective stop.\n"
+                    "- **Evidence**: the verified evidence IDs you rely on. Do not invent "
+                    "an id.\n"
+                    "- **Confidence**: High / Medium / Low.\n"
+                    "If the valuation packet says a method is suppressed, do not state or "
+                    "imply a P/E, market cap, target or fair value."
                 ),
             },
         ]
@@ -132,27 +128,16 @@ def create_trader(llm):
                 status=status,
             )
         if proposal is not None:
-            if not has_book or unverified:
-                # Sizing and execution levels need a portfolio and a valuation the
-                # run can verify; with neither, the fields stay empty.
-                proposal.position_sizing = None
-                proposal.entry_price = None
-                proposal.stop_loss = None
-            downgraded = unverified and proposal.action == TraderAction.BUY
+            downgraded = (
+                unverified and proposal.new_investor_action == NewInvestorAction.INITIATE
+            )
             if downgraded:
-                proposal.action = TraderAction.HOLD
-                proposal.intent = None
+                proposal.new_investor_action = NewInvestorAction.WAIT
             trader_plan = render_trader_proposal(proposal)
             if downgraded:
-                # Name the reason that actually fired: with a portfolio supplied
-                # the old note still claimed none had been.
-                reason = (
-                    "the valuation is unverified and no portfolio context was supplied"
-                    if not has_book
-                    else "the valuation is unverified"
-                )
                 trader_plan += (
-                    f"\n\n**Action note**: the original Buy was downgraded to Hold because {reason}."
+                    "\n\n**Action note**: the original Initiate was downgraded to Wait "
+                    "because the valuation is unverified."
                 )
         else:
             trader_plan = llm.invoke(messages).content

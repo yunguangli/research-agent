@@ -109,6 +109,23 @@ def per_share(value: float, shares_m: float, unit: str) -> float:
     return value * per_share_factor / shares_m
 
 
+def reconciles_per_share(
+    per_share_value: float | None,
+    shares_m: float | None,
+    total: float | None,
+    unit: str,
+    tolerance: float = 0.01,
+) -> bool:
+    """Whether a per-share figure multiplies back to the total it came from.
+
+    Unit-aware through :func:`market_cap`; 1% allows for display rounding.
+    """
+    if per_share_value is None or not shares_m or total is None:
+        return False
+    restored = market_cap(per_share_value, shares_m, unit)
+    return abs(restored - total) <= max(1e-6, abs(total) * tolerance)
+
+
 def _margin(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator in (None, 0):
         return None
@@ -310,8 +327,19 @@ def run(spec: ModelSpec, *, strict: bool = True) -> ModelResult:
         eps_values: dict[str, float] = {}
         for base in spec.share_bases:
             shares = _effective_shares(spec, period, base.name, forecast_basis)
-            if fin.net_profit is not None and shares is not None:
-                eps_values[base.name] = eps(fin.net_profit, shares, spec.unit)
+            if fin.net_profit is None or shares is None:
+                continue
+            value = eps(fin.net_profit, shares, spec.unit)
+            if reconciles_per_share(value, shares, fin.net_profit, spec.unit):
+                eps_values[base.name] = value
+            else:
+                # A per-share figure that does not multiply back to net income
+                # is not publishable; drop that basis so P/E and per-share
+                # outputs are suppressed, and name the reason.
+                spec.warnings.append(
+                    f"[SUPPRESSED: RECONCILIATION FAILED] {period.label} EPS on "
+                    f"{base.name} does not multiply back to net income"
+                )
         row = PeriodRow(
             label=period.label,
             basis=period.basis,
@@ -686,7 +714,7 @@ def _effective_shares(
         from . import capital
 
         value, _reason = capital.forecast_shares(
-            spec.capital_structure, period.label, period.end
+            spec.capital_structure, period.label, period.end, period.start
         )
         if value is not None:
             return value

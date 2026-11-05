@@ -109,11 +109,14 @@ def test_the_ibiden_fixture_verifies_every_basis_it_declares():
     assert statuses["valuation_method_statuses"]["ev_ebitda"] == "UNAVAILABLE"
 
 
-def test_an_undated_convertible_in_the_ibiden_fixture_suppresses_eps_only():
+def test_an_undated_convertible_in_the_ibiden_fixture_is_labelled_conservative():
+    from tradingagents.research.shares import diluted_kind
+
     model = _ibiden_spec(dated_convertible=False)
 
     usable, reason = capital.validated(model)
-    assert usable is False and "timing" in reason
+    assert usable is True and "timing" in reason
+    assert diluted_kind(model) == "conservative_full_conversion"
 
     statuses = status.assess(
         model_status="VERIFIED",
@@ -127,11 +130,15 @@ def test_an_undated_convertible_in_the_ibiden_fixture_suppresses_eps_only():
         has_depreciation=False,
         has_net_debt=True,
         ev_ebitda_multiple=model.valuation.ev_ebitda_multiple,
-        capital_verified=False,
+        capital_verified=usable,
+        eps_basis_quality=diluted_kind(model),
     )
 
-    assert statuses["eps_model_status"] == "SUPPRESSED"
-    assert statuses["valuation_method_statuses"]["pe"] == "SUPPRESSED"
+    # The P/E is published on the conservative count; the label, not a
+    # suppression, carries the uncertainty (decision_status turns PROVISIONAL).
+    assert statuses["eps_model_status"] == "VERIFIED"
+    assert statuses["eps_basis_quality"] == "conservative_full_conversion"
+    assert statuses["valuation_method_statuses"]["pe"] == "VERIFIED"
 
 
 def test_the_bank_fixture_runs_and_prices_both_methods_independently():

@@ -279,6 +279,8 @@ def compact_summary(
     include_per_share: bool = True,
     include_ev_ebitda: bool = True,
     include_ev_per_share: bool = True,
+    include_valuation: bool = True,
+    ev_note: str = "",
 ) -> str:
     """A prompt-sized rendering of the model: the tables an analyst must not recompute.
 
@@ -399,7 +401,9 @@ def compact_summary(
             lines.append(f"  {line.value:+g} {line.label}{detail}")
         lines.append(f"  = {bridge.total:g}")
 
-    if include_per_share:
+    if not include_valuation:
+        pass
+    elif include_per_share:
         lines.append("")
         lines.append(
             f"Valuation: price {render.fmt(valuation.price, 0)} {spec.currency}, "
@@ -439,6 +443,8 @@ def compact_summary(
             line += f"; per share {render.fmt(valuation.ev_per_share, 0)} {spec.currency}"
         lines.append(line)
         lines.extend(_net_debt_lines(spec))
+    if ev_note:
+        lines.append(ev_note)
     if model.warnings:
         lines.append("")
         lines.append("Model warnings:")
@@ -449,6 +455,42 @@ def compact_summary(
             "Do not recalculate these figures. Where the model depends on an assumption, "
             "state the assumption and cite the document or meeting note behind it."
         )
+    return "\n".join(lines)
+
+
+def valuation_packet(
+    model: kernel.ModelResult, valuation: valuation_module.Valuation, statuses: dict
+) -> str:
+    """The valuation-stage packet: only methods whose inputs verified.
+
+    Price appears here only when the P/E it would support is verified; with the
+    method suppressed, price stays in the technical packet and this packet is
+    empty, so the decision stage cannot reconstruct it.
+    """
+    spec = model.spec
+    methods = statuses.get("valuation_method_statuses") or {}
+    lines = ["VALUATION PACKET (verified outputs only)"]
+    if methods.get("pe") == "VERIFIED":
+        lines.append(
+            f"P/E: price {render.fmt(valuation.price, 0)} {spec.currency}, "
+            f"{valuation.period} EPS {render.fmt(valuation.eps)} on {valuation.basis}, "
+            f"P/E {render.fmt(valuation.pe, 1)}x, fair value "
+            f"{render.fmt(valuation.fair_value_low, 0)}-"
+            f"{render.fmt(valuation.fair_value_high, 0)} {spec.currency}."
+        )
+    else:
+        lines.append(
+            "P/E: SUPPRESSED. Do not state a P/E, market cap, EPS-derived value, "
+            "price target or fair-value range. Valuation is unavailable."
+        )
+    if methods.get("ev_ebitda") == "VERIFIED":
+        lines.append(
+            f"EV/EBITDA: {valuation.ev_ebitda_multiple:g}x EBITDA "
+            f"{render.fmt(valuation.ebitda)} = enterprise value "
+            f"{render.fmt(valuation.enterprise_value)} {spec.currency}."
+        )
+    else:
+        lines.append("EV/EBITDA: UNAVAILABLE.")
     return "\n".join(lines)
 
 

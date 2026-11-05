@@ -34,7 +34,7 @@ TEXT = "Report.\n\n**Rating**: Overweight\n\nFINAL TRANSACTION PROPOSAL: **BUY**
 STRUCTURED = {
     schemas.ResearchPlan: schemas.ResearchPlan(
         recommendation=schemas.PortfolioRating.OVERWEIGHT, rationale="r", strategic_actions="a"),
-    schemas.TraderProposal: schemas.TraderProposal(action=schemas.TraderAction.BUY, reasoning="r"),
+    schemas.TraderProposal: schemas.TraderProposal(new_investor_action=schemas.NewInvestorAction.INITIATE, holder_action=schemas.HolderAction.ADD, entry_condition="A close above resistance.", deterioration_condition="A close below support."),
     # The thesis quotes another party's rating; the decision is still the PM's own.
     schemas.PortfolioDecision: schemas.PortfolioDecision(
         rating=schemas.PortfolioRating.OVERWEIGHT, executive_summary="s",

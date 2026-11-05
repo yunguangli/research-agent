@@ -45,10 +45,10 @@ def _prompt_text(prompt) -> str:
 
 @pytest.mark.unit
 def test_trader_prompt_states_constraint():
-    from tradingagents.agents.schemas import TraderAction, TraderProposal
+    from tradingagents.agents.schemas import HolderAction, NewInvestorAction, TraderProposal
 
     captured = {}
-    llm = _capturing_llm(captured, TraderProposal(action=TraderAction.BUY, reasoning="x"))
+    llm = _capturing_llm(captured, TraderProposal(new_investor_action=NewInvestorAction.INITIATE, holder_action=HolderAction.ADD, entry_condition="A close above resistance.", deterioration_condition="A close below support."))
     create_trader(llm)({
         "company_of_interest": "NVDA",
         "investment_plan": "**Recommendation**: Buy",

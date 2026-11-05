@@ -19,6 +19,7 @@ removes the brackets before the report is written, so the reader never sees them
 from __future__ import annotations
 
 import ast
+import os
 import re
 from dataclasses import dataclass
 
@@ -67,8 +68,31 @@ _COMPUTED = re.compile(
 )
 
 
+_FORMULA_TRANSLATION = str.maketrans({
+    "−": "-", "–": "-", "—": "-", "×": "*", "÷": "/", "·": "*", ",": "",
+})
+_FORMULA_UNIT = re.compile(r"(\d+(?:\.\d+)?)\s*(bn|mn|b|m|k)\b", re.IGNORECASE)
+_FORMULA_UNIT_FACTOR = {"bn": 1000.0, "b": 1000.0, "mn": 1.0, "m": 1.0, "k": 0.001}
+
+
+def _normalise_formula(expression: str) -> str:
+    """The arithmetic an analyst actually writes: unicode signs and unit suffixes.
+
+    ``136 + 20 − 4`` uses a unicode minus and ``111.0bn/592.5m`` mixes units; a
+    parser that accepts only ASCII arithmetic reports correct formulas as
+    failures. Units are scaled against the million convention the model uses.
+    """
+    text = str(expression or "").translate(_FORMULA_TRANSLATION)
+
+    def scale(match: re.Match) -> str:
+        factor = _FORMULA_UNIT_FACTOR[match.group(2).lower()]
+        return f"({match.group(1)}*{factor})"
+
+    return _FORMULA_UNIT.sub(scale, text)
+
+
 def _eval_formula(expression: str) -> float:
-    tree = ast.parse(expression, mode="eval")
+    tree = ast.parse(_normalise_formula(expression), mode="eval")
 
     def walk(node) -> float:
         if isinstance(node, ast.Expression):
@@ -101,11 +125,22 @@ def extract_computed(text: str) -> tuple[str, set[float], list[tuple[float, str]
     def replace(match: re.Match) -> str:
         try:
             claimed = float(match.group(1).replace(",", ""))
+        except ValueError:
+            claimed = 0.0
+        try:
             value = _eval_formula(match.group(2))
         except (ValueError, SyntaxError, ZeroDivisionError):
-            failures.append((0.0, match.group(0)))
+            # Report the figure the analyst stated and the formula they wrote,
+            # not the whole bracket and a meaningless zero.
+            failures.append((claimed, match.group(2).strip()))
             return " "
-        if abs(value - claimed) <= max(0.01, abs(claimed) * 0.001):
+        # The tolerance is the printed precision: a figure shown to one decimal
+        # may differ from its formula by up to 0.05. A tighter floor reported
+        # correctly rounded formulas (-11.783 printed as -11.8) as failures.
+        displayed = match.group(1).replace(",", "").lstrip("+-")
+        decimals = len(displayed.split(".")[1]) if "." in displayed else 0
+        tolerance = 0.5 * 10 ** (-decimals)
+        if abs(value - claimed) <= tolerance + 1e-9:
             verified.add(claimed)
         else:
             failures.append((claimed, match.group(2).strip()))
@@ -171,8 +206,24 @@ def _is_reference(figure: str) -> bool:
     return re.fullmatch(r"\d", _CURRENCY.sub(" ", figure).strip()) is not None
 
 
-def known_values(model: ModelResult, valuation: Valuation, cases: list[dict] | None = None) -> set[float]:
-    """Every figure the model can legitimately produce, plus any computed cases."""
+def _feature(name: str) -> bool:
+    value = os.environ.get(f"TRADINGAGENTS_FEATURE_{name}", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def known_values(
+    model: ModelResult,
+    valuation: Valuation,
+    cases: list[dict] | None = None,
+    sensitivity_items: list[dict] | None = None,
+) -> set[float]:
+    """Every figure the model can legitimately produce, plus any computed cases.
+
+    The package prints three blocks that are model output but not rows: the net
+    debt components, the EV/EBITDA block and the ranked sensitivity impacts.
+    A mark on any of them quotes the model, so each must be a known value — an
+    omission here reports correct figures as misquotes.
+    """
     spec = model.spec
     values: set[float] = {
         spec.valuation.price,
@@ -242,6 +293,50 @@ def known_values(model: ModelResult, valuation: Valuation, cases: list[dict] | N
             values.add(round(scenario.revenue, 2))
         if scenario.operating_profit is not None:
             values.add(round(scenario.operating_profit, 2))
+    # The second method's block: EBITDA, enterprise value, equity value and the
+    # EV-derived per-share figure are printed in the package.
+    for value in (
+        valuation.ebitda,
+        valuation.enterprise_value,
+        valuation.ev_equity_value,
+        valuation.ev_per_share,
+    ):
+        if value is not None:
+            values.add(round(float(value), 2))
+            values.add(round(abs(float(value)), 2))
+
+    # Net debt is derived from its components and printed as such: "Net debt
+    # -258.4: gross debt 162.0, cash 420.5". Both the components and the net
+    # figure (either sign) are the model's.
+    net_debt = spec.net_debt
+    if net_debt is not None:
+        for value in (
+            net_debt.gross_debt,
+            net_debt.cash_and_equivalents,
+            net_debt.lease_liabilities,
+            net_debt.minority_interest,
+            net_debt.reported_net_debt,
+            net_debt.value,
+        ):
+            if value is not None:
+                values.add(round(float(value), 2))
+                values.add(round(abs(float(value)), 2))
+
+    # The ranked sensitivity table prints each driver's impact as a signed
+    # number ("-407.18"). Prose often quotes the magnitude ("loses 407.18 of
+    # fair value"), so both readings are known.
+    for item in sensitivity_items or []:
+        if not isinstance(item, dict):
+            continue
+        for key in (
+            "revenue_impact", "operating_profit_impact", "pretax_profit_impact",
+            "net_income_impact", "cash_flow_impact", "eps_impact", "fair_value_impact",
+        ):
+            value = item.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values.add(round(float(value), 2))
+                values.add(round(abs(float(value)), 2))
+
     for row in valuation.sensitivity:
         values.update({round(row.implied_price, 2), round(row.multiple, 2)})
     for scenario in valuation.scenarios:
@@ -278,16 +373,12 @@ def known_values(model: ModelResult, valuation: Valuation, cases: list[dict] | N
                 result = apply_case(model, valuation, Case.from_dict(raw))
             except Exception:  # noqa: BLE001 - a malformed case must not block the audit
                 continue
-            values.update(
-                {
-                    round(result.revenue, 2),
-                    round(result.operating_profit, 2),
-                    round(result.net_profit, 2),
-                    round(result.eps, 2),
-                    round(result.multiple, 2),
-                    round(result.target, 2),
-                }
-            )
+            for value in (
+                result.revenue, result.operating_profit, result.net_profit,
+                result.eps, result.multiple, result.target,
+            ):
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    values.add(round(float(value), 2))
     return values
 
 
@@ -1252,6 +1343,7 @@ def audit_state(
     *,
     stats: dict | None = None,
     superseded: set[float] | None = None,
+    sensitivity_items: list[dict] | None = None,
 ) -> list[Finding]:
     """Audit the marked figures in the sections a run writes for a reader.
 
@@ -1271,7 +1363,7 @@ def audit_state(
             cases = json.loads(raw_cases)
         except json.JSONDecodeError:
             cases = None
-    known = known_values(model, valuation, cases)
+    known = known_values(model, valuation, cases, sensitivity_items)
     band = (valuation.fair_value_low, valuation.fair_value_high)
 
     findings: list[Finding] = []
@@ -1297,6 +1389,13 @@ def audit_state(
     review = _state_get(final_state, ("investment_debate_state", "first_review"))
     if isinstance(review, str) and review.strip():
         findings.extend(grounding_findings(review))
+        if _feature("EVIDENCE_ATTRIBUTES_V1"):
+            from . import evidence
+
+            for message in evidence.attribute_findings(review):
+                findings.append(
+                    Finding("Adversarial Reviewer", 0.0, message, kind="evidence")
+                )
 
     from .metrics import period_metrics
 

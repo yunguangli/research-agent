@@ -43,6 +43,64 @@ def test_a_marked_full_unit_amount_matches_its_scaled_form():
     assert audit.audit_text("Market cap [[200,000,000]].", "F", values) == []
 
 
+def test_net_debt_components_printed_in_the_package_are_known_values():
+    """The 4062.T package printed net debt -258.4 with gross debt 162.0 and cash 420.5.
+
+    Every one of those figures is the model's, so a mark on them is a quote, not
+    a misquote. The audit reported all of them as errors before this check.
+    """
+    from tradingagents.research.schemas import NetDebt
+
+    model_spec = spec(net_debt=NetDebt(gross_debt=162.0, cash_and_equivalents=420.5))
+    model = kernel.run(model_spec)
+    valuation = value(model)
+    values = audit.known_values(model, valuation)
+
+    text = "Net debt [[−258.5]] with gross debt [[162.0]] and cash [[420.5]]."
+    assert audit.audit_text(text, "F", values) == []
+
+
+def test_the_ev_ebitda_block_printed_in_the_package_is_a_known_value():
+    from tradingagents.research.schemas import CashFlow, NetDebt, ValuationSpec
+
+    model_spec = spec(
+        net_debt=NetDebt(gross_debt=100.0, cash_and_equivalents=40.0),
+        cashflow={
+            "FY25": CashFlow(net_profit=9.0, depreciation=4.0,
+                             working_capital_change=-2.0, capex=3.0),
+            "FY26": CashFlow(net_profit=10.0, depreciation=2.0,
+                             working_capital_change=0.0, capex=1.0),
+        },
+        valuation=ValuationSpec(
+            price=20.0, fair_value_multiple_low=10.0, fair_value_multiple_high=12.0,
+            sensitivity_multiples=[8.0, 10.0, 12.0], ev_ebitda_multiple=15.5,
+        ),
+    )
+    model = kernel.run(model_spec)
+    valuation = value(model)
+    assert valuation.ebitda is not None and valuation.enterprise_value is not None
+    values = audit.known_values(model, valuation)
+
+    text = (
+        f"EBITDA [[{valuation.ebitda:,.1f}]] gives an enterprise value of "
+        f"[[{valuation.enterprise_value:,.1f}]]."
+    )
+    assert audit.audit_text(text, "F", values) == []
+
+
+def test_a_ranked_sensitivity_impact_is_known_in_either_sign():
+    """The table prints -407.18; prose quotes "loses 407.18"."""
+    _model, valuation, _values = known()
+    model = kernel.run(spec())
+    item = {"sensitivity_id": "cell_8_loading", "fair_value_impact": -407.18,
+            "eps_impact": -11.31, "operating_profit_impact": -10.0}
+    values = audit.known_values(model, valuation, sensitivity_items=[item])
+
+    assert audit.audit_text("It loses [[407.18]] of fair value.", "F", values) == []
+    assert audit.audit_text("Fair value falls [[−407.18]].", "F", values) == []
+    assert audit.audit_text("EPS falls [[11.31]].", "F", values) == []
+
+
 def test_a_marked_negative_figure_matches_its_negative_value():
     from tradingagents.research.schemas import Bridge, Line
 
@@ -67,6 +125,55 @@ def test_a_percentage_above_the_price_is_recomputed():
             "20.9% above price.")
     findings = audit.percentage_findings(text, "Market Analyst", 8045.0)
     assert [finding.number for finding in findings] == [20.9]
+
+
+def test_the_formulas_the_research_manager_writes_are_evaluated():
+    """Unicode signs and unit suffixes are arithmetic, not failures."""
+    text, verified, failures = audit.extract_computed(
+        "[[computed: 170.0 = 136 + 20 + 10 + 8 − 4]] "
+        "[[computed: 187.3 = 111.0bn/592.5m]] "
+        "[[computed: 6,279 = 209.3 × 30]] "
+        "[[computed: 7,953 = 209.3 × 38]]"
+    )
+
+    assert failures == []
+    assert verified == {170.0, 187.3, 6279.0, 7953.0}
+    assert "[[" not in text
+
+
+def test_a_formula_that_is_wrong_still_fails_and_names_the_figure():
+    _text, verified, failures = audit.extract_computed(
+        "[[computed: 171.0 = 136 + 20 + 10 + 8 − 4]]"
+    )
+
+    assert 171.0 not in verified
+    assert failures == [(171.0, "136 + 20 + 10 + 8 − 4")]
+
+
+def test_a_formula_that_rounds_to_the_printed_figure_passes():
+    """-11.783 printed as -11.8 is a correct quote, not a failed formula."""
+    _text, verified, failures = audit.extract_computed(
+        "Base [[computed: -11.8 = (7090/8037-1)*100]] and "
+        "high [[computed: 1.7 = (8176/8037-1)*100]]."
+    )
+
+    assert failures == []
+    assert -11.8 in verified and 1.7 in verified
+
+
+def test_an_integer_figure_allows_half_a_unit_of_rounding():
+    _text, verified, failures = audit.extract_computed("[[computed: 12 = 11.6 + 0.4]]")
+
+    assert failures == []
+    assert 12.0 in verified
+
+
+def test_a_value_outside_the_printed_precision_still_fails():
+    _text, _verified, failures = audit.extract_computed(
+        "[[computed: -11.9 = (7090/8037-1)*100]]"
+    )
+
+    assert [value for value, _formula in failures] == [-11.9]
 
 
 def test_a_correct_percentage_passes():

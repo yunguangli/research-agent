@@ -119,34 +119,6 @@ class ValuationStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
-class TraderAction(StrEnum):
-    """3-tier transaction direction used by the Trader.
-
-    The Trader's job is to translate the Research Manager's investment plan
-    into a concrete transaction proposal: should the desk execute a Buy, a
-    Sell, or sit on Hold this round.  Position sizing and the nuanced
-    Overweight / Underweight calls happen later at the Portfolio Manager.
-    """
-
-    BUY = "Buy"
-    HOLD = "Hold"
-    SELL = "Sell"
-
-
-class TraderIntent(StrEnum):
-    """What a Sell means for the book.
-
-    A Sell against an existing long is a reduction; a Sell with no position is
-    either an avoidance or a new short, and a new short needs a mandate the
-    system does not have. Naming the intent keeps the recommendation from
-    silently becoming a short.
-    """
-
-    REDUCE_LONG = "reduce_long"
-    INITIATE_SHORT = "initiate_short"
-    HOLD = "hold"
-
-
 # ---------------------------------------------------------------------------
 # Research Manager
 # ---------------------------------------------------------------------------
@@ -211,100 +183,83 @@ def render_research_plan(plan: ResearchPlan) -> str:
 
 
 class TraderProposal(BaseModel):
-    """Structured transaction proposal produced by the Trader.
+    """The Trader's stance and the conditions that would change it.
 
-    The trader reads the Research Manager's investment plan and the analyst
-    reports, then turns them into a concrete transaction: what action to
-    take, the reasoning that justifies it, and the practical levels for
-    entry, stop-loss, and sizing.
+    Execution levels were removed on purpose: a model-authored stop price is not
+    schema-validated risk control, and it invited the runtime to publish numbers
+    nobody could check. The Trader now states a stance, the condition that
+    triggers entry, the condition that invalidates it, the evidence it cites and
+    its confidence. The Portfolio Manager owns sizing and execution.
     """
 
-    action: TraderAction = Field(
-        description="The transaction direction. Exactly one of Buy / Hold / Sell.",
+    new_investor_action: NewInvestorAction = Field(
+        description="What a new investor should do: exactly one of Initiate / Wait / Avoid.",
     )
-    intent: TraderIntent | None = Field(
-        default=None,
+    holder_action: HolderAction = Field(
         description=(
-            "What the action means for the book. With a Sell: 'reduce_long' when the "
-            "book holds the name, 'initiate_short' only when a short mandate exists, "
-            "otherwise leave empty (an avoidance). Omit for Buy and Hold."
+            "What an existing holder should do: exactly one of Add / Hold / Review / "
+            "Reduce / Exit. The Portfolio Manager owns the fundamental rating."
         ),
     )
-    reasoning: str = Field(
+    entry_condition: str = Field(
         description=(
-            "The case for this action, anchored in the analysts' reports and "
-            "the research plan. Two to four sentences."
+            "The observable condition that would justify acting, e.g. 'a daily close "
+            "above the 50-day average with volume expansion'. A level is a condition, "
+            "not a promised fill."
         ),
     )
-    entry_price: float | None = Field(
-        default=None,
+    deterioration_condition: str = Field(
         description=(
-            "Optional entry price target as an absolute number in the instrument's "
-            "quote currency (e.g. 189.5), never a percentage or a range. Omit it "
-            "if you cannot state a specific level."
+            "The observable condition that ends the stance, e.g. 'a close below the "
+            "200-day average'. This is an invalidation, not a protective stop."
         ),
     )
-    stop_loss: float | None = Field(
-        default=None,
+    evidence_ids: list[str] = Field(
+        default_factory=list,
         description=(
-            "Optional stop-loss as an absolute price in the instrument's quote "
-            "currency (e.g. 172.0), never a percentage. Convert a percentage "
-            "distance to the price level it implies, or omit it."
+            "IDs of the evidence the stance relies on (verified technical evidence IDs "
+            "and model fields). Do not invent an id."
         ),
     )
-    position_sizing: str | None = Field(
-        default=None,
-        description="Optional sizing guidance, e.g. '5% of portfolio'.",
+    confidence: DecisionConfidence = Field(
+        default=DecisionConfidence.MEDIUM,
+        description="High, Medium or Low, reflecting the strength of the cited evidence.",
     )
 
-    @field_validator("entry_price", "stop_loss", mode="before")
-    @classmethod
-    def _nullish_float_to_none(cls, v):
-        return _coerce_optional_float(v)
+
+def _trader_signal(proposal: TraderProposal) -> str:
+    """The legacy BUY/HOLD/SELL line, derived from the two action fields."""
+    if proposal.holder_action == HolderAction.EXIT or (
+        proposal.new_investor_action == NewInvestorAction.AVOID
+        and proposal.holder_action == HolderAction.EXIT
+    ):
+        return "SELL"
+    if proposal.holder_action == HolderAction.ADD or (
+        proposal.new_investor_action == NewInvestorAction.INITIATE
+        and proposal.holder_action != HolderAction.EXIT
+    ):
+        return "BUY"
+    return "HOLD"
 
 
 def render_trader_proposal(proposal: TraderProposal) -> str:
-    """Render a TraderProposal to markdown.
-
-    The trailing ``FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**`` line is
-    preserved for backward compatibility with the analyst stop-signal text
-    and any external code that greps for it.
-
-    A level above the entry is not a stop for a long position: it is the
-    invalidation level that ends a bearish stance. Labelling it "Stop Loss"
-    would describe a protection the trade does not have, so it is published as
-    a reassessment level instead.
-    """
-    parts = [f"**Action**: {proposal.action.value}"]
-    if proposal.intent is not None:
-        parts.append(f"**Intent**: {proposal.intent.value.replace('_', ' ')}")
-    parts.extend(["", f"**Reasoning**: {proposal.reasoning}"])
-
-    stop_label, stop_note = "Stop Loss", ""
-    if (
-        proposal.stop_loss is not None
-        and proposal.entry_price is not None
-        and proposal.stop_loss > proposal.entry_price
-    ):
-        if proposal.action == TraderAction.BUY:
-            stop_note = " (above the entry: not a protective stop for a long)"
-        else:
-            stop_label = "Reassessment Level"
-            stop_note = " (above the entry: an invalidation level, not a protective stop)"
-
-    # Named even when absent, so a reader can tell a level the trader chose not
-    # to give from one the schema never asked for.
-    for label, value, note in (
-        ("Entry Price", proposal.entry_price, ""),
-        (stop_label, proposal.stop_loss, stop_note),
-        ("Position Sizing", proposal.position_sizing, ""),
-    ):
-        shown = value if value is not None and value != "" else "not provided"
-        parts.extend(["", f"**{label}**: {shown}{note if shown != 'not provided' else ''}"])
-    parts.extend([
+    """Render a TraderProposal to markdown."""
+    evidence = ", ".join(proposal.evidence_ids) if proposal.evidence_ids else "not provided"
+    parts = [
+        f"**New Investor Action**: {proposal.new_investor_action.value}",
         "",
-        f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
-    ])
+        f"**Holder Action**: {proposal.holder_action.value}",
+        "",
+        f"**Entry Condition**: {proposal.entry_condition}",
+        "",
+        f"**Deterioration Condition**: {proposal.deterioration_condition}",
+        "",
+        f"**Evidence**: {evidence}",
+        "",
+        f"**Confidence**: {proposal.confidence.value}",
+        "",
+        f"FINAL TRANSACTION PROPOSAL: **{_trader_signal(proposal)}**",
+    ]
     return "\n".join(parts)
 
 
@@ -408,6 +363,20 @@ class PortfolioDecision(BaseModel):
     # technical evidence, or a mixture that names the controlling category.
     decision_basis: Literal["fundamental", "event", "technical", "mixed"] | None = None
     decision_audit: dict | None = None
+    # Whether a further downgrade is still available. At the lowest rating
+    # there is nothing below it, so no evidence-to-downgrade is required; a
+    # Reduce must name the evidence that would trigger an Exit.
+    downgrade_applicability: Literal[
+        "APPLICABLE", "ALREADY_AT_LOWEST_RATING", "NOT_ASSESSED"
+    ] = "NOT_ASSESSED"
+    evidence_to_downgrade: list[str] | None = None
+    # The resolution contract: which price and valuation control, what entry is
+    # proposed, and how an entry above fair value is justified.
+    controlling_price: float | None = None
+    controlling_valuation: str = ""
+    entry_condition: str = ""
+    contradiction_detected: bool = False
+    resolution: str = ""
 
     @field_validator("price_target", mode="before")
     @classmethod
@@ -489,6 +458,18 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
             status = ValuationStatus.UNAVAILABLE
     parts.extend(["", f"**Valuation status**: {status.value}"])
     parts.extend(["", f"**Time Horizon**: {decision.time_horizon or 'not provided'}"])
+    if decision.controlling_price is not None:
+        parts.extend(["", f"**Controlling price**: {decision.controlling_price:,.0f}"])
+    if decision.controlling_valuation:
+        parts.extend(["", f"**Controlling valuation**: {decision.controlling_valuation}"])
+    if decision.entry_condition:
+        parts.extend(["", f"**Entry condition**: {decision.entry_condition}"])
+    if decision.contradiction_detected:
+        parts.extend([
+            "",
+            "**Decision conflict**: "
+            + (decision.resolution or "resolution not provided"),
+        ])
 
     framework = [
         ("Fundamental view", decision.fundamental_view),
@@ -512,6 +493,13 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         ("Evidence to downgrade", decision.downgrade_evidence),
     ):
         parts.extend(["", f"**{title}**: " + ("; ".join(items) if items else "not provided")])
+    parts.extend(["", f"**Downgrade applicability**: {decision.downgrade_applicability}"])
+    if decision.evidence_to_downgrade:
+        parts.extend([
+            "",
+            "**Evidence that would downgrade further**: "
+            + "; ".join(decision.evidence_to_downgrade),
+        ])
     sources = {
         "low": decision.controlling_low_source_id,
         "base": decision.controlling_base_source_id,

@@ -21,10 +21,19 @@ def test_valuation_percentages_are_not_sizes():
 def test_the_gate_rewrites_until_no_size_remains():
     text = "Trim to 5% of the portfolio."
     out, changed = gate_sizing(
-        text, lambda prompt: "Trim below a normal full position, sized to the mandate.", "Trader"
+        text, lambda prompt: "Trim toward the mandate's exposure limit.", "Trader"
     )
     assert changed
     assert not has_exact_size(out)
+
+
+def test_a_relative_size_in_the_rewrite_is_still_a_size():
+    text = "Trim to 5% of the portfolio."
+    out, changed = gate_sizing(
+        text, lambda prompt: "Trim below a normal full position.", "Trader"
+    )
+    assert not changed
+    assert out == text
 
 
 def test_a_rewrite_that_keeps_a_size_is_rejected():

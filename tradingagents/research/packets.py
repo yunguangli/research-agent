@@ -14,6 +14,8 @@ auditability.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 UNAVAILABLE = "not available — deterministic model unverified"
@@ -72,11 +74,90 @@ def filter_decision_inputs(state: dict[str, Any]) -> dict[str, Any]:
     return verified_packet(state) if model_verified(state) else unverified_packet(state)
 
 
-def packet_for_prompt(state: dict[str, Any]) -> str:
-    """The package block a prompt may carry (empty when unverified)."""
-    packet = filter_decision_inputs(state)
-    return packet["package"] if packet["verified"] else UNAVAILABLE
+def _methods(state: dict[str, Any]) -> dict[str, str]:
+    try:
+        data = json.loads(str(state.get("valuation_method_statuses") or "{}"))
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
 
 
-def unverified_reason(state: dict[str, Any]) -> str:
-    return str(state.get("spec_compatibility_reason") or "the model did not verify")
+def pe_suppressed(state: dict[str, Any]) -> bool:
+    """Whether the P/E output may not be used or reconstructed."""
+    return _methods(state).get("pe") != "VERIFIED"
+
+
+def fundamental_packet(state: dict[str, Any]) -> str:
+    """The model's earnings facts, with no price, no shares and no per-share output."""
+    text = str(state.get("fundamental_packet") or "").strip()
+    if not text:
+        # Old checkpoints have one package; it already omits per-share figures
+        # when the basis failed, and the detector still guards the combination.
+        text = str(state.get("research_package") or "").strip()
+    if not text:
+        return UNAVAILABLE
+    if pe_suppressed(state):
+        text += (
+            "\n\nPacket rule: revenue, operating profit and net profit are usable as "
+            "fundamental facts. Do not combine them with price, share count or any "
+            "per-share figure to state a P/E, market cap, target or fair value."
+        )
+    return text
+
+
+def valuation_packet(state: dict[str, Any]) -> str:
+    """Only the valuation outputs that verified; empty when a method is suppressed."""
+    text = str(state.get("valuation_packet") or "").strip()
+    if text:
+        return text
+    low = state.get("research_fair_value_low")
+    high = state.get("research_fair_value_high")
+    if (
+        not pe_suppressed(state)
+        and low is not None
+        and high is not None
+        and bool(state.get("research_fair_value_verified", True))
+    ):
+        return f"P/E model band: {float(low):,.0f}-{float(high):,.0f}."
+    return (
+        "Valuation packet: P/E suppressed — no P/E, market cap, EPS-derived value, "
+        "price target or fair-value range is available. State valuation as unavailable."
+    )
+
+
+def technical_packet(state: dict[str, Any]) -> str:
+    """Price and verified technical evidence: timing only, never valuation."""
+    return str(state.get("market_report") or "")
+
+
+_PE_TERM = re.compile(r"\bP/E\b|price[- ]to[- ]earnings|price/earnings", re.IGNORECASE)
+_RATIO = re.compile(r"\b\d+(?:\.\d+)?\s*(?:x|times)\b", re.IGNORECASE)
+_TARGET = re.compile(r"price target|target price|fair value", re.IGNORECASE)
+_EARNINGS_TERM = re.compile(r"\bEPS\b|earnings|net profit|market cap", re.IGNORECASE)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def reconstruction_findings(text: str, state: dict[str, Any]) -> list[str]:
+    """Places the text reconstructs a suppressed P/E from remaining fields.
+
+    A suppressed method is not merely hidden: price (technical packet) plus net
+    profit (fundamental packet) reconstructs it, so the combination must be
+    refused even though each input is visible.
+    """
+    if not pe_suppressed(state) or not str(text or "").strip():
+        return []
+    findings: list[str] = []
+    if _PE_TERM.search(text):
+        findings.append("states a P/E")
+    for sentence in _SENTENCE.split(text):
+        if "ev/ebitda" in sentence.lower():
+            continue                     # the second method, independently verified
+        if _RATIO.search(sentence) and _EARNINGS_TERM.search(sentence):
+            findings.append(
+                "derives a multiple from earnings: " + " ".join(sentence.split())[:160]
+            )
+        if _TARGET.search(sentence) and re.search(r"\d", sentence):
+            findings.append(
+                "states a target or fair value: " + " ".join(sentence.split())[:160]
+            )
+    return findings

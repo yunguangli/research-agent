@@ -171,7 +171,7 @@ def test_pm_actions_stated_only_in_prose_become_advisory():
     assert structured.invoke.call_count == 2
 
 
-def test_the_pm_flags_per_share_figures_when_eps_is_unverified():
+def test_the_pm_decision_is_invalidated_when_it_reconstructs_a_suppressed_pe():
     decision = PortfolioDecision(
         rating=PortfolioRating.HOLD,
         executive_summary="At 35.5x EPS 211.9 the stock is full.",
@@ -204,8 +204,53 @@ def test_the_pm_flags_per_share_figures_when_eps_is_unverified():
     })
 
     text = result["final_trade_decision"]
+    assert result["final_rating"] == "REVIEW"
+    assert "Decision invalidated" in text
+    assert result["controlling_fair_value_low"] is None
+    assert result["decision_status"] == "PROVISIONAL"
+    assert structured.invoke.call_count == 2
+
+
+def test_a_clean_retry_after_a_reconstruction_violation_publishes():
+    dirty = PortfolioDecision(
+        rating=PortfolioRating.HOLD,
+        executive_summary="At 35.5x EPS 211.9 the stock is full.",
+        investment_thesis="No margin of safety.",
+    )
+    clean = PortfolioDecision(
+        rating=PortfolioRating.HOLD,
+        executive_summary="Earnings are strong; valuation is unavailable.",
+        investment_thesis="Hold on the operating evidence.",
+    )
+    structured = MagicMock()
+    structured.invoke.side_effect = [dirty, clean]
+    llm = MagicMock()
+    llm.with_structured_output.return_value = structured
+
+    result = create_portfolio_manager(llm)({
+        "company_of_interest": "TEST",
+        "trade_date": "2026-01-01",
+        "market_report": "m", "sentiment_report": "", "news_report": "",
+        "fundamentals_report": "f",
+        "investment_debate_state": {"challenge_history": "", "history": ""},
+        "investment_plan": "plan", "trader_investment_plan": "trade",
+        "risk_debate_state": {
+            "history": "", "aggressive_history": "", "conservative_history": "",
+            "neutral_history": "", "count": 1, "latest_speaker": "Judge",
+            "current_aggressive_response": "", "current_conservative_response": "",
+            "current_neutral_response": "",
+        },
+        "portfolio_context": "", "decision_horizon": "3-6 months",
+        "model_status": "VERIFIED",
+        "eps_status": "SUPPRESSED",
+        "research_fair_value_verified": False,
+        "research_fair_value_low": 5000.0,
+        "research_fair_value_high": 9000.0,
+    })
+
+    text = result["final_trade_decision"]
     assert "unverified share basis" in text
-    assert "indicative and do not control" in text
+    assert result["final_rating"] == "Hold"
     assert result["controlling_fair_value_low"] is None
 
 
@@ -242,6 +287,9 @@ def test_news_diagnostics_leave_the_main_report(tmp_path):
     appendix = (tmp_path / "appendix.md").read_text(encoding="utf-8")
 
     assert "| retry | vendor | error |" not in main
-    assert "No usable company news." in main
+    # The full news report is appendix-only in the concise publication; the main
+    # report names the gap in its header instead.
+    assert "No usable company news." not in main
+    assert "No usable company news." in appendix
     assert "| retry | vendor | error |" in appendix
     assert "News Diagnostics" in appendix

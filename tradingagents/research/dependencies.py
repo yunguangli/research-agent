@@ -11,7 +11,8 @@ Statuses:
 - UNVERIFIED: an input exists but has not been validated;
 - SUPPRESSED: computed, but publication and decision use are prohibited;
 - UNAVAILABLE: a required input or calculation was not produced;
-- NOT_APPLICABLE: the output does not apply to this company or method.
+- NOT_APPLICABLE: the output does not apply to this company or method;
+- INVALID: validation failed (distinct from "could not be validated").
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 from typing import Literal
 
 VerificationStatus = Literal[
-    "VERIFIED", "UNVERIFIED", "SUPPRESSED", "UNAVAILABLE", "NOT_APPLICABLE",
+    "VERIFIED", "UNVERIFIED", "SUPPRESSED", "UNAVAILABLE", "NOT_APPLICABLE", "INVALID",
 ]
 
 VERIFIED: VerificationStatus = "VERIFIED"
@@ -27,6 +28,7 @@ UNVERIFIED: VerificationStatus = "UNVERIFIED"
 SUPPRESSED: VerificationStatus = "SUPPRESSED"
 UNAVAILABLE: VerificationStatus = "UNAVAILABLE"
 NOT_APPLICABLE: VerificationStatus = "NOT_APPLICABLE"
+INVALID: VerificationStatus = "INVALID"
 
 # output -> the inputs it needs. Keep it small: this is the publication contract,
 # not a model of the accounting.
@@ -133,27 +135,36 @@ def input_statuses(
     pe_multiple: float | None,
     ev_ebitda_multiple: float | None,
     capital_verified: bool = True,
+    ev_inputs_ready: bool | None = None,
+    market_cap_verified: bool | None = None,
+    eps_basis_verified: bool | None = None,
+    equity_basis_verified: bool | None = None,
 ) -> dict[str, VerificationStatus]:
     """The leaf inputs this run has, as statuses the engine can consume."""
     from .status import basis_verified
 
     verified_model = _normalise(model_status) == VERIFIED
+    cap_ok = capital_verified if market_cap_verified is None else market_cap_verified
+    eps_ok = capital_verified if eps_basis_verified is None else eps_basis_verified
+    equity_ok = (
+        capital_verified if equity_basis_verified is None else equity_basis_verified
+    )
     statuses: dict[str, VerificationStatus] = {
         "kernel_identity": VERIFIED if verified_model else _normalise(model_status),
         "operating_forecast": VERIFIED if verified_model else _normalise(model_status),
         "forecast_eps_share_basis": (
             VERIFIED
-            if capital_verified and basis_verified(basis.get("forecast_eps_basis", ""))
+            if eps_ok and basis_verified(basis.get("forecast_eps_basis", ""))
             else SUPPRESSED
         ),
         "market_cap_share_basis": (
             VERIFIED
-            if capital_verified and basis_verified(basis.get("market_cap_basis", ""))
+            if cap_ok and basis_verified(basis.get("market_cap_basis", ""))
             else SUPPRESSED
         ),
         "equity_value_share_basis": (
             VERIFIED
-            if capital_verified
+            if equity_ok
             and basis_verified(
                 basis.get("equity_value_share_basis", "")
                 or basis.get("market_cap_basis", "")
@@ -166,7 +177,11 @@ def input_statuses(
         "cash": VERIFIED if has_net_debt else UNAVAILABLE,
         "lease_liabilities": VERIFIED if has_net_debt else UNAVAILABLE,
         "pe_multiple": VERIFIED if pe_multiple else UNAVAILABLE,
-        "ev_ebitda_multiple": VERIFIED if ev_ebitda_multiple else UNAVAILABLE,
+        "ev_ebitda_multiple": (
+            VERIFIED
+            if ev_ebitda_multiple and ev_inputs_ready is not False
+            else UNAVAILABLE
+        ),
     }
     return statuses
 
@@ -182,6 +197,10 @@ def assess_outputs(
     ev_ebitda_multiple: float | None,
     challenge_fields: list[str] | None = None,
     capital_verified: bool = True,
+    ev_inputs_ready: bool | None = None,
+    market_cap_verified: bool | None = None,
+    eps_basis_verified: bool | None = None,
+    equity_basis_verified: bool | None = None,
 ) -> dict[str, VerificationStatus]:
     inputs = input_statuses(
         model_status=model_status,
@@ -192,5 +211,9 @@ def assess_outputs(
         pe_multiple=pe_multiple,
         ev_ebitda_multiple=ev_ebitda_multiple,
         capital_verified=capital_verified,
+        ev_inputs_ready=ev_inputs_ready,
+        market_cap_verified=market_cap_verified,
+        eps_basis_verified=eps_basis_verified,
+        equity_basis_verified=equity_basis_verified,
     )
     return propagate(inputs, blocked_outputs(challenge_fields))

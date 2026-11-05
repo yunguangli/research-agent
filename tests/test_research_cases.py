@@ -18,6 +18,54 @@ def _base():
     return model, value(model)
 
 
+def test_a_case_carries_the_operating_delta_through_tax_to_eps_and_value():
+    model, valuation = _base()
+    row = model.row(valuation.period)
+    tax = model.spec.effective_tax_rate
+    result = cases.apply_case(
+        model, valuation, cases.Case(stance="aggressive", operating_profit_pct=10.0)
+    )
+
+    expected_net = row.net_profit + row.operating_profit * 0.10 * (1 - tax)
+    assert result.net_profit == pytest.approx(expected_net)
+    assert result.eps == pytest.approx(expected_net / 10.0)
+    assert result.target == pytest.approx(result.eps * result.multiple)
+    assert result.basis == "verified"
+    assert result.reconciled is True
+
+
+def test_a_case_without_a_tax_basis_stops_at_operating_profit():
+    model_spec = spec(effective_tax_rate=None)
+    model = kernel.run(model_spec)
+    valuation = value(model)
+
+    result = cases.apply_case(
+        model, valuation, cases.Case(stance="aggressive", operating_profit_pct=10.0)
+    )
+
+    assert result.net_profit is None
+    assert result.eps is None
+    assert result.target is None
+    assert result.basis == "insufficient"
+    assert any("SENSITIVITY_PROPAGATION_FAILED" in note for note in result.notes)
+
+
+def test_a_scenario_multiple_records_its_source_and_whether_it_changed():
+    model, valuation = _base()
+    base = cases.base_multiple(valuation)
+
+    unchanged = cases.apply_case(model, valuation, cases.Case(stance="aggressive"))
+    assert unchanged.multiple_source_id == "pe_model_band_v1"
+    assert unchanged.multiple_changed is False
+
+    shocked = cases.apply_case(
+        model, valuation,
+        cases.Case(stance="aggressive", multiple=round(base * 1.1, 2), evidence=["doc"]),
+    )
+    assert shocked.multiple_source_id == "analyst_case_multiple_v1"
+    assert shocked.multiple_changed is True
+
+
 def test_a_case_recomputes_the_base_with_its_deltas():
     model, valuation = _base()
     case = cases.Case(stance="aggressive", revenue_pct=5.0, operating_profit_pct=5.0, multiple=13.0)

@@ -13,10 +13,11 @@ import pytest
 from cli.run import _resolve_run_purpose
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 from tradingagents.agents.schemas import (
+    HolderAction,
+    NewInvestorAction,
     PortfolioDecision,
     PortfolioDecisionMinimal,
     PortfolioRating,
-    TraderAction,
     TraderProposal,
 )
 from tradingagents.agents.sizing import has_exact_size
@@ -378,7 +379,7 @@ def _trader_state(portfolio: str) -> dict:
 
 
 def test_the_trader_does_not_claim_a_missing_portfolio_when_one_was_supplied():
-    proposal = TraderProposal(action=TraderAction.BUY, reasoning="cheap")
+    proposal = TraderProposal(new_investor_action=NewInvestorAction.INITIATE, holder_action=HolderAction.ADD, entry_condition="A close above resistance.", deterioration_condition="A close below support.")
     structured = MagicMock()
     structured.invoke.return_value = proposal
     llm = MagicMock()

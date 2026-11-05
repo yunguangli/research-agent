@@ -53,7 +53,18 @@ SHAPE = """{
   "net_debt":   {"gross_debt": 0, "cash_and_equivalents": 0,
                  "lease_liabilities": 0, "lease_treatment": "included",
                  "minority_interest": 0, "minority_treatment": "excluded",
+                 "as_of": "YYYY-MM-DD", "scope": "consolidated",
+                 "source_unit": "JPY_bn",
+                 "component_sources": {"gross_debt": "doc-... p.4",
+                                       "cash_and_equivalents": "doc-... p.4"},
                  "source_refs": ["doc-... page 12"]},
+  "capital_structure": {"issued_shares": 0, "treasury_shares": 0,
+                        "current_net_shares": 0,
+                        "basic_weighted_average": {"FY3/28": 0},
+                        "diluted_weighted_average": {},
+                        "convertibles": [{"name": "...", "shares_m": 0,
+                                          "conversion_date": "YYYY-MM-DD"}],
+                        "verification_status": "VERIFIED"},
   "valuation":  {"price": 0, "fair_value_multiple_low": 0, "fair_value_multiple_high": 0,
                  "fair_value_basis": "full_share", "fair_value_period": "FY3/28",
                  "sensitivity_multiples": [0],
@@ -150,7 +161,21 @@ RULES = """Rules:
   "excluded"), `minority_interest` with `minority_treatment`, and `source_refs`.
   Never write a single net figure, and never put 0 for an input the documents do not
   give — omit the field instead. Net debt = gross debt - cash (+ leases or
-  minorities only when you said "included").
+  minorities only when you said "included"). Also state the balance-sheet `as_of`
+  date, the `scope` ("consolidated" or "parent"), the `source_unit` (JPY_bn, JPY_m,
+  USD_m, ...) and `component_sources` naming the page for each component. A
+  component whose date, unit or scope cannot be reconciled makes EV/EBITDA
+  unavailable; the report names which of the three failed.
+- Fill "capital_structure": issued, treasury and current net shares, the period
+  basic and diluted weighted-average counts, and every convertible with its
+  conversion date and share count. Forecast EPS uses the period weighted average;
+  full conversion is only the dilution sensitivity. Do not set a "full_conversion"
+  share base equal to the diluted average: if conversion timing is unresolved,
+  name the forecast basis `conservative_full_conversion` instead of
+  `diluted_average`.
+- Give "cashflow" (net profit, depreciation, working-capital change, capex) for
+  EVERY forecast year you value, not only the first: EV/EBITDA needs the valued
+  year's depreciation, and a missing year makes the method unavailable.
 - EV/EBITDA is a second, independent method. Its multiple is YOUR assumption:
   set `ev_ebitda_multiple` with `ev_ebitda_multiple_rationale` (peer multiples, the
   company's own history, the rate environment) and `ev_ebitda_multiple_refs`. It is
@@ -263,7 +288,8 @@ def _figure_snippets(store, records, as_of: str | None, limit: int = 8) -> str:
 
 def build_prompt(*, ticker: str, company: str, as_of: str, facts_text: str,
                  index_text: str, excerpts: str, price: float | None,
-                 unit: str, currency: str = "", consensus=None, figures: str = "") -> str:
+                 unit: str, currency: str = "", consensus=None, figures: str = "",
+                 balance_sheet_text: str = "") -> str:
     # The corpus build cannot know the issuer's currency, so it must not claim
     # one (a Taiwan listing priced "668 JPY" made the model flag a mismatch
     # that should never have existed); a caller that knows passes it.
@@ -308,6 +334,9 @@ DOCUMENT EXCERPTS:
 KEY FIGURE PASSAGES (where the statements state headline numbers):
 {figures or "none found"}
 
+BALANCE SHEET FACTS (deterministically extracted from tables; use for net_debt):
+{balance_sheet_text or "none found"}
+
 {price_line}
 
 Return one JSON object with this shape (values are placeholders):
@@ -337,6 +366,22 @@ def _excerpt_text(store, records, skip: set[str]) -> tuple[str, str]:
         used += len(chunk)
         excerpts.append(f"--- {record.document_id} ---\n{chunk}")
     return "\n".join(index_lines), "\n\n".join(excerpts)
+
+
+def _balance_sheet_text(store, records) -> str:
+    """The extracted rows, as a bounded prompt block."""
+    from . import balance_sheet
+
+    rows = []
+    for record in records:
+        try:
+            text = store.text_of(record.document_id).text
+        except Exception:  # noqa: BLE001 - one unreadable document must not stop the build
+            continue
+        rows.extend(balance_sheet.extract(text, record.document_id))
+        if len(rows) >= 40:
+            break
+    return balance_sheet.render(rows)
 
 
 def _declare_missing_periods(spec: ModelSpec) -> None:
@@ -547,6 +592,7 @@ def build_spec(
         ticker=ticker, company=company, as_of=as_of, facts_text=facts_text,
         index_text=index_text, excerpts=excerpts, price=price, unit=unit, currency=currency,
         consensus=consensus, figures=figures,
+        balance_sheet_text=_balance_sheet_text(store, records),
     )
 
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage

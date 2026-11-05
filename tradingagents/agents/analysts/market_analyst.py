@@ -1,3 +1,5 @@
+import json
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.analysts.turn import take_turn
@@ -280,6 +282,21 @@ Mention material data limitations prominently.
 Avoid repeating the same conclusion in multiple sections.
 Do not expose internal debate transcripts or speculative narratives.
 
+TECHNICAL EVIDENCE BLOCK
+
+End the report with one line that starts with TECHNICAL_EVIDENCE: followed by a
+JSON array. Every item is one falsifiable reading, using these exact ids only:
+tech_close_below_10ema, tech_close_above_10ema, tech_close_below_50sma,
+tech_close_above_50sma, tech_close_below_200sma, tech_close_above_200sma,
+tech_macd_negative, tech_macd_positive, tech_atr_elevated.
+Each item: {{"evidence_id": "...", "metric": "...", "observed_value": <number>,
+"comparison_value": <number>, "direction": "below|above|negative|positive",
+"timeframe": "...", "source_refs": ["market_data:YYYY-MM-DD"], "supports_action": true|false}}.
+observed_value is the reading (close, histogram, ATR %), comparison_value the
+level it is compared with (EMA/SMA, 0 for the histogram, the elevated-ATR
+threshold). Use only readings you actually retrieved; if you did not retrieve
+one, omit that item. The id names the fact, never the value.
+
 
 FINAL QUALITY CHECK
 
@@ -320,9 +337,14 @@ Correct any issue before finalizing.
 
         result, report = take_turn(prompt, llm, TOOLS, state["messages"])
 
+        from tradingagents.research import technical
+
+        report, evidence = technical.parse(report)
+
         return {
             "messages": [result],
             "market_report": report,
+            "technical_evidence": json.dumps([item.to_dict() for item in evidence]),
         }
 
     return market_analyst_node
