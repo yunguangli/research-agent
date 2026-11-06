@@ -22,7 +22,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from . import kernel
+from . import kernel, price_authority
 from .schemas import ModelError, ModelSpec
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,13 @@ class ModelChallenge(BaseModel):
     stated_model_value: float | str | None = None
     proposed_correction: str = ""
     requires_rebuild: bool = False
+    # Where a proposed price came from. A price correction is only a correction
+    # if its source outranks the value already in the model; an older research
+    # note cannot replace the analysis-date close.
+    source_class: str = ""          # USER_EXPLICIT | VERIFIED_CLOSE | REPORT_PRICE | SPEC_PRICE | DERIVED_FROM_MARKET_CAP
+    as_of: str = ""                 # the date the proposed value belongs to
+    source_ref: str = ""            # the document/page that states it
+    rejection_reason: str = ""      # set by verification, never by the model
     # Scalar overrides keyed by the spec paths listed in the extraction prompt.
     # A challenge with no override is recorded, not applied.
     proposed_values: dict[str, float] = Field(default_factory=dict)
@@ -109,6 +116,15 @@ For each genuine challenge return:
 - requires_rebuild: true when the fix needs a new build (a segment re-cut, a new
   capacity start date), false when a scalar value corrects it
 - proposed_values: {spec path: number} for scalar fixes only
+- for a challenge that proposes "valuation.price", also return:
+  - source_class: USER_EXPLICIT, VERIFIED_CLOSE, REPORT_PRICE, SPEC_PRICE or
+    DERIVED_FROM_MARKET_CAP
+  - as_of: the date the proposed price belongs to, ISO format
+  - source_ref: the document id and page that states it
+  A price quoted in an older research note is REPORT_PRICE. A price obtained by
+  dividing a market capitalisation by the share count is DERIVED_FROM_MARKET_CAP.
+  Neither may replace the verified analysis-date close; state the class honestly
+  rather than calling an older value a close.
 
 The only spec paths accepted in proposed_values:
 - "share_bases.<name>.shares_m" (and the weighted-average / dilution fields)
@@ -216,8 +232,40 @@ def read_value(spec: ModelSpec, path: str) -> float | None:
     return None
 
 
+def _price_resolution_from_challenge(
+    challenge: ModelChallenge, value: float, analysis_date: str = ""
+) -> price_authority.PriceResolution:
+    """The authority a proposed price may claim, from the challenge's own evidence.
+
+    An analyst cannot grant itself the user's override or a verified-close class:
+    a price in the report is a report price unless it is the analysis-date close
+    and the challenge names that date and source. Anything vaguer is REPORT_PRICE;
+    a market-cap derivation stays DERIVED and can never win.
+    """
+    source = str(challenge.source_class or "").strip().upper()
+    if source not in price_authority.SOURCES:
+        source = price_authority.REPORT_PRICE
+    if source == price_authority.USER_EXPLICIT:
+        source = price_authority.REPORT_PRICE
+    if source == price_authority.VERIFIED_CLOSE and (
+        not analysis_date
+        or str(challenge.as_of or "") != str(analysis_date)
+        or not str(challenge.source_ref or "").strip()
+    ):
+        source = price_authority.REPORT_PRICE
+    return price_authority.PriceResolution(
+        value=float(value),
+        source=source,
+        as_of=str(challenge.as_of or ""),
+        ref=str(challenge.source_ref or ""),
+    )
+
+
 def verify_challenges(
-    spec: ModelSpec, challenges: list[ModelChallenge]
+    spec: ModelSpec,
+    challenges: list[ModelChallenge],
+    *,
+    price_resolution: price_authority.PriceResolution | None = None,
 ) -> tuple[list[ModelChallenge], list[ModelChallenge], list[ModelChallenge]]:
     """Split extracted challenges into ``(verified, unverified, structural)``.
 
@@ -226,10 +274,16 @@ def verify_challenges(
     tolerance). Whether the cited document supports the correction is not
     mechanisable here, so a challenge with a number but no path, or a path whose
     stated value does not match, is unverified and cannot change the model.
+
+    A proposed price is checked against the run's resolution as well: a lower
+    source class (an older report, a market-cap derivation) is rejected, and two
+    values at the same class are a conflict that blocks publication rather than a
+    silent pick.
     """
     verified: list[ModelChallenge] = []
     unverified: list[ModelChallenge] = []
     structural: list[ModelChallenge] = []
+    current = price_resolution
     for challenge in challenges:
         if challenge.severity == "scenario_only":
             continue
@@ -240,6 +294,15 @@ def verify_challenges(
             else:
                 unverified.append(challenge)
             continue
+        if "valuation.price" in values and current and current.value:
+            proposed = _price_resolution_from_challenge(
+                challenge, values["valuation.price"], current.as_of
+            )
+            reason = price_authority.authority_rejection(current, proposed)
+            if reason:
+                challenge.rejection_reason = reason
+                unverified.append(challenge)
+                continue
         mismatch = False
         for path in values:
             actual = read_value(spec, path)
@@ -313,30 +376,59 @@ def apply_values(spec: ModelSpec, values: dict[str, float]) -> list[str]:
 
 
 def repair_model(
-    spec: ModelSpec, challenges: list[ModelChallenge]
+    spec: ModelSpec,
+    challenges: list[ModelChallenge],
+    *,
+    price_resolution: price_authority.PriceResolution | None = None,
 ) -> tuple[ModelSpec, kernel.ModelResult, list[dict]]:
     """A validated v2 spec, its result, and the fields that changed, or RepairError."""
     values: dict[str, float] = {}
     for challenge in challenges:
         if challenge.severity not in MATERIAL_SEVERITIES:
             continue
-        values.update(_coerce_numbers(challenge.proposed_values))
+        proposed = _coerce_numbers(challenge.proposed_values)
+        if (
+            price_resolution is not None
+            and price_resolution.value
+            and "valuation.price" in proposed
+        ):
+            reason = price_authority.authority_rejection(
+                price_resolution,
+                _price_resolution_from_challenge(
+                    challenge, proposed["valuation.price"], price_resolution.as_of
+                ),
+            )
+            if reason:
+                raise RepairError(reason)
+        values.update(proposed)
     if not values:
         raise RepairError("no scalar correction was proposed; the challenge needs a rebuild")
 
     candidate = copy.deepcopy(spec)
-    apply_values(candidate, values)
+    applied = apply_values(candidate, values)
     # A repaired number that breaks an identity is not a repair.
     try:
         result = kernel.run(candidate, strict=True)
     except ModelError as exc:
         raise RepairError(f"the repaired model does not tie: {exc}") from exc
-    return candidate, result, changed_fields(spec, result)
+    return candidate, result, changed_fields(spec, result, applied=applied)
 
 
-def changed_fields(before: ModelSpec, after_result: kernel.ModelResult) -> list[dict]:
-    """Every scalar that moved, as ``{field, old, new}`` (rows + market cap)."""
+def changed_fields(
+    before: ModelSpec,
+    after_result: kernel.ModelResult,
+    applied: list[str] | None = None,
+) -> list[dict]:
+    """Every scalar that moved, as ``{field, old, new}`` (applied paths + rows)."""
     changes: list[dict] = []
+    # The path the repair actually wrote is the most specific record: a price
+    # change used to appear only as the market capitalisation it implied, which
+    # hid which input moved and made the old price invisible to the audit.
+    for path in applied or []:
+        old = read_value(before, path)
+        new = read_value(after_result.spec, path)
+        if _different(old, new):
+            changes.append({"field": path, "old": old, "new": new})
     before_rows = _rows(before)
     for row in after_result.rows:
         old = before_rows.get(row.label)

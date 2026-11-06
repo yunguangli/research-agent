@@ -1,4 +1,4 @@
-"""What's new reaches the person at a terminal: a newer release and Tauric's notices.
+"""What's new reaches the person at a terminal: a newer release.
 
 The check runs at most daily in a background thread that only writes a cache; the
 notice shown is read from that cache, so a run never waits on the network, and
@@ -71,7 +71,7 @@ def test_an_unattended_run_contacts_no_server(monkeypatch):
 
 # --- what it says -----------------------------------------------------------------
 
-LATEST = {"version": "0.7.0", "url": "https://github.com/TauricResearch/TradingAgents/releases/tag/v0.7.0",
+LATEST = {"version": "0.7.0", "url": "https://github.com/yunguangli/research-agent/releases/tag/v0.7.0",
           "summary": "Update notices and a ChatGPT plan provider."}
 
 
@@ -137,13 +137,13 @@ def test_a_notice_shows_through_its_bounds_and_date_and_hides_when_they_cannot_b
 @pytest.mark.unit
 def test_a_notice_is_shown_as_plain_text_with_only_a_web_link():
     cache = {"notices": [
-        {"id": "a", "message": ":warning: [b]x[/b] \u202eev\u200bil", "url": "https://tauric.ai/a"},
+        {"id": "a", "message": ":warning: [b]x[/b] \u202eev\u200bil", "url": "https://example.com/a"},
         {"id": "b", "message": "Local link", "url": "file:///etc/passwd"},
         {"id": "e", "message": "Malformed link", "url": "https://[docs"},
         {"id": "c", "message": {"not": "text"}},
         {"id": "d", "message": "\x1b\x07"},
     ]}
-    assert updates.messages(cache, running="0.7.0") == [":warning: [b]x[/b] evil https://tauric.ai/a", "Local link",
+    assert updates.messages(cache, running="0.7.0") == [":warning: [b]x[/b] evil https://example.com/a", "Local link",
                                                          "Malformed link https://[docs"]
     console = Console(record=True, width=120, color_system=None)
     with mock.patch.object(updates, "read_cache", lambda: cache), mock.patch("tradingagents.__version__", "0.7.0"):
@@ -179,6 +179,7 @@ def _response(payload, status=200):
 def test_a_check_records_the_latest_release_and_notices(tmp_path, monkeypatch):
     cache_file = tmp_path / "update_check.json"
     monkeypatch.setattr(updates, "CACHE", cache_file)
+    monkeypatch.setattr(updates, "NOTICES_URL", "https://notices.test/v1")
 
     def get(url, timeout):
         assert timeout <= 3
@@ -217,6 +218,7 @@ def test_only_a_notices_list_replaces_the_known_notices(tmp_path, monkeypatch):
     known = [{"id": "n", "message": "hi"}]
     cache_file.write_text(json.dumps({"checked_at": 1.0, "notices": known}))
     monkeypatch.setattr(updates, "CACHE", cache_file)
+    monkeypatch.setattr(updates, "NOTICES_URL", "https://notices.test/v1")
     for answer in (_response({"detail": "Not Found"}, 404), _response({"error": "portal"}), _response(["x"])):
         monkeypatch.setattr(updates.requests, "get", lambda url, timeout, answer=answer: answer)
         updates.refresh(now=9000.0)
@@ -253,9 +255,9 @@ def test_the_upgrade_command_follows_the_install(tmp_path, monkeypatch):
     assert editable == f"git -C {clone} pull && /venv/bin/python -m pip install -e {clone}"
     local = updates.upgrade_command(_dist({"url": url, "dir_info": {}}, installer="uv"))
     assert local == f"git -C {clone} pull && uv pip install --python /venv/bin/python {clone}"
-    vcs = updates.upgrade_command(_dist({"url": "https://github.com/TauricResearch/TradingAgents.git",
+    vcs = updates.upgrade_command(_dist({"url": "https://github.com/yunguangli/research-agent.git",
                                          "vcs_info": {"vcs": "git", "commit_id": "abc"}}))
-    assert vcs == "/venv/bin/python -m pip install -U git+https://github.com/TauricResearch/TradingAgents.git"
+    assert vcs == "/venv/bin/python -m pip install -U git+https://github.com/yunguangli/research-agent.git"
 
 
 @pytest.mark.unit
@@ -317,16 +319,16 @@ def test_remote_text_cannot_carry_c1_or_direction_controls():
 def test_a_uv_git_install_is_upgraded_with_uv(monkeypatch):
     monkeypatch.delenv("TRADINGAGENTS_IN_DOCKER", raising=False)
     monkeypatch.setattr(updates.sys, "executable", "/venv/bin/python")
-    vcs = updates.upgrade_command(_dist({"url": "https://github.com/TauricResearch/TradingAgents.git",
+    vcs = updates.upgrade_command(_dist({"url": "https://github.com/yunguangli/research-agent.git",
                                          "vcs_info": {"vcs": "git"}}, installer="uv"))
-    assert vcs == "uv pip install --python /venv/bin/python -U git+https://github.com/TauricResearch/TradingAgents.git"
+    assert vcs == "uv pip install --python /venv/bin/python -U git+https://github.com/yunguangli/research-agent.git"
 
 
 @pytest.mark.unit
 def test_no_command_is_offered_on_windows(monkeypatch):
     monkeypatch.delenv("TRADINGAGENTS_IN_DOCKER", raising=False)
     monkeypatch.setattr(updates.os, "name", "nt")
-    assert updates.upgrade_command(_dist({"url": "https://github.com/TauricResearch/TradingAgents.git",
+    assert updates.upgrade_command(_dist({"url": "https://github.com/yunguangli/research-agent.git",
                                           "vcs_info": {"vcs": "git"}})) is None
 
 

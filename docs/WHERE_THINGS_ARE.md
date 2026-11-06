@@ -38,6 +38,7 @@ reports\5803.T_20261028_104355\
   1b_research\research_package.md   the verified model (computed, no prose)
   1c_audit\numbers.md           figures in the prose that do not match the model
   1d_cases\cases.md             base + each debate case, recomputed from capped deltas
+  1e_metrics\metrics.md         growth and incremental margin, published from the model
   2_research\challenge.md, manager.md
   3_trading\trader.md
   4_risk\aggressive.md, conservative.md, neutral.md
@@ -55,6 +56,9 @@ The folder name is `<TICKER>_<YYYYMMDD>_<HHMMSS>`. Sorting by name sorts by time
 5. **Report** — the investor report (`complete_report.md`) selects and caps summaries plus the PM decision; the full analyst prose, package and debate are written to `appendix.md` and the numbered section folders under `logs\reports\<TICKER>_<stamp>`.
 6. **Number audit** — compares figures in the prose with the model's; anything unmatched is listed in `1c_audit\numbers.md`.
 7. **Cases** — each debate pitch becomes capped deltas on the model; `1d_cases\cases.md` shows base plus each case, recomputed.
+8. **Technical evidence** — the Market Analyst appends a `TECHNICAL_EVIDENCE:` JSON block; `research\technical.py` validates each item against its own numbers and strips the block from the prose. Only verified IDs reach the PM.
+9. **EV input probe** — `research\input_probe.py` + `research\balance_sheet.py` find cash, debt and depreciation lines independently of the builder and classify a missing EV input as corpus absence, extraction failure or reconciliation failure.
+10. **Sensitivities and metrics** — `research\sensitivity.py` ranks shocked bridge lines by fair-value impact and writes the ranked table into the research package; `research\metrics.py` writes the growth table to `1e_metrics\metrics.md`.
 
 ## Commands that produce or use these paths
 

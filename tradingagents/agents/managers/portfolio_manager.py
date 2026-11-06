@@ -27,6 +27,7 @@ from tradingagents.agents.context import (
     FIGURE_MARKER_RULE,
     case_availability,
     case_block,
+    corrections_block,
     evidence_pack,
     fill_placeholders,
     fundamentals_with_repair_notice,
@@ -727,6 +728,156 @@ def _valuation_sources(state: dict) -> str:
     )
 
 
+_SCENARIO_LINE = re.compile(r"(?m)^(Scenarios[^:]*:)\s*(.+)$")
+_SCENARIO_ENTRY = re.compile(r"([A-Za-z][A-Za-z ]*?)\s+([\d,]+)\s*\(([+-]?[\d.]+)%\)")
+_PRICE_IN_TEXT = re.compile(r"\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b|\b\d{4,}(?:\.\d+)?\b")
+
+
+def _scenario_entries(line: str) -> list[str]:
+    return [match.group(0) for match in _SCENARIO_ENTRY.finditer(line or "")]
+
+
+def _filter_scenario_text(text: str, rejected_names: set[str]) -> str:
+    """Remove rejected scenario entries from a published scenario line."""
+    match = _SCENARIO_LINE.search(text or "")
+    if not match:
+        return text
+    kept = []
+    for raw in _scenario_entries(match.group(2)):
+        entry = _SCENARIO_ENTRY.match(raw)
+        if entry and entry.group(1).strip().lower() in rejected_names:
+            continue
+        kept.append(raw)
+    replacement = (
+        f"{match.group(1)} " + ("; ".join(kept) if kept
+                               else "none verified; the controlling fair-value band applies.")
+    )
+    return text[: match.start()] + replacement + text[match.end():]
+
+
+def _drop_sentences(text: str, tokens: set[str]) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+", text or "")
+    return " ".join(s for s in sentences if s.strip() and not any(t in s for t in tokens)).strip()
+
+
+def _enforce_rejected_outputs(decision, state) -> tuple[str, str, str]:
+    """Remove rejected scenario targets from verified text and the summary.
+
+    Returns (note, package, artifact). The appendix keeps the rejected values;
+    the investor-facing sections keep only the verified band.
+    """
+    package = str(state.get("research_package") or "")
+    artifact = str(state.get("research_package_artifact") or "")
+    line = _SCENARIO_LINE.search(package)
+    if line is None or not decision.rejected_scenarios:
+        return "", package, artifact
+    rejected_text = " ".join(str(item) for item in decision.rejected_scenarios).lower()
+    rejected: list[tuple[str, str, str]] = []
+    for raw in _scenario_entries(line.group(2)):
+        entry = _SCENARIO_ENTRY.match(raw)
+        if not entry:
+            continue
+        name, target, pct = entry.group(1).strip(), entry.group(2), entry.group(3)
+        target_forms = {target, target.replace(",", "")}
+        if (
+            any(form in rejected_text for form in target_forms)
+            or f"{pct}%" in rejected_text
+            or re.search(
+                rf"\b{re.escape(name.lower())}\b[^.;\n]{{0,24}}{re.escape(target)}",
+                rejected_text,
+            )
+        ):
+            rejected.append((name, target, pct))
+    if not rejected:
+        return "", package, artifact
+    names = {name.lower() for name, _target, _pct in rejected}
+    tokens: set[str] = set()
+    for _name, target, pct in rejected:
+        tokens.update({
+            target, target.replace(",", ""), f"{pct}%", pct,
+            f"{pct.lstrip('+-')}%",
+        })
+
+    package = _filter_scenario_text(package, names)
+    artifact = _filter_scenario_text(artifact, names)
+    for attribute in ("executive_summary", "investment_thesis"):
+        value = getattr(decision, attribute, "") or ""
+        setattr(decision, attribute, _drop_sentences(value, tokens))
+    if not str(decision.executive_summary or "").strip():
+        decision.executive_summary = (
+            "See the verified fair-value band; rejected scenario outputs are in the appendix."
+        )
+    for attribute in ("upgrade_evidence", "downgrade_evidence", "thesis_invalidation"):
+        values = getattr(decision, attribute, None)
+        if isinstance(values, list):
+            setattr(decision, attribute, [
+                item for item in values if not any(token in str(item) for token in tokens)
+            ])
+
+    price = getattr(decision, "controlling_price", None) or state.get("research_price")
+    low, base, high = (
+        decision.fair_value_low, decision.fair_value_base, decision.fair_value_high
+    )
+    corrected = ""
+    if low is not None and high is not None:
+        parts = [f"Verified band {low:,.0f}\u2013{high:,.0f}"]
+        if base is not None:
+            parts.append(f"base {base:,.0f}")
+        if price:
+            parts.append(
+                f"band floor {low / price - 1:+.1%}, band high {high / price - 1:+.1%} "
+                f"vs {price:,.0f}"
+            )
+        corrected = "; ".join(parts) + "."
+        summary = str(decision.executive_summary or "").strip()
+        if "Verified band" not in summary:
+            decision.executive_summary = (summary + " " + corrected).strip()
+        if price and isinstance(getattr(decision, "upgrade_evidence", None), list):
+            entry = f"Verified band high {high:,.0f} ({high / price - 1:+.1%} vs {price:,.0f})"
+            if entry not in decision.upgrade_evidence:
+                decision.upgrade_evidence.append(entry)
+        if price and isinstance(getattr(decision, "downgrade_evidence", None), list):
+            entry = f"Verified band floor {low:,.0f} ({low / price - 1:+.1%} vs {price:,.0f})"
+            if entry not in decision.downgrade_evidence:
+                decision.downgrade_evidence.append(entry)
+
+    note = (
+        "\n\n**Rejected outputs**: "
+        + "; ".join(f"{name} {target} ({pct}%)" for name, target, pct in rejected)
+        + " are not decision evidence; they remain in the appendix with their status."
+    )
+    if low is not None and high is not None:
+        centre = f" (base {base:,.0f})" if base is not None else ""
+        note += f" Verified band: {low:,.0f}\u2013{high:,.0f}{centre}."
+    return note, package, artifact
+
+
+def _technical_trigger_gate(decision) -> str:
+    """A technical trigger above base fair value may not start new capital."""
+    base = decision.fair_value_base
+    text = str(decision.entry_condition or "")
+    if not base or base <= 0 or not text:
+        return ""
+    prices = [float(value.replace(",", "")) for value in _PRICE_IN_TEXT.findall(text)]
+    if not prices:
+        return ""
+    trigger = max(prices)
+    if trigger <= 0:
+        return ""
+    remaining = base / trigger - 1
+    if remaining > 0:
+        return ""
+    note = (
+        f"At the {trigger:,.0f} technical trigger, remaining fundamental return is "
+        f"{remaining:.1%} against base fair value {base:,.0f}: confirmation changes timing "
+        "only and does not authorise new capital unless new evidence raises fair value."
+    )
+    decision.entry_condition = (text.rstrip() + " " + note).strip()
+    if decision.new_investor_action == NewInvestorAction.INITIATE:
+        decision.new_investor_action = NewInvestorAction.WAIT
+    return note
+
+
 def _matches(value: float | None, target: float | None) -> bool:
     if value is None or target is None:
         return False
@@ -806,17 +957,22 @@ def _rating_framework() -> str:
     Overweight and Underweight are relative to a benchmark; with none, publishing
     them is a claim the run cannot support. Buy/Hold/Sell are absolute positions.
     """
+    source_rule = (
+        " State whether any beat/miss, upgrade/downgrade or catalyst benchmark is "
+        "company-issued guidance or an internal forecast; the model's own forecast is "
+        "never company guidance."
+    )
     if str(get_config().get("benchmark_ticker") or "").strip():
         return (
             "Buy / Overweight / Hold / Underweight / Sell. Open the report with the "
             "rating on its own line, exactly: **Rating**: <one of the five> — the "
-            "runtime reads this line to record the decision."
+            "runtime reads this line to record the decision." + source_rule
         )
     return (
         "No benchmark or reference portfolio was supplied, so Overweight and Underweight "
         "are not defined. Use Buy / Hold / Sell, and state the absolute view (Positive / "
         "Neutral / Negative) separately. Open the report with the rating on its own line, "
-        "exactly: **Rating**: <Buy|Hold|Sell> — the runtime reads this line."
+        "exactly: **Rating**: <Buy|Hold|Sell> — the runtime reads this line." + source_rule
     )
 
 
@@ -1067,6 +1223,7 @@ def create_portfolio_manager(llm):
 
         prompt = (
             _fill(state, ticker, analysis_date)
+            + corrections_block(state)
             + NO_EXTERNAL_TOOLS
             + EVIDENCE_DISCIPLINE
             + case_availability(state)
@@ -1231,6 +1388,8 @@ def create_portfolio_manager(llm):
                         "technical actions are advisory, not schema-validated."
                     )
             range_note = ""
+            package_update = ""
+            artifact_update = ""
             from tradingagents.research import decision_audit
 
             action = _action_from_decision(decision)
@@ -1418,10 +1577,15 @@ def create_portfolio_manager(llm):
             action_note = action_note_from_retry
             if action_notes:
                 action_note += "\n\n**Action note**: " + "; ".join(action_notes) + "."
+            rejected_note, package_update, artifact_update = _enforce_rejected_outputs(
+                decision, state
+            )
+            _technical_trigger_gate(decision)
             final_trade_decision = (
                 render_pm_decision(decision)
                 + range_note
                 + action_note
+                + rejected_note
                 + audit_note
                 + technical_note
                 + resolution_note
@@ -1446,6 +1610,8 @@ def create_portfolio_manager(llm):
         else:
             final_trade_decision = llm.invoke(prompt).content
             final_rating = parse_rating(final_trade_decision)
+            package_update = ""
+            artifact_update = ""
 
         if not str(state.get("portfolio_context") or "").strip():
             final_trade_decision, _gated = gate_sizing(
@@ -1501,7 +1667,11 @@ def create_portfolio_manager(llm):
             "risk_debate_state": new_risk_debate_state,
             "final_trade_decision": final_trade_decision,
             "final_rating": final_rating,
+            "decision_model_version": str(state.get("active_model_version") or ""),
         }
+        if package_update and package_update != str(state.get("research_package") or ""):
+            result["research_package"] = package_update
+            result["research_package_artifact"] = artifact_update
         from tradingagents.research.report import decision_fair_value
 
         low, base, high = decision_fair_value(final_trade_decision)

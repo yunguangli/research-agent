@@ -209,7 +209,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     layout["header"].update(
         Panel(
             "[bold green]Welcome to TradingAgents CLI[/bold green]\n"
-            "[dim]© [Tauric Research](https://github.com/TauricResearch)[/dim]",
+            "[dim]© [AI Research](https://github.com/yunguangli/research-agent)[/dim]",
             title="Welcome to TradingAgents",
             border_style="green",
             padding=(1, 2),
@@ -382,6 +382,18 @@ def display_complete_report(final_state):
 
     console.print()
     console.print(Rule("Complete Analysis Report", style="bold green"))
+    if str(final_state.get("publication_status") or "").upper() == "BLOCKED":
+        reasons = "; ".join(
+            str(reason) for reason in (final_state.get("publication_reasons") or []) if reason
+        ) or "a controlling value conflicts with the accepted model version"
+        console.print(Panel(
+            "No rating, fair value or target is published for this run: " + reasons
+            + ". The full record is in the saved report tree and its appendix.",
+            title="Publication blocked",
+            border_style="red",
+            padding=(1, 2),
+        ))
+        return
 
     # I. Analyst Team Reports
     analysts = []

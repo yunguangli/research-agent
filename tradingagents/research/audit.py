@@ -1397,6 +1397,19 @@ def audit_state(
                     Finding("Adversarial Reviewer", 0.0, message, kind="evidence")
                 )
 
+    from . import evidence as evidence_module
+
+    for section, key in (
+        ("Fundamentals Analyst", "fundamentals_report"),
+        ("Research Manager", "investment_plan"),
+        ("Trader", "trader_investment_plan"),
+        ("Portfolio Manager", "final_trade_decision"),
+    ):
+        text = final_state.get(key)
+        if isinstance(text, str) and text.strip():
+            for message in evidence_module.claim_findings(text, model.spec):
+                findings.append(Finding(section, 0.0, message, kind="evidence"))
+
     from .metrics import period_metrics
 
     metrics = period_metrics(model)
@@ -1421,7 +1434,7 @@ def render(findings: list[Finding], stats: dict | None = None) -> str:
         finding
         for finding in findings
         if finding.kind not in {"relation", "percentage", "grounding", "terminology",
-                                "attribution", "computed"}
+                                "attribution", "computed", "evidence"}
     ]
     relations = [finding for finding in findings if finding.kind == "relation"]
     percentages = [finding for finding in findings if finding.kind == "percentage"]
@@ -1594,6 +1607,22 @@ def render(findings: list[Finding], stats: dict | None = None) -> str:
             lines.append(
                 f"| {finding.section} | {_fmt_number(finding.number)}% | "
                 f"{finding.context.replace('|', chr(92) + '|')} |"
+            )
+        blocks.append("\n".join(lines))
+
+    evidence = [finding for finding in findings if finding.kind == "evidence"]
+    if evidence:
+        lines = [
+            f"{len(evidence)} evidence-classification problem(s). An agent forecast may not be "
+            "described as company guidance, presented as mechanically derived, or used as a "
+            "company-guided beat/miss, upgrade/downgrade or catalyst hurdle.",
+            "",
+            "| Section | The claim |",
+            "|---|---|",
+        ]
+        for finding in evidence[:20]:
+            lines.append(
+                f"| {finding.section} | {finding.context.replace('|', chr(92) + '|')} |"
             )
         blocks.append("\n".join(lines))
 

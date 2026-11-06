@@ -98,7 +98,11 @@ if none exists, write "No usable incremental news or sentiment evidence." Do not
 unrelated macro, political, prediction-market or generic industry material.
 
 Tag each evidence sentence with its class in square brackets: [fundamental], [valuation],
-[technical], [news_sentiment] or [portfolio_action]. Rebut a claim primarily with evidence
+[technical], [news_sentiment] or [portfolio_action]. An internal forecast stays an internal
+forecast: tag it [fundamental] but never call it company guidance, and never use it as a
+beat/miss, upgrade/downgrade or catalyst hurdle when the company issued no guidance.
+
+Rebut a claim primarily with evidence
 of the same class; cross-class evidence may adjust timing, confidence or portfolio action,
 but must not silently change the operating forecast or fair value. Every sentence that
 states a number needs one of those tags; a number with no tag is an unsupported claim.

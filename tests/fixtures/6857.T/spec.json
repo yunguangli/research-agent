@@ -1,0 +1,923 @@
+{
+  "ticker": "6857.T",
+  "company": "Advantest Corporation",
+  "currency": "JPY",
+  "unit": "JPY_bn",
+  "fiscal_year_end_month": 3,
+  "periods": [
+    {
+      "label": "FY3/26",
+      "start": "2025-04-01",
+      "end": "2026-03-31",
+      "basis": "actual",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "FY3/27",
+      "start": "2026-04-01",
+      "end": "2027-03-31",
+      "basis": "forecast",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "FY3/28",
+      "start": "2027-04-01",
+      "end": "2028-03-31",
+      "basis": "forecast",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "FY3/29",
+      "start": "2028-04-01",
+      "end": "2029-03-31",
+      "basis": "forecast",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "Q1 FY3/27",
+      "start": "2026-04-01",
+      "end": "2026-06-30",
+      "basis": "actual",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q2 FY3/27",
+      "start": "2026-07-01",
+      "end": "2026-09-30",
+      "basis": "actual",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q1 FY3/28",
+      "start": "2027-04-01",
+      "end": "2027-06-30",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q2 FY3/28",
+      "start": "2027-07-01",
+      "end": "2027-09-30",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q3 FY3/27",
+      "start": "2026-10-01",
+      "end": "2026-12-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q3 FY3/28",
+      "start": "2027-10-01",
+      "end": "2027-12-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q4 FY3/27",
+      "start": "2027-01-01",
+      "end": "2027-03-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q4 FY3/28",
+      "start": "2028-01-01",
+      "end": "2028-03-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    }
+  ],
+  "actuals": {
+    "FY3/26": {
+      "revenue": 1128.6,
+      "operating_profit": 499.1,
+      "net_profit": 375.4
+    }
+  },
+  "guidance": {
+    "FY3/27": {
+      "revenue": 1863.0,
+      "operating_profit": 967.0,
+      "ordinary_profit": 1021.5,
+      "net_profit": 741.5
+    }
+  },
+  "forecast": {
+    "FY3/27": {
+      "revenue": 1900.0,
+      "operating_profit": 994.7,
+      "ordinary_profit": 1049.2,
+      "net_profit": 758.6
+    },
+    "FY3/28": {
+      "revenue": 2470.0,
+      "operating_profit": 1284.4,
+      "ordinary_profit": 1299.0,
+      "net_profit": 948.3
+    },
+    "FY3/29": {
+      "revenue": 2950.0,
+      "operating_profit": 1548.8,
+      "ordinary_profit": 1560.0,
+      "net_profit": 1138.8
+    }
+  },
+  "quarterly": {
+    "Q1 FY3/27": {
+      "revenue": 367.5,
+      "operating_profit": 190.0,
+      "net_profit": 174.8
+    },
+    "Q2 FY3/27": {
+      "revenue": 477.70000000000005,
+      "operating_profit": 266.8,
+      "net_profit": 193.3
+    },
+    "Q3 FY3/27": {
+      "revenue": 496.6864,
+      "operating_profit": 241.83479999999997,
+      "net_profit": 181.4724
+    },
+    "Q4 FY3/27": {
+      "revenue": 521.1135999999999,
+      "operating_profit": 268.3652,
+      "net_profit": 191.92759999999998
+    }
+  },
+  "quarterly_plan": {
+    "fy_label": "FY3/27",
+    "h1_label": "H1 FY3/27",
+    "q1_label": "Q1 FY3/27",
+    "h2_split": {
+      "revenue": [
+        0.488,
+        0.512
+      ],
+      "operating_profit": [
+        0.474,
+        0.526
+      ],
+      "net_profit": [
+        0.486,
+        0.514
+      ]
+    },
+    "h1_values": {
+      "revenue": 845.2,
+      "operating_profit": 456.8,
+      "net_profit": 368.1
+    }
+  },
+  "quarterly_fy": "FY3/27",
+  "h1_label": "H1 FY3/27",
+  "segments": {},
+  "cashflow": {
+    "FY3/27": {
+      "net_profit": 758.6,
+      "depreciation": 57.0,
+      "working_capital_change": -80.0,
+      "capex": 152.0,
+      "payout_ratio": 0.5
+    },
+    "FY3/28": {
+      "net_profit": 948.3,
+      "depreciation": 74.1,
+      "working_capital_change": -60.0,
+      "capex": 197.6,
+      "payout_ratio": 0.5
+    },
+    "FY3/29": {
+      "net_profit": 1138.8,
+      "depreciation": 88.5,
+      "working_capital_change": -55.0,
+      "capex": 236.0,
+      "payout_ratio": 0.5
+    }
+  },
+  "bridges": [
+    {
+      "metric": "revenue",
+      "base_period": "FY3/26",
+      "target_period": "FY3/27",
+      "base_value": 1128.6,
+      "declared_total": 1900.0,
+      "lines": [
+        {
+          "label": "SoC tester volume and richer configuration mix",
+          "value": 620.0,
+          "provenance": "derived",
+          "formula": "FY3/27E SoC tester revenue increase over FY3/26E, roughly 1,560 - 940",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-corp-company-presentation-20261028",
+              "location": "page 3",
+              "quote": "FY26 Q2 Results: Sales and profits reached new quarterly records; we are expanding production capacity to meet robust tester demand for AI-related semiconductors"
+            }
+          ],
+          "driver": "AI SoC tester units and richer configurations",
+          "alternative": 520.0
+        },
+        {
+          "label": "Memory tester recovery",
+          "value": 90.0,
+          "provenance": "derived",
+          "formula": "FY3/27E memory tester revenue increase on AI-related DRAM and non-volatile memory demand",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 10",
+              "quote": "For memory testers, sales were in line with expectations, but demand for DRAM and non-volatile memory—all tied to AI—remains highly robust."
+            }
+          ],
+          "driver": "AI-related memory test demand",
+          "alternative": 50.0
+        },
+        {
+          "label": "Services and installed-base growth",
+          "value": 61.4,
+          "provenance": "derived",
+          "formula": "Service and support revenue growth from a larger installed base; residual to reach FY3/27E revenue",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-corp-company-presentation-20261028",
+              "location": "page 6",
+              "quote": "Quarterly Sales by Segment / Services & Others Breakdown"
+            }
+          ],
+          "driver": "installed-base service and support",
+          "alternative": 40.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "operating_profit",
+      "base_period": "FY3/26",
+      "target_period": "FY3/27",
+      "base_value": 499.1,
+      "declared_total": 994.7,
+      "lines": [
+        {
+          "label": "SoC tester gross profit",
+          "value": 420.0,
+          "provenance": "derived",
+          "formula": "Incremental SoC revenue 620.0 x approximately 68% gross margin",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-corp-company-presentation-20261028",
+              "location": "page 5",
+              "quote": "Gross Margin / 売上総利益率 65.1% 62.2% 62.0% 67.4% 69.5% - 71.1%"
+            }
+          ],
+          "driver": "high-end SoC product mix",
+          "alternative": 340.0
+        },
+        {
+          "label": "Memory tester gross profit",
+          "value": 55.0,
+          "provenance": "derived",
+          "formula": "Incremental memory tester revenue 90.0 x approximately 61% gross margin",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 16",
+              "quote": "In the second half, as capacity expansions for both SoC and memory testers progress, we expect sales to grow."
+            }
+          ],
+          "driver": "memory tester mix",
+          "alternative": 35.0
+        },
+        {
+          "label": "Operating leverage on factory and EMS utilization",
+          "value": 80.0,
+          "provenance": "derived",
+          "formula": "Incremental revenue drop-through after variable costs and operating leverage",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-corp-company-presentation-20261028",
+              "location": "page 3",
+              "quote": "we are expanding production capacity to meet robust tester demand for AI-related semiconductors"
+            }
+          ],
+          "driver": "factory and EMS utilization",
+          "alternative": 50.0
+        },
+        {
+          "label": "Higher DRAM and component costs",
+          "value": -59.4,
+          "provenance": "derived",
+          "formula": "H2 FY3/27 inventory-cost headwind from post-increase memory component purchases; residual to reconcile OP bridge",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 20",
+              "quote": "In the first half, we were using components—mainly memory semiconductors—that were procured in the past before prices increased."
+            }
+          ],
+          "driver": "DRAM component cost inflation",
+          "alternative": -80.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "net_profit",
+      "base_period": "FY3/26",
+      "target_period": "FY3/27",
+      "base_value": 375.4,
+      "declared_total": 758.6,
+      "lines": [
+        {
+          "label": "Operating profit growth",
+          "value": 495.6,
+          "provenance": "derived",
+          "formula": "FY3/27E operating profit 994.7 - FY3/26 operating profit 499.1",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 2.1",
+              "quote": "Operating profit grew faster than revenue because the mix shifted toward high-end, highly profitable SoC testers."
+            }
+          ],
+          "driver": "SoC tester volume and mix",
+          "alternative": 430.0
+        },
+        {
+          "label": "Net financial and other income",
+          "value": 56.0,
+          "provenance": "derived",
+          "formula": "H1 FY3/27 pretax 510.2 less H1 operating profit 456.8, approximately 53.4, plus small H2 other income",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 7",
+              "quote": "H1 pretax profit included approximately ¥57bn of financial income, mainly investment valuation gains."
+            }
+          ],
+          "driver": "investment valuation gains and other financial income",
+          "alternative": 30.0
+        },
+        {
+          "label": "Tax expense increase",
+          "value": -168.4,
+          "provenance": "derived",
+          "formula": "Residual to reconcile FY3/27E net profit; implies approximately 27.7% effective tax rate",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 6",
+              "quote": "The revised forecast assumes a full-year rate of approximately 27.7%."
+            }
+          ],
+          "driver": "effective tax rate",
+          "alternative": -180.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "revenue",
+      "base_period": "FY3/27",
+      "target_period": "FY3/28",
+      "base_value": 1900.0,
+      "declared_total": 2470.0,
+      "lines": [
+        {
+          "label": "SoC tester capacity expansion and CPU demand",
+          "value": 390.0,
+          "provenance": "derived",
+          "formula": "FY3/28E SoC tester revenue +25% on capacity expansion, CPU/GPU/ASIC demand and richer configurations",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-q2-fy3-2027-earning-call-transcript",
+              "location": "PART 2 Q1 answer",
+              "quote": "we have already achieved an annual production capacity of over 5,000 units. Furthermore, we are aiming to achieve our goal of 10,000 units annually significantly ahead of our original schedule."
+            }
+          ],
+          "driver": "SoC tester capacity and CPU attach rate",
+          "alternative": 300.0
+        },
+        {
+          "label": "Memory tester ramp",
+          "value": 120.0,
+          "provenance": "derived",
+          "formula": "FY3/28E memory tester revenue growth from capacity additions and AI memory demand",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-q2-fy3-2027-earning-call-transcript",
+              "location": "Market Overview",
+              "quote": "Memory Tester Market: We expect the market to be around the midpoint of our forecast range of $2.5 to $3.0 billion"
+            }
+          ],
+          "driver": "memory tester capacity ramp",
+          "alternative": 80.0
+        },
+        {
+          "label": "Services, installed base and initial silicon photonics",
+          "value": 60.0,
+          "provenance": "derived",
+          "formula": "Service growth plus initial silicon-photonics contribution, assumed approximately ¥30bn, not full run-rate",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 34",
+              "quote": "We expect this segment to contribute to sales growth starting next fiscal year."
+            }
+          ],
+          "driver": "installed-base service and silicon photonics evaluation",
+          "alternative": 30.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "operating_profit",
+      "base_period": "FY3/27",
+      "target_period": "FY3/28",
+      "base_value": 994.7,
+      "declared_total": 1284.4,
+      "lines": [
+        {
+          "label": "SoC tester gross profit",
+          "value": 250.0,
+          "provenance": "derived",
+          "formula": "Incremental SoC revenue 390.0 x approximately 64% gross margin",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 1",
+              "quote": "The beat was operational, driven by stronger high-end SoC tester shipments, richer configurations, favorable mix and operating leverage."
+            }
+          ],
+          "driver": "high-end SoC mix",
+          "alternative": 200.0
+        },
+        {
+          "label": "Memory tester gross profit",
+          "value": 70.0,
+          "provenance": "derived",
+          "formula": "Incremental memory revenue 120.0 x approximately 58% gross margin",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 16",
+              "quote": "as the sales ratio of memory testers increases, it will be difficult to maintain that 71% level."
+            }
+          ],
+          "driver": "memory tester mix",
+          "alternative": 50.0
+        },
+        {
+          "label": "Operating leverage",
+          "value": 60.0,
+          "provenance": "derived",
+          "formula": "Incremental revenue drop-through on higher factory and EMS utilization",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 4.2",
+              "quote": "High factory and EMS utilization."
+            }
+          ],
+          "driver": "factory and EMS utilization",
+          "alternative": 40.0
+        },
+        {
+          "label": "Component cost inflation",
+          "value": -90.3,
+          "provenance": "derived",
+          "formula": "Residual to reconcile FY3/28E operating profit; reflects DRAM cost pressure and higher memory mix",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 20",
+              "quote": "The main factor for the half-on-half decline is the increase in component costs."
+            }
+          ],
+          "driver": "component cost inflation",
+          "alternative": -120.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "net_profit",
+      "base_period": "FY3/27",
+      "target_period": "FY3/28",
+      "base_value": 758.6,
+      "declared_total": 948.3,
+      "lines": [
+        {
+          "label": "Operating profit growth",
+          "value": 289.7,
+          "provenance": "derived",
+          "formula": "FY3/28E operating profit 1284.4 - FY3/27E operating profit 994.7",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 1",
+              "quote": "Revenue grows approximately 30%. Net income grows approximately 25%."
+            }
+          ],
+          "driver": "SoC and memory tester growth",
+          "alternative": 240.0
+        },
+        {
+          "label": "Lower financial income",
+          "value": -60.0,
+          "provenance": "derived",
+          "formula": "Normalization of FY3/27 unusually high financial income",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 7",
+              "quote": "H1 pretax profit included approximately ¥57bn of financial income, mainly investment valuation gains."
+            }
+          ],
+          "driver": "financial income normalization",
+          "alternative": -80.0
+        },
+        {
+          "label": "Higher tax expense",
+          "value": -40.0,
+          "provenance": "derived",
+          "formula": "Tax on higher pretax profit at approximately 27% normalized rate",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 6",
+              "quote": "For FY3/2028–29, the model assumes a normalized tax rate of 27.0%."
+            }
+          ],
+          "driver": "normalized tax rate",
+          "alternative": -60.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "revenue",
+      "base_period": "FY3/28",
+      "target_period": "FY3/29",
+      "base_value": 2470.0,
+      "declared_total": 2950.0,
+      "lines": [
+        {
+          "label": "SoC tester growth",
+          "value": 360.0,
+          "provenance": "derived",
+          "formula": "FY3/29E SoC tester revenue growth on continued AI compute and CPU/ASIC demand",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-q2-fy3-2027-earning-call-transcript",
+              "location": "PART 2 Q2 answer",
+              "quote": "over the last couple of years, the ATE TAM CAGR has been about 50% or a little above. We don't see that slowing down"
+            }
+          ],
+          "driver": "AI compute tester demand",
+          "alternative": 280.0
+        },
+        {
+          "label": "Memory tester growth",
+          "value": 80.0,
+          "provenance": "derived",
+          "formula": "FY3/29E memory tester revenue growth from AI memory and capacity additions",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-q2-fy3-2027-earning-call-transcript",
+              "location": "Market Overview",
+              "quote": "solid investment continues across a broad range of memory applications"
+            }
+          ],
+          "driver": "memory tester demand",
+          "alternative": 50.0
+        },
+        {
+          "label": "Services and silicon photonics",
+          "value": 40.0,
+          "provenance": "derived",
+          "formula": "Service growth plus larger silicon-photonics contribution",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 34",
+              "quote": "our Silicon Photonics CPU test equipment is currently undergoing evaluation at customer sites across 4 to 5 planned insertions."
+            }
+          ],
+          "driver": "installed-base service and silicon photonics",
+          "alternative": 20.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "operating_profit",
+      "base_period": "FY3/28",
+      "target_period": "FY3/29",
+      "base_value": 1284.4,
+      "declared_total": 1548.8,
+      "lines": [
+        {
+          "label": "SoC tester gross profit",
+          "value": 230.0,
+          "provenance": "derived",
+          "formula": "Incremental SoC revenue 360.0 x approximately 64% gross margin",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 1",
+              "quote": "A common platform across testing insertions improves data correlation and raises switching costs."
+            }
+          ],
+          "driver": "high-end SoC mix",
+          "alternative": 180.0
+        },
+        {
+          "label": "Memory tester gross profit",
+          "value": 40.0,
+          "provenance": "derived",
+          "formula": "Incremental memory revenue 80.0 x approximately 50% gross margin",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 16",
+              "quote": "as the sales ratio of memory testers increases, it will be difficult to maintain that 71% level."
+            }
+          ],
+          "driver": "memory tester mix",
+          "alternative": 25.0
+        },
+        {
+          "label": "Operating leverage",
+          "value": 50.0,
+          "provenance": "derived",
+          "formula": "Incremental revenue drop-through on capacity utilization",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 4.2",
+              "quote": "Continued operating leverage."
+            }
+          ],
+          "driver": "factory utilization",
+          "alternative": 30.0
+        },
+        {
+          "label": "Component cost inflation",
+          "value": -55.6,
+          "provenance": "derived",
+          "formula": "Residual to reconcile FY3/29E operating profit; reflects ongoing DRAM/component cost pressure",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-conference-call-nov-4-2026",
+              "location": "paragraph 27",
+              "quote": "we do not expect a sudden decline in these component costs heading into FY2027."
+            }
+          ],
+          "driver": "component cost inflation",
+          "alternative": -80.0
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "net_profit",
+      "base_period": "FY3/28",
+      "target_period": "FY3/29",
+      "base_value": 948.3,
+      "declared_total": 1138.8,
+      "lines": [
+        {
+          "label": "Operating profit growth",
+          "value": 264.4,
+          "provenance": "derived",
+          "formula": "FY3/29E operating profit 1548.8 - FY3/28E operating profit 1284.4",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 1",
+              "quote": "Revenue grows approximately 30%. Net income grows approximately 25%."
+            }
+          ],
+          "driver": "SoC and memory tester growth",
+          "alternative": 210.0
+        },
+        {
+          "label": "Lower financial income",
+          "value": -20.0,
+          "provenance": "derived",
+          "formula": "Normalization of financial income versus FY3/27 peak",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 7",
+              "quote": "H1 pretax profit included approximately ¥57bn of financial income, mainly investment valuation gains."
+            }
+          ],
+          "driver": "financial income normalization",
+          "alternative": -40.0
+        },
+        {
+          "label": "Higher tax expense",
+          "value": -53.9,
+          "provenance": "derived",
+          "formula": "Tax on higher pretax profit at approximately 27% normalized rate",
+          "cite": [
+            {
+              "document_id": "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+              "location": "section 6",
+              "quote": "For FY3/2028–29, the model assumes a normalized tax rate of 27.0%."
+            }
+          ],
+          "driver": "normalized tax rate",
+          "alternative": -70.0
+        }
+      ],
+      "cite": []
+    }
+  ],
+  "share_bases": [
+    {
+      "name": "period_end_net",
+      "shares_m": 721.953,
+      "note": "",
+      "cite": [],
+      "basic_weighted_average": null,
+      "diluted_weighted_average": null,
+      "post_period_conversion": null,
+      "potential_cb_shares": null
+    },
+    {
+      "name": "diluted_average",
+      "shares_m": 727.3,
+      "note": "",
+      "cite": [],
+      "basic_weighted_average": 722.0,
+      "diluted_weighted_average": 727.3,
+      "post_period_conversion": null,
+      "potential_cb_shares": 0.0
+    },
+    {
+      "name": "conservative_full_conversion",
+      "shares_m": 727.3,
+      "note": "",
+      "cite": [],
+      "basic_weighted_average": null,
+      "diluted_weighted_average": null,
+      "post_period_conversion": null,
+      "potential_cb_shares": null
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "Bear",
+      "assumptions": "AI SoC tester orders digest after a strong FY3/27; CPU/ASIC demand grows more slowly; memory tester ramp slips; DRAM and component costs are not fully passed through; utilisation falls and FY3/28 operating margin drops to 48%.",
+      "eps": 1051.3,
+      "multiple": 20.0,
+      "revenue": 2200.0,
+      "operating_profit": 1056.0,
+      "target_price": null,
+      "period": "FY3/28",
+      "provenance": ""
+    },
+    {
+      "name": "Base",
+      "assumptions": "SoC capacity above 5,000 units expands toward the 10,000-unit target; CPU becomes a third AI driver alongside GPU and custom ASIC; memory testers step up in Q4 FY3/27 and grow in FY3/28; H2 FY3/27 operating margin 51.0%; FY3/28 revenue grows about 30% and net income about 25%.",
+      "eps": 1303.9,
+      "multiple": 26.0,
+      "revenue": 2470.0,
+      "operating_profit": 1284.4,
+      "target_price": null,
+      "period": "FY3/28",
+      "provenance": ""
+    },
+    {
+      "name": "Bull",
+      "assumptions": "10,000-unit SoC capacity target is pulled forward materially; CPU attach rate and test intensity rise; custom ASIC and GPU demand remain hot; silicon photonics starts contributing in FY3/28; richer mix lifts FY3/28 operating margin to 55%.",
+      "eps": 1497.5,
+      "multiple": 30.0,
+      "revenue": 2700.0,
+      "operating_profit": 1485.0,
+      "target_price": null,
+      "period": "FY3/28",
+      "provenance": ""
+    }
+  ],
+  "valuation": {
+    "price": 29485.0,
+    "fair_value_multiple_low": 20.0,
+    "fair_value_multiple_high": 30.0,
+    "fair_value_low": null,
+    "fair_value_high": null,
+    "fair_value_basis": "diluted_average",
+    "fair_value_period": "FY3/28",
+    "market_cap_shares_m": null,
+    "market_cap_basis": "period_end_net",
+    "forecast_eps_basis": "diluted_average",
+    "dilution_sensitivity_basis": "conservative_full_conversion",
+    "ev_ebitda_multiple": 18.0,
+    "equity_value_share_basis": "period_end_net",
+    "ev_ebitda_multiple_provenance": "analyst_assumption",
+    "ev_ebitda_multiple_rationale": "Applied to FY3/28E EBITDA; set between the 15-20x historical range for high-growth ATE peers and the 25x P/E anchor in the 4 Nov investment report, reflecting Advantest's net-cash balance sheet and AI-driven growth.",
+    "ev_ebitda_multiple_refs": [
+      "doc-6857.T-advantest-q2-fy2027-results-and-forecast",
+      "doc-6857.T-ter-competitor-conference-call-oct28-2026"
+    ],
+    "provenance": "",
+    "sensitivity_multiples": [
+      20.0,
+      22.0,
+      24.0,
+      26.0,
+      28.0,
+      30.0
+    ],
+    "method_note": "P/E is the primary method on FY3/28E diluted EPS; EV/EBITDA is a cross-check on FY3/28E EBITDA (operating profit plus depreciation)."
+  },
+  "eps_basis": "diluted_average",
+  "model_version": "1.0.0",
+  "consensus": null,
+  "warnings": [
+    "The 28 Oct 2026 release labels the year ending 31 Mar 2027 as FY2026; this model uses the canonical FY3/27 label.",
+    "FY3/27 forecast is above company guidance: revenue ¥1,900.0bn vs ¥1,863.0bn and operating profit ¥994.7bn vs ¥967.0bn because we adopt the 4 Nov investment report's H2 revenue of ¥1,054.8bn and 51.0% H2 operating margin, above the company-implied H2 figures.",
+    "Ordinary profit is mapped to IFRS income before income taxes; FY3/26 actual ordinary profit is not disclosed in the excerpts and is left null.",
+    "Q3/Q4 FY3/27 split is an assumption based on management saying Q4 sales exceed Q3 and memory tester sales step up in Q4; the exact fractions are shown in quarterly_plan.",
+    "FY3/28 and FY3/29 are independent forecasts; FY3/29 has no company guidance and is bridged from capacity, CPU, memory and silicon-photonics drivers.",
+    "Silicon photonics 'starting next fiscal year' from the Nov 2026 calls maps to FY3/28; we assume an initial contribution of about ¥30bn, not full run-rate.",
+    "No segment-level operating profit is disclosed in the excerpts, so the segments block is left empty to avoid inventing a split.",
+    "Gross debt is assumed zero because no borrowings line is disclosed; lease liabilities of ¥20.2bn are included in net debt.",
+    "Depreciation, working-capital change and capex are analyst assumptions; payout ratio is set at 50% following the company's total payout policy of 50% or more over the three-year plan.",
+    "No consensus table appears in the documents, so consensus is null.",
+    "Diluted shares are estimated from the H1 basic/diluted EPS bridge; no convertible instruments are disclosed.",
+    "Company guidance EPS of ¥1,027.08 is on a basic-share basis; model forecast EPS uses the diluted average share count.",
+    "Quarterly plan has no H1 guidance row: H1 rebuilt from reported Q1 FY3/27 + Q2 FY3/27, so the Q2 line is definitional; H2 = FY3/27 guidance - H1 still checks the reported Q3/Q4.",
+    "FY3/27 quarters follow management guidance (1863 revenue) while the annual row is the model's own forecast (1900): they are meant to differ.",
+    "FY3/27 quarters follow management guidance (967 operating_profit) while the annual row is the model's own forecast (994.7): they are meant to differ.",
+    "FY3/27 quarters follow management guidance (741.5 net_profit) while the annual row is the model's own forecast (758.6): they are meant to differ."
+  ],
+  "net_debt": {
+    "gross_debt": 0.0,
+    "cash_and_equivalents": 401.785,
+    "lease_liabilities": 20.192,
+    "lease_treatment": "included",
+    "minority_interest": 0.0,
+    "minority_treatment": "excluded",
+    "reported_net_debt": null,
+    "as_of": "2026-09-30",
+    "scope": "consolidated",
+    "source_unit": "JPY_bn",
+    "source_refs": [
+      "doc-6857.T-2q-fy3-2026-announcemnet page 6",
+      "doc-6857.T-2q-fy3-2026-announcemnet page 9"
+    ],
+    "component_sources": {
+      "gross_debt": "doc-6857.T-2q-fy3-2026-announcemnet page 9 (no borrowings line disclosed; lease liabilities shown separately)",
+      "cash_and_equivalents": "doc-6857.T-2q-fy3-2026-announcemnet page 6 (cash and cash equivalents ¥401.8bn as of 30 Sep 2026)",
+      "lease_liabilities": "doc-6857.T-2q-fy3-2026-announcemnet page 9 (current ¥4,966m + non-current ¥15,226m)"
+    },
+    "verification_status": ""
+  },
+  "effective_tax_rate": null,
+  "projects": [],
+  "sector": "",
+  "capital_structure": {
+    "issued_shares": 732.0,
+    "treasury_shares": 10.047,
+    "current_net_shares": 721.953,
+    "basic_weighted_average": {
+      "FY3/27": 722.0,
+      "FY3/28": 721.953,
+      "FY3/29": 721.953
+    },
+    "diluted_weighted_average": {
+      "FY3/27": 727.3,
+      "FY3/28": 727.3,
+      "FY3/29": 727.3
+    },
+    "post_period_issuances": [],
+    "buybacks": [],
+    "treasury_cancellations": [],
+    "convertibles": [],
+    "split_history": [],
+    "rights_issues": [],
+    "share_classes": [],
+    "adr_ratio": null,
+    "source_refs": [],
+    "verification_status": "VERIFIED"
+  }
+}

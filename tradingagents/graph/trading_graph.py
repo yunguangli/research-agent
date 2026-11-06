@@ -69,6 +69,13 @@ def price_conflict_reason(model_price, market_close) -> str:
     )
 
 
+def state_price_resolution(state: dict):
+    """The recorded price resolution, for a later step that must not re-pick it."""
+    from tradingagents.research import price_authority
+
+    return price_authority.PriceResolution.from_state(state)
+
+
 def apply_price_conflict(final_state: dict) -> None:
     """Degrade the decision and make it provisional; never stop the run."""
     conflict = str(final_state.get("price_conflict") or "").strip()
@@ -243,21 +250,9 @@ def _unresolved_per_share_fields(final_state: dict) -> list[str]:
 
 def superseded_values(final_state: dict) -> set[float]:
     """The v1 values a model repair replaced; no later section may use them."""
-    try:
-        log = json.loads(str(final_state.get("model_repair_log") or "{}"))
-    except ValueError:
-        return set()
-    values: set[float] = set()
-    for change in log.get("changes") or []:
-        old, new = change.get("old"), change.get("new")
-        if (
-            isinstance(old, (int, float))
-            and not isinstance(old, bool)
-            and old
-            and (not isinstance(new, (int, float)) or abs(float(new) - float(old)) > 1e-9)
-        ):
-            values.add(float(old))
-    return values
+    from tradingagents.research.superseded import values_from_log
+
+    return values_from_log(final_state)
 
 
 def _cites_superseded(text: str, values: set[float]) -> bool:
@@ -589,7 +584,7 @@ class TradingAgentsGraph:
                 model, valuation, _spec = self._research_model(
                     ticker,
                     final_state.get("trade_date"),
-                    final_state.get("research_price") or None,
+                    resolution=state_price_resolution(final_state),
                     allow_build=False,
                     spec_hint=final_state.get("research_model_path") or None,
                 )
@@ -627,7 +622,7 @@ class TradingAgentsGraph:
                 model, _valuation, _spec = self._research_model(
                     ticker,
                     final_state.get("trade_date"),
-                    final_state.get("research_price") or None,
+                    resolution=state_price_resolution(final_state),
                     allow_build=False,
                     spec_hint=final_state.get("research_model_path") or None,
                 )
@@ -700,6 +695,7 @@ class TradingAgentsGraph:
                     challenge_fields=_unresolved_per_share_fields(final_state),
                     sensitivity_count=len(sensitivity_ids),
                     price=final_state.get("research_price") or None,
+                    share_price_verified=state_price_resolution(final_state).verified,
                 )
                 for key in ("operating_model_status", "eps_model_status", "eps_status",
                             "valuation_status", "sensitivity_model_status",
@@ -742,6 +738,9 @@ class TradingAgentsGraph:
             final_state["decision_status"] = ""
         conflicts = self._detect_conflicts(final_state)
         final_state["decision_conflicts"] = conflicts
+        verification_json, verification_status = self._derive_verification(final_state)
+        final_state["verification_checks"] = verification_json
+        final_state["verification_status"] = verification_status
         final_state["stage_status"] = self._stage_status(final_state)
         final_state["controlling_decision"] = (
             "portfolio_manager"
@@ -779,6 +778,24 @@ class TradingAgentsGraph:
         # Applied last: it upgrades the derived status to PROVISIONAL and adds
         # the reason to an integrity string the earlier steps may have written.
         apply_price_conflict(final_state)
+        publication_status, publication_reasons = self._publication_status(final_state)
+        final_state["publication_status"] = publication_status
+        final_state["publication_reasons"] = publication_reasons
+        if publication_status == "BLOCKED":
+            # A controlling figure disagrees with the accepted model version. The
+            # report may describe the run, but it may not publish a rating or a
+            # fair value built on the conflicted input.
+            final_state["final_rating"] = "Not Rated"
+            final_state["decision_status"] = "PROVISIONAL"
+            final_state["overall_status"] = "Not Rated"
+            decision = str(final_state.get("final_trade_decision") or "").strip()
+            note = (
+                "**Publication blocked**: " + "; ".join(publication_reasons)
+                + ". No rating or fair value is published until the controlling "
+                "value is reconciled; the full record is in the appendix."
+            )
+            if decision and "**Publication blocked**" not in decision:
+                final_state["final_trade_decision"] = decision + "\n\n" + note
         try:
             component = json.loads(str(final_state.get("component_status") or "{}"))
         except ValueError:
@@ -788,9 +805,44 @@ class TradingAgentsGraph:
                 "integrity": final_state.get("decision_integrity", ""),
                 "status": final_state.get("decision_status", ""),
                 "provisional_reason": provisional_reason(final_state),
+                "publication_status": publication_status,
+                "publication_reasons": publication_reasons,
             }
             final_state["component_status"] = json.dumps(component)
         return final_state
+
+    def _publication_status(self, final_state: dict) -> tuple[str, list[str]]:
+        """Whether the report may publish a controlling rating and fair value.
+
+        BLOCKED means two controlling values still disagree, or the decision was
+        written against a different model version, or it presents a repaired-away
+        figure as current. The article is still written (with the appendix); it
+        just carries no number a reader could act on.
+        """
+        reasons: list[str] = []
+        conflict = str(final_state.get("price_authority_conflict") or "").strip()
+        if conflict:
+            reasons.append(conflict)
+        active = str(final_state.get("active_model_version") or "").strip()
+        decision_version = str(final_state.get("decision_model_version") or "").strip()
+        if active and decision_version and active != decision_version:
+            reasons.append(
+                f"the decision was written against {decision_version}, but {active} controls"
+            )
+        values = superseded_values(final_state)
+        if values:
+            from tradingagents.research.superseded import (
+                controlling_pairs_from_log,
+                uses_superseded,
+            )
+
+            pairs = controlling_pairs_from_log(final_state)
+            decision = str(final_state.get("final_trade_decision") or "")
+            if pairs and uses_superseded(decision, pairs):
+                reasons.append(
+                    "the controlling decision presents a figure superseded by the model repair"
+                )
+        return ("BLOCKED" if reasons else "OK"), reasons
 
     # An exact size in prose: a percentage of a position, a share count, or a
     # tranche count. The pattern lives with the agent-side gate so both agree.
@@ -817,6 +869,75 @@ class TradingAgentsGraph:
                 else "failed"
             ),
         }
+
+    def _derive_verification(self, final_state) -> tuple[str, str]:
+        """Run the three independent checks and return (JSON, overall outcome).
+
+        Each check gets only its own inputs; the groups below are disjoint on
+        purpose, so DECISION_CHECK cannot inherit a pass from MODEL_CHECK.
+        """
+        from tradingagents.agents.rating import run_rating
+        from tradingagents.research import verification as verification_mod
+
+        def _json(value, fallback):
+            try:
+                parsed = json.loads(str(value or ""))
+            except (TypeError, ValueError):
+                return fallback
+            return parsed if isinstance(parsed, type(fallback)) else fallback
+
+        corrections = _json(final_state.get("model_corrections"), [])
+        sensitivities = _json(final_state.get("sensitivity_items"), [])
+        audit = _json(final_state.get("decision_audit_result"), {})
+        unresolved = [
+            record for record in corrections
+            if str(record.get("status") or "").upper() in {"PROPOSED", "UNRESOLVED"}
+        ]
+        statuses = {
+            "operating_model": final_state.get("operating_model_status"),
+            "eps_model": final_state.get("eps_model_status"),
+            "valuation": final_state.get("valuation_status"),
+            "sensitivity": final_state.get("sensitivity_model_status"),
+            "ev_per_share": final_state.get("ev_per_share_status"),
+        }
+        statuses = {name: value for name, value in statuses.items() if value}
+        low = final_state.get("research_fair_value_low")
+        high = final_state.get("research_fair_value_high")
+        mid = (low + high) / 2 if low is not None and high is not None else None
+        price = final_state.get("research_price") or None
+        result = verification_mod.assess(
+            source={
+                "model_status": final_state.get("model_status"),
+                "conflicts": [
+                    conflict for conflict in [final_state.get("price_conflict")] if conflict
+                ],
+                "unresolved": unresolved,
+                "provenance": final_state.get("spec_compatibility"),
+            },
+            model={
+                "model_status": final_state.get("model_status"),
+                "output_statuses": statuses,
+                "corrections": corrections,
+                "superseded": len(superseded_values(final_state)),
+                "decision_model_version": final_state.get("decision_model_version"),
+                "active_model_version": final_state.get("active_model_version"),
+            },
+            decision={
+                "action": (
+                    run_rating(final_state)
+                    if str(final_state.get("final_trade_decision") or "").strip() else ""
+                ),
+                "fair_value_low": low,
+                "fair_value_mid": mid,
+                "fair_value_high": high,
+                "price": price,
+                "audit": audit,
+                "sensitivities": sensitivities,
+                "corrections": corrections,
+                "unresolved": unresolved,
+            },
+        )
+        return json.dumps(result), result["overall"]
 
     def _detect_conflicts(self, final_state) -> list[str]:
         """Where an intermediate proposal disagrees with the controlling decision."""
@@ -945,7 +1066,7 @@ class TradingAgentsGraph:
             model, valuation, _spec = self._research_model(
                 company_name,
                 final_state.get("trade_date"),
-                final_state.get("research_price") or None,
+                resolution=state_price_resolution(final_state),
                 allow_build=False,
                 spec_hint=final_state.get("research_model_path") or None,
             )
@@ -955,7 +1076,16 @@ class TradingAgentsGraph:
                 "The number audit did not run: no usable research model was available "
                 f"({reason}). No figure in this report was checked against a model."
             )
-        from tradingagents.research import audit
+        from tradingagents.research import audit, evidence as evidence_module
+
+        # A forecast presented as company guidance is rewritten before the audit,
+        # so the verified sections and the PM decision carry the correct label.
+        for key in ("final_trade_decision", "investment_plan"):
+            text = str(final_state.get(key) or "")
+            if text.strip():
+                rewritten, findings = evidence_module.enforce_forecast_labels(text, model.spec)
+                if findings:
+                    final_state[key] = rewritten
 
         stats: dict = {}
         findings = audit.audit_state(
@@ -1006,14 +1136,22 @@ class TradingAgentsGraph:
             decision_horizon=str(self.config.get("decision_horizon") or ""),
         )
         # Empty unless a corpus is configured, so vanilla runs keep the same state.
-        package, artifact, price, spec_path = self._research_package(company_name, trade_date)
+        package, artifact, price_resolution, spec_path = self._research_package(
+            company_name, trade_date
+        )
         state["research_package"] = package
         state["research_package_artifact"] = artifact
         state["fundamental_packet"] = getattr(self, "_fundamental_packet", "")
         state["valuation_packet"] = getattr(self, "_valuation_packet", "")
-        state["research_price"] = price or 0.0
+        state["research_price"] = price_resolution.value or 0.0
+        state["price_source"] = price_resolution.source
+        state["price_as_of"] = price_resolution.as_of
+        state["price_ref"] = price_resolution.ref
+        state["price_note"] = price_resolution.note
+        state["price_override"] = price_resolution.explicit
+        state["price_authority_conflict"] = ""
         state["price_conflict"] = ""
-        if _feature_enabled("PRICE_SNAPSHOT_V1") and price:
+        if _feature_enabled("PRICE_SNAPSHOT_V1") and price_resolution.value:
             try:
                 from tradingagents.dataflows.prices import last_close
 
@@ -1021,19 +1159,38 @@ class TradingAgentsGraph:
             except Exception as exc:  # noqa: BLE001 - a snapshot failure is a gap
                 logger.info("Price snapshot unavailable for %s: %s", company_name, exc)
                 market_close = None
-            state["price_conflict"] = price_conflict_reason(price, market_close)
+            # A user override is recorded, not treated as a conflict: the caller
+            # chose it. A verified close is the session by construction. Only a
+            # weaker class that somehow controls is compared with the session.
+            if not price_resolution.explicit:
+                state["price_conflict"] = price_conflict_reason(
+                    price_resolution.value, market_close
+                )
         state["research_model_path"] = spec_path
         state["research_model_path_v1"] = spec_path
         state["active_model_version"] = "v1" if spec_path else ""
         state["fundamentals_challenge_check"] = "pending" if spec_path else "not_applicable"
         state["model_challenges"] = ""
+        state["model_corrections"] = ""
         state["model_repair_log"] = ""
         state["model_repair_addendum"] = ""
+        state["verification_checks"] = ""
+        state["verification_status"] = ""
+        state["decision_model_version"] = ""
         from tradingagents.research.report import fair_value_range_from_summary
 
         low, high = fair_value_range_from_summary(package)
         state["research_fair_value_low"] = low
         state["research_fair_value_high"] = high
+        try:
+            from tradingagents.research.evidence import benchmark_statement
+            from tradingagents.research.report import load_spec
+
+            state["benchmark_basis"] = (
+                benchmark_statement(load_spec(spec_path)) if spec_path else ""
+            )
+        except Exception:  # noqa: BLE001 - a missing statement is a gap, not a crash
+            state["benchmark_basis"] = ""
         bases = getattr(self, "_basis_names", None) or {}
         state["market_cap_basis"] = bases.get("market_cap_basis", "")
         state["forecast_eps_basis"] = bases.get("forecast_eps_basis", "")
@@ -1174,29 +1331,43 @@ class TradingAgentsGraph:
         )
 
     def _research_package(self, company_name: str, trade_date: str | None = None,
-                          price: float | None = None) -> tuple[str, str, float, str]:
-        """The package text, the published version of it, the price and the spec path.
+                          price: float | None = None) -> tuple[str, str, Any, str]:
+        """The package text, the published version, the price resolution and the spec path.
 
         The two texts differ only in the imperative lines the prompt needs; the
-        report must not publish instructions addressed to the analyst.
+        report must not publish instructions addressed to the analyst. The
+        resolution carries the authority of the price so the state, the report and
+        the repair gate can all say which value controls.
         """
+        from tradingagents.research import price_authority as price_authority_module
+
         root = research_dir_from_env()
         if root is None:
-            return "", "", 0.0, ""
+            return "", "", price_authority_module.PriceResolution(value=0.0), ""
 
         try:
             model, valuation, spec_path = self._research_model(company_name, trade_date, price)
         except _ModelUnavailable as exc:
             note = str(exc)
-            return note, note, 0.0, ""
+            return note, note, price_authority_module.PriceResolution(value=0.0), ""
 
         from tradingagents.research import (
             capital,
+            price_authority,
             report as research_report,
             sensitivity,
             status as status_module,
         )
         from tradingagents.research.shares import basis_report, diluted_kind
+
+        resolution = price_authority.PriceResolution.from_spec(model.spec)
+        if resolution.value is None:
+            resolution = price_authority.PriceResolution(
+                value=float(valuation.price or 0) or None,
+                source=price_authority.UNKNOWN,
+                ticker=company_name,
+                currency=str(getattr(model.spec, "currency", "") or ""),
+            )
 
         eps_ok, _eps_reason = capital.eps_basis_ready(model.spec, valuation.period)
         cap_ok, _cap_reason = capital.market_cap_ready(model.spec)
@@ -1260,6 +1431,7 @@ class TradingAgentsGraph:
             market_cap_verified=cap_ok,
             eps_basis_verified=eps_ok,
             equity_basis_verified=equity_ok,
+            share_price_verified=resolution.verified,
         )
         if statuses["valuation_method_statuses"].get("ev_ebitda") != status_module.VERIFIED:
             # No enterprise value was produced: there is nothing to compare.
@@ -1333,11 +1505,18 @@ class TradingAgentsGraph:
             )
             package += basis_note
             artifact += basis_note
-        return package, artifact, valuation.price, str(spec_path)
+        if resolution.value is None:
+            resolution = price_authority.PriceResolution(
+                value=float(valuation.price or 0) or None,
+                source=price_authority.UNKNOWN,
+                ticker=company_name,
+                currency=str(getattr(model.spec, "currency", "") or ""),
+            )
+        return package, artifact, resolution, str(spec_path)
 
     def _research_model(self, company_name: str, trade_date: str | None = None,
                         price: float | None = None, allow_build: bool = True,
-                        spec_hint: str | None = None):
+                        spec_hint: str | None = None, resolution=None):
         """The validated model and its valuation, or ``_ModelUnavailable``."""
         root = research_dir_from_env()
         if root is None:
@@ -1424,9 +1603,15 @@ class TradingAgentsGraph:
 
         try:
             spec = research_report.load_spec(spec_path)
-            resolved, note = self._resolve_price(spec, company_name, trade_date, price)
-            if resolved:
-                spec.valuation.price = resolved
+            resolved = self._resolve_price(
+                spec, company_name, trade_date, price, resolution=resolution
+            )
+            if resolved.value:
+                spec.valuation.price = resolved.value
+                spec.valuation.price_source = resolved.source
+                spec.valuation.price_as_of = resolved.as_of
+                spec.valuation.price_ref = resolved.ref
+            note = resolved.note
             if note and note not in spec.warnings:   # a reload must not stack the note
                 spec.warnings.append(note)
             model = kernel.run(spec, strict=purpose != "replay")
@@ -1624,24 +1809,77 @@ class TradingAgentsGraph:
 
     @staticmethod
     def _resolve_price(spec, company_name: str, trade_date: str | None,
-                       price: float | None) -> tuple[float | None, str]:
-        """Pick the share price the valuation should use, and say where it came from.
+                       price: float | None,
+                       resolution=None):
+        """Pick the share price and the class of evidence behind it.
 
         A model spec's price goes stale the moment the market moves; a valuation
         built on it is wrong in a way no arithmetic check can see. The run date's
-        close wins, the spec is the fallback, and either way the report says which.
+        close wins, an explicit caller price wins over it, and the spec is the
+        fallback. The returned ``PriceResolution`` carries the class, date and
+        source so a later repair cannot replace a verified close with an older
+        report value by accident.
         """
+        from tradingagents.research import price_authority as pa
+
+        def _make(value, source: str, as_of: str, ref: str, note: str = ""):
+            return pa.PriceResolution(
+                value=float(value),
+                source=source,
+                as_of=str(as_of or ""),
+                ref=ref,
+                ticker=str(company_name or ""),
+                currency=str(getattr(spec, "currency", "") or ""),
+                note=note,
+            )
+
+        if resolution is not None and resolution.value:
+            target = pa.PriceResolution(
+                ticker=str(company_name or ""),
+                currency=str(getattr(spec, "currency", "") or ""),
+            )
+            if pa.same_security(resolution, target):
+                return resolution.with_context(
+                    ticker=str(company_name or ""),
+                    currency=str(getattr(spec, "currency", "") or ""),
+                )
+
         configured = os.environ.get("TRADINGAGENTS_MODEL_PRICE", "").strip()
         if configured:
             try:
-                return float(configured.replace(",", "")), (
-                    f"Share price from TRADINGAGENTS_MODEL_PRICE: {configured}."
+                return _make(
+                    configured.replace(",", ""), pa.USER_EXPLICIT,
+                    str(trade_date or ""), "TRADINGAGENTS_MODEL_PRICE",
+                    f"Share price from TRADINGAGENTS_MODEL_PRICE: {configured}.",
                 )
             except ValueError:
                 logger.warning("Ignoring invalid TRADINGAGENTS_MODEL_PRICE=%r", configured)
         if price is not None:
-            return float(price), ""
+            return _make(
+                price, pa.USER_EXPLICIT, str(trade_date or ""), "explicit argument"
+            )
+
         spec_price = spec.valuation.price
+        stored = pa.PriceResolution.from_spec(spec)
+        def _stored_fallback(resolution):
+            """A stored price is only current when its own date matches the run."""
+            if (
+                resolution.as_of
+                and trade_date
+                and str(resolution.as_of) != str(trade_date)
+            ):
+                return _make(
+                    resolution.value,
+                    pa.SPEC_PRICE,
+                    resolution.as_of,
+                    resolution.ref,
+                    f"MODEL WARNING: the stored {resolution.source} price is dated "
+                    f"{resolution.as_of}, not {trade_date}; it may be stale.",
+                )
+            return _make(
+                resolution.value, resolution.source, resolution.as_of, resolution.ref
+            )
+
         if trade_date:
             from tradingagents.dataflows.prices import last_close
 
@@ -1653,14 +1891,80 @@ class TradingAgentsGraph:
                         f"Share price updated to the {trade_date} close ({market:,.0f} "
                         f"{spec.currency}) from the spec's {spec_price:,.0f}."
                     )
-                return market, note
+                return _make(market, pa.VERIFIED_CLOSE, str(trade_date), "analysis-date close",
+                             note)
+            if stored.value and stored.source:
+                fallback = _stored_fallback(stored)
+                if not fallback.note:
+                    fallback = _make(
+                        stored.value, stored.source, stored.as_of, stored.ref,
+                        f"MODEL WARNING: no market price was available for {trade_date}; "
+                        f"the valuation uses the spec price of {stored.value:,.0f} "
+                        f"{spec.currency}, which may be stale.",
+                    )
+                return fallback
             if spec_price:
-                return spec_price, (
+                return _make(
+                    spec_price, pa.SPEC_PRICE, stored.as_of, "model spec",
                     f"MODEL WARNING: no market price was available for {trade_date}; the "
                     f"valuation uses the spec price of {spec_price:,.0f} {spec.currency}, "
-                    "which may be stale."
+                    "which may be stale.",
                 )
-        return spec_price, ""
+        if stored.value and stored.source:
+            return _make(stored.value, stored.source, stored.as_of, stored.ref)
+        if spec_price:
+            return _make(spec_price, pa.SPEC_PRICE, stored.as_of, "model spec")
+        return pa.PriceResolution(ticker=str(company_name or ""),
+                                  currency=str(getattr(spec, "currency", "") or ""))
+
+    def _correction_records(
+        self, spec, challenges, verified, unverified=None, structural=None
+    ) -> list[dict]:
+        """The correction ledger: what was proposed, accepted and propagated.
+
+        One record per challenge, with the original value read from v1, the
+        corrected value that was applied, the evidence, the affected fields and
+        the downstream outputs. The Model Controller accepts only a correction
+        the kernel applied; a correction whose proposed value contradicts the
+        model is rejected; anything ambiguous stays unresolved and is scenario
+        basis, never a silent value.
+        """
+        from tradingagents.research import repair as repair_mod
+
+        accepted = {id(challenge) for challenge in verified or []}
+        rejected = {id(challenge) for challenge in unverified or []}
+        records: list[dict] = []
+        for challenge in challenges or []:
+            paths = list(getattr(challenge, "proposed_values", {}) or [])
+            if id(challenge) in accepted:
+                status = "ACCEPTED"
+            elif id(challenge) in rejected and paths:
+                status = "REJECTED"
+            else:
+                status = "UNRESOLVED"
+            records.append({
+                "challenge_type": getattr(challenge, "challenge_type", "") or "unspecified",
+                "severity": getattr(challenge, "severity", "") or "material",
+                "status": status,
+                "accepted_by": "model_controller" if status != "UNRESOLVED" else "",
+                "affected_fields": list(getattr(challenge, "affected_fields", []) or []),
+                "downstream_outputs": list(
+                    getattr(challenge, "blocked_outputs", []) or []
+                ) or list(getattr(challenge, "affected_fields", []) or []),
+                "original_value": (
+                    {path: repair_mod.read_value(spec, path) for path in paths}
+                    if spec is not None else dict.fromkeys(paths)
+                ),
+                "corrected_value": dict(getattr(challenge, "proposed_values", {}) or {}),
+                "evidence_refs": list(getattr(challenge, "evidence_refs", []) or []),
+                "stated_model_value": getattr(challenge, "stated_model_value", None),
+                "source_class": getattr(challenge, "source_class", "") or "",
+                "as_of": getattr(challenge, "as_of", "") or "",
+                "rejection_reason": getattr(challenge, "rejection_reason", "") or "",
+                "propagated": status == "ACCEPTED",
+                "scenario_basis": status == "UNRESOLVED",
+            })
+        return records
 
     def run_repair_gate(self, state) -> dict:
         """Repair the model before the debate, inside the reviewer's entry path.
@@ -1690,7 +1994,8 @@ class TradingAgentsGraph:
             # No Fundamentals analyst in this run: the kernel's own checks are the
             # gate, and the report says there was no challenge pass.
             try:
-                self._research_model(company, trade_date, state.get("research_price") or None,
+                self._research_model(company, trade_date,
+                                     resolution=state_price_resolution(state),
                                      allow_build=False, spec_hint=spec_path)
             except _ModelUnavailable as exc:
                 return self._repair_failed(str(exc), "kernel_only")
@@ -1717,6 +2022,7 @@ class TradingAgentsGraph:
             return self._repair_failed(
                 "Analyst challenge review was not confirmed (structured extraction failed twice)",
                 "extraction_failed", challenges,
+                corrections=self._correction_records(None, challenges, []),
             )
         if status == "no_challenges_found" or not challenges:
             return {
@@ -1728,13 +2034,29 @@ class TradingAgentsGraph:
             spec = research_report.load_spec(spec_path)
         except Exception as exc:  # noqa: BLE001 - an unreadable spec is reported, not used
             return self._repair_failed(f"the model spec could not be read ({exc})",
-                                       "repair_failed", challenges)
+                                       "repair_failed", challenges,
+                                       corrections=self._correction_records(None, challenges, []))
 
-        from tradingagents.research import issues as issues_module
+        from tradingagents.research import (
+            issues as issues_module,
+            price_authority as price_authority_module,
+        )
 
+        current_price = price_authority_module.PriceResolution.from_state(state)
         deterministic = issues_module.collect(spec)
         deterministic_counts = issues_module.counts(deterministic)
-        verified, unverified, structural = repair_mod.verify_challenges(spec, challenges)
+        verified, unverified, structural = repair_mod.verify_challenges(
+            spec, challenges, price_resolution=current_price
+        )
+        authority_conflict = "; ".join(
+            challenge.rejection_reason
+            for challenge in unverified
+            if challenge.rejection_reason.startswith("AUTHORITY_CONFLICT")
+        )
+        authority_extra = (
+            {"price_authority_conflict": authority_conflict} if authority_conflict else {}
+        )
+        corrections = self._correction_records(spec, challenges, verified, unverified, structural)
         unresolved = structural + unverified
         unresolved_blocking = sum(1 for c in unresolved if c.severity == "blocking")
         unresolved_material = (
@@ -1765,16 +2087,21 @@ class TradingAgentsGraph:
                 }),
                 "model_repair_addendum": repair_mod.render_addendum([], texts),
                 "unresolved_material": unresolved_material,
+                "model_corrections": json.dumps(corrections),
+                **authority_extra,
             }
 
         try:
-            repaired, result, changes = repair_mod.repair_model(spec, verified)
+            repaired, result, changes = repair_mod.repair_model(
+                spec, verified, price_resolution=current_price
+            )
         except Exception as exc:  # noqa: BLE001 - repair is optional, disclosure is not
             blocking = any(c.severity == "blocking" for c in verified)
             logger.warning("Model repair did not apply: %s", exc)
             if blocking:
                 return self._repair_failed(f"a blocking challenge could not be repaired ({exc})",
-                                           "repair_failed", challenges)
+                                           "repair_failed", challenges,
+                                           corrections=corrections)
             texts = [c.proposed_correction or c.challenge_type for c in unresolved]
             return {
                 "fundamentals_challenge_check": "repair_unresolved",
@@ -1787,9 +2114,29 @@ class TradingAgentsGraph:
                 }),
                 "model_repair_addendum": repair_mod.render_addendum([], texts),
                 "unresolved_material": unresolved_material,
+                "model_corrections": json.dumps(corrections),
+                **authority_extra,
             }
 
         valuation = valuation_mod.value(result)
+        accepted_price = next(
+            (
+                challenge for challenge in verified
+                if "valuation.price" in (challenge.proposed_values or {})
+            ),
+            None,
+        )
+        if accepted_price is not None:
+            source = str(accepted_price.source_class or "").strip().upper()
+            if source not in price_authority_module.SOURCES:
+                source = price_authority_module.REPORT_PRICE
+            repaired.valuation.price_source = source
+            repaired.valuation.price_as_of = str(accepted_price.as_of or "")
+            repaired.valuation.price_ref = str(accepted_price.source_ref or "")
+        elif current_price.source:
+            repaired.valuation.price_source = current_price.source
+            repaired.valuation.price_as_of = current_price.as_of
+            repaired.valuation.price_ref = current_price.ref
         v2_path = self._models_dir() / f"{safe_ticker_component(company)}.v2.json"
         v2_path.write_text(
             json.dumps(repaired.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
@@ -1842,6 +2189,7 @@ class TradingAgentsGraph:
             market_cap_verified=cap_ok,
             eps_basis_verified=eps_ok,
             equity_basis_verified=equity_ok,
+            share_price_verified=current_price.verified,
         )
         if statuses["valuation_method_statuses"].get("ev_ebitda") != status_module.VERIFIED:
             statuses["ev_per_share_status"] = status_module.UNAVAILABLE
@@ -1916,7 +2264,15 @@ class TradingAgentsGraph:
             "research_model_source": "repaired",
             "research_package": package_v2,
             "research_package_artifact": artifact_v2,
+            "fundamental_packet": research_report.compact_summary(
+                result, valuation, instructions=False,
+                include_per_share=False, include_ev_ebitda=False, include_valuation=False,
+            ),
+            "valuation_packet": research_report.valuation_packet(result, valuation, statuses),
             "research_price": valuation.price,
+            "price_source": repaired.valuation.price_source,
+            "price_as_of": repaired.valuation.price_as_of,
+            "price_ref": repaired.valuation.price_ref,
             "research_fair_value_low": low,
             "research_fair_value_high": high,
             "research_fair_value_verified": statuses["valuation_controlling"],
@@ -1952,6 +2308,8 @@ class TradingAgentsGraph:
                 "unresolved_material": unresolved_material,
             }),
             "model_repair_addendum": addendum,
+            "model_corrections": json.dumps(corrections),
+            **authority_extra,
         }
 
     def _extract_challenges(self, llm, report_text: str, package: str) -> tuple[str, list]:
@@ -2035,7 +2393,7 @@ class TradingAgentsGraph:
                 logger.warning("Repair addendum introduced an unverified figure; using the diff")
         return repair_mod.render_addendum(changes, unresolved)
 
-    def _repair_failed(self, reason: str, stage: str, challenges=None) -> dict:
+    def _repair_failed(self, reason: str, stage: str, challenges=None, corrections=None) -> dict:
         """No usable model after a repair attempt: say so and let the run continue."""
         from tradingagents.research import repair as repair_mod
 
@@ -2078,6 +2436,7 @@ class TradingAgentsGraph:
             "case_table": "",
             "metrics_table": "",
             "model_challenges": repair_mod.to_json(list(challenges or [])),
+            "model_corrections": json.dumps(list(corrections or [])),
             # A failed repair leaves every controlling component unverified; the
             # repaired numbers stay in diagnostics only.
             "component_status": json.dumps({

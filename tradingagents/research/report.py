@@ -312,6 +312,11 @@ def compact_summary(
             + (f", {eps_text}" if eps_text else "")
         )
 
+    from . import evidence as evidence_module
+
+    lines.append("")
+    lines.append(evidence_module.benchmark_statement(spec))
+
     # Guidance is kept as a reference: the model forecasts independently, and
     # the reader (and the debate) must see both numbers with the gap between.
     if spec.guidance:
@@ -405,8 +410,15 @@ def compact_summary(
         pass
     elif include_per_share:
         lines.append("")
+        price_source = ""
+        if str(getattr(spec.valuation, "price_source", "") or "").strip():
+            price_source = f" ({spec.valuation.price_source}"
+            if str(getattr(spec.valuation, "price_as_of", "") or "").strip():
+                price_source += f", as of {spec.valuation.price_as_of}"
+            price_source += ")"
         lines.append(
-            f"Valuation: price {render.fmt(valuation.price, 0)} {spec.currency}, "
+            f"Valuation: price {render.fmt(valuation.price, 0)} {spec.currency}"
+            f"{price_source}, "
             f"{valuation.period} EPS {render.fmt(valuation.eps)} on {valuation.basis}, "
             f"P/E {render.fmt(valuation.pe, 1)}x, fair value "
             f"{render.fmt(valuation.fair_value_low, 0)}-{render.fmt(valuation.fair_value_high, 0)} "
@@ -471,8 +483,14 @@ def valuation_packet(
     methods = statuses.get("valuation_method_statuses") or {}
     lines = ["VALUATION PACKET (verified outputs only)"]
     if methods.get("pe") == "VERIFIED":
+        price_source = ""
+        if str(getattr(spec.valuation, "price_source", "") or "").strip():
+            price_source = f" ({spec.valuation.price_source}"
+            if str(getattr(spec.valuation, "price_as_of", "") or "").strip():
+                price_source += f", as of {spec.valuation.price_as_of}"
+            price_source += ")"
         lines.append(
-            f"P/E: price {render.fmt(valuation.price, 0)} {spec.currency}, "
+            f"P/E: price {render.fmt(valuation.price, 0)} {spec.currency}{price_source}, "
             f"{valuation.period} EPS {render.fmt(valuation.eps)} on {valuation.basis}, "
             f"P/E {render.fmt(valuation.pe, 1)}x, fair value "
             f"{render.fmt(valuation.fair_value_low, 0)}-"

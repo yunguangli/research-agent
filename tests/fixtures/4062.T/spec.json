@@ -1,0 +1,686 @@
+{
+  "ticker": "4062.T",
+  "company": "Ibiden Co., Ltd.",
+  "currency": "JPY",
+  "unit": "JPY_bn",
+  "fiscal_year_end_month": 3,
+  "periods": [
+    {
+      "label": "FY3/26",
+      "start": "2025-04-01",
+      "end": "2026-03-31",
+      "basis": "actual",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "FY3/27",
+      "start": "2026-04-01",
+      "end": "2027-03-31",
+      "basis": "forecast",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "FY3/28",
+      "start": "2027-04-01",
+      "end": "2028-03-31",
+      "basis": "forecast",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "FY3/29",
+      "start": "2028-04-01",
+      "end": "2029-03-31",
+      "basis": "forecast",
+      "kind": "annual",
+      "note": ""
+    },
+    {
+      "label": "Q1 FY3/27",
+      "start": "2026-04-01",
+      "end": "2026-06-30",
+      "basis": "actual",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q2 FY3/27",
+      "start": "2026-07-01",
+      "end": "2026-09-30",
+      "basis": "actual",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q1 FY3/28",
+      "start": "2027-04-01",
+      "end": "2027-06-30",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q2 FY3/28",
+      "start": "2027-07-01",
+      "end": "2027-09-30",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q3 FY3/27",
+      "start": "2026-10-01",
+      "end": "2026-12-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q3 FY3/28",
+      "start": "2027-10-01",
+      "end": "2027-12-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q4 FY3/27",
+      "start": "2027-01-01",
+      "end": "2027-03-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "Q4 FY3/28",
+      "start": "2028-01-01",
+      "end": "2028-03-31",
+      "basis": "forecast",
+      "kind": "quarter",
+      "note": ""
+    },
+    {
+      "label": "H1 FY3/27",
+      "start": "2026-04-01",
+      "end": "2026-09-30",
+      "basis": "actual",
+      "kind": "semiannual",
+      "note": ""
+    }
+  ],
+  "actuals": {
+    "FY3/26": {
+      "revenue": 416.2,
+      "operating_profit": 62.0,
+      "net_profit": 63.7
+    }
+  },
+  "guidance": {
+    "FY3/27": {
+      "revenue": 565.0,
+      "operating_profit": 133.0,
+      "ordinary_profit": 134.5,
+      "net_profit": 89.0
+    }
+  },
+  "forecast": {
+    "FY3/27": {
+      "revenue": 565.0,
+      "operating_profit": 133.0,
+      "ordinary_profit": 134.5,
+      "net_profit": 89.0
+    },
+    "FY3/28": {
+      "revenue": 665.0,
+      "operating_profit": 190.0,
+      "ordinary_profit": 191.5,
+      "net_profit": 126.9
+    },
+    "FY3/29": {
+      "revenue": 780.0,
+      "operating_profit": 225.0,
+      "ordinary_profit": 227.0,
+      "net_profit": 150.7
+    }
+  },
+  "quarterly": {
+    "Q1 FY3/27": {
+      "revenue": 123.2,
+      "operating_profit": 26.9,
+      "net_profit": 17.9
+    },
+    "Q2 FY3/27": {
+      "revenue": 139.3,
+      "operating_profit": 33.2,
+      "net_profit": 20.699999999999996
+    },
+    "Q3 FY3/27": {
+      "revenue": 145.2,
+      "operating_profit": 32.80500000000001,
+      "net_profit": 20.160000000000004
+    },
+    "Q4 FY3/27": {
+      "revenue": 157.3,
+      "operating_profit": 40.095,
+      "net_profit": 30.240000000000002
+    }
+  },
+  "quarterly_plan": {
+    "fy_label": "FY3/27",
+    "h1_label": "H1 FY3/27",
+    "q1_label": "Q1 FY3/27",
+    "h2_split": {
+      "revenue": [
+        0.48,
+        0.52
+      ],
+      "operating_profit": [
+        0.45,
+        0.55
+      ],
+      "net_profit": [
+        0.4,
+        0.6
+      ]
+    },
+    "h1_values": {
+      "revenue": 262.5,
+      "operating_profit": 60.1,
+      "net_profit": 38.599999999999994
+    }
+  },
+  "quarterly_fy": "FY3/27",
+  "h1_label": "H1 FY3/27",
+  "segments": {
+    "FY3/27": [
+      {
+        "name": "Electronics",
+        "revenue": 392.4,
+        "operating_profit": 113.8,
+        "is_adjustment": false
+      },
+      {
+        "name": "Ceramics",
+        "revenue": 100.0,
+        "operating_profit": 5.1,
+        "is_adjustment": false
+      },
+      {
+        "name": "Others",
+        "revenue": 72.6,
+        "operating_profit": 14.1,
+        "is_adjustment": false
+      }
+    ]
+  },
+  "cashflow": {
+    "FY3/27": {
+      "net_profit": 89.0,
+      "depreciation": 81.0,
+      "working_capital_change": -10.0,
+      "capex": 200.0,
+      "payout_ratio": 0.127
+    }
+  },
+  "bridges": [
+    {
+      "metric": "revenue",
+      "base_period": "H1 FY3/27",
+      "target_period": "FY3/27",
+      "base_value": 262.5,
+      "declared_total": 565.0,
+      "lines": [
+        {
+          "label": "H2 FY3/27 revenue guidance",
+          "value": 302.5,
+          "provenance": "guidance",
+          "formula": "H1 actual 262.5 + H2 guidance 302.5 = 565.0",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "paragraph 6",
+              "quote": "We forecast net sales of 302.5 billion JPY and operating income of 72.9 billion JPY"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "operating_profit",
+      "base_period": "H1 FY3/27",
+      "target_period": "FY3/27",
+      "base_value": 60.1,
+      "declared_total": 133.0,
+      "lines": [
+        {
+          "label": "H2 FY3/27 operating income guidance",
+          "value": 72.9,
+          "provenance": "guidance",
+          "formula": "H1 actual 60.1 + H2 guidance 72.9 = 133.0",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "paragraph 6",
+              "quote": "We forecast net sales of 302.5 billion JPY and operating income of 72.9 billion JPY"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "net_profit",
+      "base_period": "H1 FY3/27",
+      "target_period": "FY3/27",
+      "base_value": 38.6,
+      "declared_total": 89.0,
+      "lines": [
+        {
+          "label": "H2 FY3/27 net profit guidance",
+          "value": 50.4,
+          "provenance": "guidance",
+          "formula": "H1 actual 38.6 + H2 guidance 50.4 = 89.0",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "paragraph 6",
+              "quote": "We forecast H2 net income at 50.4 billion JPY"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "revenue",
+      "base_period": "FY3/27",
+      "target_period": "FY3/28",
+      "base_value": 565.0,
+      "declared_total": 665.0,
+      "lines": [
+        {
+          "label": "Cell 8 ramp and advanced substrate volume",
+          "value": 80.0,
+          "provenance": "derived",
+          "formula": "Base FY3/27 revenue 565.0 + incremental volume from Cell 8 ramp; Cell 8 operations start sequentially from FY2027",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-co-ltd-company-presentation-20261030",
+              "location": "page 13",
+              "quote": "Operation Start Sequentially commence operations from FY2027"
+            }
+          ]
+        },
+        {
+          "label": "AI GPU/ASIC area growth and mix",
+          "value": 30.0,
+          "provenance": "derived",
+          "formula": "Area-demand growth from larger die size and higher layer count; SAP demand index rises from 100 in CY26 toward 350 in CY30",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-co-ltd-company-presentation-20261030",
+              "location": "page 12",
+              "quote": "AI GPU AI ASIC x 1.8 x 3.0 x 5.4"
+            }
+          ]
+        },
+        {
+          "label": "Product price declines",
+          "value": -10.0,
+          "provenance": "guidance",
+          "formula": "Management's embedded price-decline assumption estimated by broker at around JPY10bn",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-brokers-views-oct-30-2026",
+              "location": "GS paragraph 1",
+              "quote": "we estimate an impact of around ¥10 bn"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "operating_profit",
+      "base_period": "FY3/27",
+      "target_period": "FY3/28",
+      "base_value": 133.0,
+      "declared_total": 190.0,
+      "lines": [
+        {
+          "label": "Incremental margin on higher advanced-substrate revenue",
+          "value": 60.0,
+          "provenance": "derived",
+          "formula": "100.0 revenue increase x approximately 60% incremental operating margin",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy2027-results-forecast",
+              "location": "paragraph 9.2",
+              "quote": "The incremental margin remains high because most incremental revenue comes from advanced Electronics products"
+            }
+          ]
+        },
+        {
+          "label": "Product price declines",
+          "value": -10.0,
+          "provenance": "guidance",
+          "formula": "Management's embedded price-decline assumption estimated by broker at around JPY10bn",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-brokers-views-oct-30-2026",
+              "location": "GS paragraph 1",
+              "quote": "we estimate an impact of around ¥10 bn"
+            }
+          ]
+        },
+        {
+          "label": "Depreciation increase",
+          "value": -9.0,
+          "provenance": "guidance",
+          "formula": "FY3/28 depreciation 90.0 less FY3/27 depreciation 81.0",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "CapEx Plan section",
+              "quote": "Regarding depreciation, it will be 81.0 billion JPY this year and 90.0 billion JPY in FY2027."
+            }
+          ]
+        },
+        {
+          "label": "Cost reduction and operating leverage",
+          "value": 16.0,
+          "provenance": "assumption",
+          "formula": "Residual to reach 190.0 after volume, price and depreciation effects",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy2027-results-forecast",
+              "location": "paragraph 3.3",
+              "quote": "Our remaining ¥15bn upside to ¥190bn comes from higher sales, stronger mix, high utilization and a measured Cell 8 contribution."
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "net_profit",
+      "base_period": "FY3/27",
+      "target_period": "FY3/28",
+      "base_value": 89.0,
+      "declared_total": 126.9,
+      "lines": [
+        {
+          "label": "After-tax operating profit increase",
+          "value": 39.9,
+          "provenance": "derived",
+          "formula": "57.0 operating-profit increase x (1 - 30% assumed tax rate)",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-co-ltd-semi-annual-tanshin",
+              "location": "page 1",
+              "quote": "Profit (loss) attributable to owners of parent 38,574"
+            }
+          ]
+        },
+        {
+          "label": "Non-operating and minority adjustment",
+          "value": -2.0,
+          "provenance": "assumption",
+          "formula": "Interest, minority and tax true-up",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-co-ltd-semi-annual-tanshin",
+              "location": "page 1",
+              "quote": "Ordinary profit 61,009"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "revenue",
+      "base_period": "FY3/28",
+      "target_period": "FY3/29",
+      "base_value": 665.0,
+      "declared_total": 780.0,
+      "lines": [
+        {
+          "label": "Cell 8 full ramp and Cell 6 initial contribution",
+          "value": 70.0,
+          "provenance": "derived",
+          "formula": "Cell 8 reaches fuller loading and Cell 6 starts sequential operations from FY2029; revenue multiple assumed around 1x investment at full run-rate",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-co-ltd-company-presentation-20261030",
+              "location": "page 13",
+              "quote": "Sequentially commence operations from FY2029"
+            },
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "paragraph 21",
+              "quote": "assuming approximately a 1x revenue-to-investment multiple is reasonable"
+            }
+          ]
+        },
+        {
+          "label": "AI GPU/ASIC area growth",
+          "value": 35.0,
+          "provenance": "derived",
+          "formula": "Continued area-demand growth from larger die sizes and layer counts",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-co-ltd-company-presentation-20261030",
+              "location": "page 12",
+              "quote": "x 1.8 x 3.0 x 5.4"
+            }
+          ]
+        },
+        {
+          "label": "Product price declines",
+          "value": -15.0,
+          "provenance": "assumption",
+          "formula": "Assumed annual price erosion on advanced substrates",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-brokers-views-oct-30-2026",
+              "location": "GS paragraph 1",
+              "quote": "factors in the same price decline assumptions as before"
+            }
+          ]
+        },
+        {
+          "label": "New capacity and mix",
+          "value": 25.0,
+          "provenance": "assumption",
+          "formula": "Residual growth from new capacity, mix and customer demand",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "paragraph 21",
+              "quote": "assuming approximately a 1x revenue-to-investment multiple is reasonable"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "operating_profit",
+      "base_period": "FY3/28",
+      "target_period": "FY3/29",
+      "base_value": 190.0,
+      "declared_total": 225.0,
+      "lines": [
+        {
+          "label": "Volume and absorption",
+          "value": 45.0,
+          "provenance": "derived",
+          "formula": "Incremental margin on 115.0 revenue increase",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy2027-results-forecast",
+              "location": "paragraph 9.2",
+              "quote": "The incremental margin remains high because most incremental revenue comes from advanced Electronics products"
+            }
+          ]
+        },
+        {
+          "label": "Product price declines",
+          "value": -15.0,
+          "provenance": "assumption",
+          "formula": "Assumed annual price erosion on advanced substrates",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-brokers-views-oct-30-2026",
+              "location": "GS paragraph 1",
+              "quote": "factors in the same price decline assumptions as before"
+            }
+          ]
+        },
+        {
+          "label": "Depreciation increase from new capacity",
+          "value": -20.0,
+          "provenance": "derived",
+          "formula": "Higher depreciation as Cell 8 and Cell 6 capacity comes online",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "CapEx Plan section",
+              "quote": "We anticipate maintaining CapEx exceeding 400.0 billion JPY annually from FY2028 onward."
+            }
+          ]
+        },
+        {
+          "label": "Mix and productivity",
+          "value": 25.0,
+          "provenance": "assumption",
+          "formula": "Residual improvement from richer mix and yield/productivity gains",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-q2-fy3-2027-result-call",
+              "location": "Market Environment & Business Outlook: Electronics",
+              "quote": "supply constraints to persist"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    },
+    {
+      "metric": "net_profit",
+      "base_period": "FY3/28",
+      "target_period": "FY3/29",
+      "base_value": 126.9,
+      "declared_total": 150.7,
+      "lines": [
+        {
+          "label": "After-tax operating profit increase",
+          "value": 23.8,
+          "provenance": "derived",
+          "formula": "35.0 operating-profit increase x (1 - 32% assumed tax rate)",
+          "cite": [
+            {
+              "document_id": "doc-4062.T-ibiden-co-ltd-semi-annual-tanshin",
+              "location": "page 1",
+              "quote": "Profit (loss) attributable to owners of parent 38,574"
+            }
+          ]
+        }
+      ],
+      "cite": []
+    }
+  ],
+  "share_bases": [
+    {
+      "name": "full_share",
+      "shares_m": 566.3,
+      "note": "",
+      "cite": []
+    },
+    {
+      "name": "market_cap",
+      "shares_m": 562.0,
+      "note": "",
+      "cite": []
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "Bear",
+      "assumptions": "Cell 8 ramps slower, price declines persist, FY3/28 OP 150bn and net profit 100bn; 28x P/E",
+      "eps": 176.6,
+      "multiple": 28.0,
+      "revenue": 620.0,
+      "operating_profit": 150.0,
+      "target_price": null,
+      "period": "FY3/28"
+    },
+    {
+      "name": "Base",
+      "assumptions": "Cell 8 ramps, around 10bn price-decline buffer reversed, FY3/28 OP 190bn and net profit 126.9bn; 35.7x P/E",
+      "eps": 224.1,
+      "multiple": 35.7,
+      "revenue": 665.0,
+      "operating_profit": 190.0,
+      "target_price": null,
+      "period": "FY3/28"
+    },
+    {
+      "name": "Bull",
+      "assumptions": "Faster Cell 8 and EMIB-T yield, stronger mix, FY3/28 OP 210bn and net profit 142bn; 38x P/E",
+      "eps": 250.8,
+      "multiple": 38.0,
+      "revenue": 700.0,
+      "operating_profit": 210.0,
+      "target_price": null,
+      "period": "FY3/28"
+    }
+  ],
+  "valuation": {
+    "price": 8045.0,
+    "fair_value_multiple_low": 28.0,
+    "fair_value_multiple_high": 38.0,
+    "fair_value_low": null,
+    "fair_value_high": null,
+    "fair_value_basis": "full_share",
+    "fair_value_period": "FY3/28",
+    "market_cap_shares_m": 562.0,
+    "sensitivity_multiples": [
+      30.0,
+      33.0,
+      35.7,
+      38.0
+    ],
+    "method_note": "FY3/28 EPS (net profit attributable divided by 566.3m full-share count) multiplied by P/E. Fair-value band 28-38x; Base 35.7x. Current price is ¥8,045. Market cap uses 562.0m outstanding shares, not the EPS share count."
+  },
+  "eps_basis": "full_share",
+  "model_version": "1.0.0",
+  "consensus": {
+    "source": "Citi broker note, consensus reference cited in Brokers' Views Oct 30 2026",
+    "eps_basis": "company_style",
+    "periods": {
+      "FY3/28": {
+        "operating_profit": 190.0
+      }
+    }
+  },
+  "warnings": [
+    "FY labels are resolved against the document date: the tanshin's FY2026 Q2 is the six months ended 30 Sep 2026 and corresponds to FY3/27 ending 31 Mar 2027; the company's FY2027 target is FY3/28; FY2030/FY3/31 is the year ending 31 Mar 2031.",
+    "FY3/26 revenue, operating profit and net profit use the vendor annual fallback for the year ended 31 Mar 2026; ordinary profit was not disclosed in the documents and is left null rather than invented.",
+    "FY3/27 forecast coincides with management guidance because the bottom-up build is H1 actual plus H2 guidance: 262.5 + 302.5 = 565.0 revenue, 60.1 + 72.9 = 133.0 operating profit and 38.6 + 50.4 = 89.0 net profit.",
+    "FY3/28 forecast differs from management guidance: we model revenue of 665.0bn and operating profit of 190.0bn versus company revenue 650.0bn and operating profit 165.0bn, reflecting reversal of the roughly 10bn price-decline buffer, stronger Cell 8/mix and higher utilization.",
+    "The H2 FY3/27 Q3/Q4 split is an assumption based on prior-year Q4 skew and management's back-end-weighted commentary: revenue 48/52, operating profit 45/55 and net profit 40/60; it is not company guidance.",
+    "Segment figures for FY3/27 are derived estimates: H1 Electronics operating profit of 50.0bn at a 29.0% margin plus management's H2 Ceramics operating-profit comment of 2.1bn; they are not a company segment disclosure.",
+    "The FY3/27 cash-flow working-capital change of -10.0bn is an assumption because the documents do not include a cash-flow statement; capex is the company's approximately 200.0bn FY3/26 plan and depreciation is the stated 81.0bn.",
+    "Market capitalisation uses 562.0m outstanding shares, while EPS uses the 566.3m full-share count implied by the FY3/27 forecast net profit of 89.0bn and EPS of 157.17.",
+    "Cell 6's additional 151bn investment starts operations sequentially from FY2029, so we assume only a small FY3/29 contribution; Cell 8 starts from FY2027 and drives the FY3/28 ramp. A ramp start is not treated as full-run-rate revenue.",
+    "Consensus is only disclosed for FY3/28 operating profit at around 190bn in the Citi reference; revenue, net profit and EPS consensus were not stated, so those fields are null.",
+    "Forecast ordinary profit is derived as operating profit plus a small non-operating adjustment; it is not separately guided.",
+    "Quarterly plan has no H1 guidance row: H1 rebuilt from reported Q1 FY3/27 + Q2 FY3/27, so the Q2 line is definitional; H2 = FY3/27 guidance - H1 still checks the reported Q3/Q4.",
+    "FY3/27 capex is 35% of revenue; check the unit (a Japanese filing's 億円 is 0.1bn, not 1bn)."
+  ]
+}

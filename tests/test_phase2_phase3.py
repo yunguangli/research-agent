@@ -133,7 +133,10 @@ def test_the_shared_component_status_reaches_the_report_header(tmp_path):
     assert "EV/EBITDA enterprise-value method: VERIFIED" in main
     assert "EV/EBITDA per-share comparison: UNVERIFIED" in main
     assert "Controlling valuation use: pe only (EV/EBITDA is a cross-check)" in main
-    assert "Reason: 7 published rows failed downstream propagation" in main
+    assert (
+        "Reason: 7 published row(s) failed downstream propagation "
+        "(non-controlling rows; controlling candidates verified)" in main
+    )
     assert "Controlling sensitivities: VERIFIED, 3 of 3 controlling candidates verified" in main
     assert "Decision-use exclusion: failed rows excluded from decision evidence" in main
     assert "Provisional reason: diagnostic run purpose" in main

@@ -181,7 +181,8 @@ def build_default_config() -> dict:
             "reit": {"operating_decline_pct": 10.0, "margin_compression_bp": 150.0},
             "software": {"operating_decline_pct": 25.0, "margin_compression_bp": 500.0},
             "commodity": {"operating_decline_pct": 35.0, "margin_compression_bp": 600.0},
-        },        # What the run is for. ``production`` may record its decision in the
+        },
+        # What the run is for. ``production`` may record its decision in the
         # memory log; ``comparison`` and ``replay`` are diagnostic: they are
         # labelled in the report and never teach later runs (a reused spec whose
         # dependencies cannot be verified must not become training feedback).

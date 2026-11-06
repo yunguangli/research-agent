@@ -139,8 +139,15 @@ def input_statuses(
     market_cap_verified: bool | None = None,
     eps_basis_verified: bool | None = None,
     equity_basis_verified: bool | None = None,
+    share_price_verified: bool | None = None,
 ) -> dict[str, VerificationStatus]:
-    """The leaf inputs this run has, as statuses the engine can consume."""
+    """The leaf inputs this run has, as statuses the engine can consume.
+
+    ``share_price_verified`` is the source-authority verdict: a price stored in
+    an old spec, or one with no recorded source, cannot verify the market
+    capitalisation. ``None`` keeps the pre-authority behaviour for callers that
+    predate the resolution.
+    """
     from .status import basis_verified
 
     verified_model = _normalise(model_status) == VERIFIED
@@ -171,7 +178,11 @@ def input_statuses(
             )
             else SUPPRESSED
         ),
-        "share_price": VERIFIED if price else UNAVAILABLE,
+        "share_price": (
+            VERIFIED
+            if price and share_price_verified is not False
+            else (UNVERIFIED if price else UNAVAILABLE)
+        ),
         "depreciation": VERIFIED if has_depreciation else UNAVAILABLE,
         "gross_debt": VERIFIED if has_net_debt else UNAVAILABLE,
         "cash": VERIFIED if has_net_debt else UNAVAILABLE,
@@ -201,6 +212,7 @@ def assess_outputs(
     market_cap_verified: bool | None = None,
     eps_basis_verified: bool | None = None,
     equity_basis_verified: bool | None = None,
+    share_price_verified: bool | None = None,
 ) -> dict[str, VerificationStatus]:
     inputs = input_statuses(
         model_status=model_status,
@@ -215,5 +227,6 @@ def assess_outputs(
         market_cap_verified=market_cap_verified,
         eps_basis_verified=eps_basis_verified,
         equity_basis_verified=equity_basis_verified,
+        share_price_verified=share_price_verified,
     )
     return propagate(inputs, blocked_outputs(challenge_fields))

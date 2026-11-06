@@ -71,11 +71,62 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
   failure), and the debate reads the v2 package plus a repair note. A structural challenge
   is recorded as unresolved; a blocking one that cannot be applied marks the model
   unavailable. `active_model_version` makes the gate idempotent.
+- Price authority (`research/price_authority.py`): every controlling price carries a source
+  class — `USER_EXPLICIT` > `VERIFIED_CLOSE` > `REPORT_PRICE` > `SPEC_PRICE` >
+  `DERIVED_FROM_MARKET_CAP`. A repair may not replace a verified analysis-date close with an
+  older report price or a value reverse-derived from market capitalisation; a same-class
+  disagreement is a conflict, never a silent pick. A user-supplied price for the current
+  analysis is recorded as `USER_OVERRIDE`, not treated as a conflict. Market capitalisation
+  is a consistency check (`price × shares`), not a price source. `price_source`,
+  `price_as_of` and `price_ref` travel on the spec and the run state.
+- Publication gate: `publication_status` is derived (`prepare_final_state`) and is `BLOCKED`
+  when a controlling price conflict remains, the decision was written against a different
+  model version, or the decision presents a repaired-away controlling figure as current. A
+  blocked report publishes a header, the reasons and the appendix, but no rating, fair
+  value or target; the decision is Not Rated / PROVISIONAL. Investor-facing sections that
+  cite a superseded controlling figure are replaced by the repair note or withheld
+  (appendix keeps the original), and the header prints the controlling price's source.
 - Fidelity checks that outrank prose: `research/periods.py` derives the canonical fiscal
   label from the period's own dates, `research/shares.py` names the share basis behind the
   market cap and the forecast EPS (and warns when they diverge), and
   `research/conflicts.py` records guidance/consensus/model disagreements at 0.5%. All three
   surface as warnings or a package table; none changes a computed number.
+- Fiscal-year labels are derived from the period's own end date, never from the company's
+  label. Write a March year-end as `FY3/2027` (or `FY3/27` — the same period; keep one form
+  within a report). Write a December year-end as the plain end year, `FY2027`. Write any
+  other month as `FY<month>/<year>` (a February year-end is `FY2/2027`). The same rule
+  applies to every fiscal-year end. Japanese companies often call the year ending
+  2027-03-31 "FY2026" (the 2026年度 convention): that label refers to our `FY3/2027`, so
+  check the period's end date rather than the company's label and use the canonical label in
+  every table, bridge and citation. The company's own label may appear in brackets on first
+  use. A label whose dates disagree is a warning that names the canonical label; it is never
+  silently accepted.
+- Corrections have a ledger (`model_corrections`): original, corrected, primary evidence,
+  affected fields and downstream outputs, with `ACCEPTED` only for a correction the kernel
+  applied, `REJECTED` when the proposed value contradicts the model, and `UNRESOLVED` for an
+  ambiguous or structural challenge (scenario basis, never a silent value). The PM receives
+  the accepted corrections in its prompt and records `decision_model_version`; MODEL_CHECK
+  fails when that differs from the controlling model.
+- Three verification checks are computed independently (`research/verification.py`) and
+  published in the report header: SOURCE_CHECK (inputs and classifications against primary
+  evidence), MODEL_CHECK (calculations reconcile and accepted corrections propagated) and
+  DECISION_CHECK (the call against every accepted correction, unresolved defect and decisive
+  sensitivity). Outcomes are PASS / PASS_WITH_QUALIFICATION / FAIL / N/A; the overall verdict
+  is the worst applicable check, never a derived average, and a non-controlling failure
+  qualifies rather than fails the report.
+- Decision relevance is classified against the call, not a universal percentage:
+  `DECISIVE` when plausible variation crosses the decision boundary (price, or the band
+  for a neutral call), `MATERIAL_SECONDARY` when it consumes at least half the margin of
+  safety without crossing, `MINOR` otherwise (`research/relevance.py`). Only DECISIVE fails
+  DECISION_CHECK; MATERIAL_SECONDARY qualifies it; MINOR is not decision evidence.
+- Material inputs carry a source class derived from the spec section, not from prose
+  (`research/evidence.py`): COMPANY_ACTUAL, COMPANY_GUIDANCE, EXTERNAL_ESTIMATE,
+  AGENT_FORECAST and AGENT_DERIVED. An agent forecast may be used as a forecast, scenario,
+  sensitivity or variance benchmark, but never described as company guidance, a company
+  commitment or verified consensus, never as mechanically derived when an assumption is
+  discretionary, and never as a company-guided beat/miss, upgrade/downgrade or catalyst
+  hurdle. The package and the report header state whether the benchmark is company-issued or
+  internally modelled; a violation is an audit finding of kind `evidence`.
 - Sensitivities (`research/sensitivity.py`): a bridge line with a `driver` and an
   `alternative` is shocked one at a time and ranked by fair-value impact; a line without
   both is a research gap, never a proxy. The ranked table is part of the research package,

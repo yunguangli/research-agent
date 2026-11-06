@@ -1,7 +1,7 @@
-"""What's new, for the person at the terminal: a newer release, and notices from Tauric Research.
+"""What's new, for the person at the terminal: a newer release.
 
 At most once a day a background thread asks GitHub for the latest release and
-the announcements server for notices, and writes the answers to a small cache.
+writes the answer to a small cache.
 The lines shown at start-up are read from that cache, so a run never waits on
 the network and news shows up on the next run. Nothing identifying is sent.
 Unattended, scripted and CI runs contact no server; set
@@ -27,8 +27,8 @@ from packaging.version import InvalidVersion, Version
 from tradingagents.dataflows.files import replace_file
 from tradingagents.default_config import _TRADINGAGENTS_HOME
 
-RELEASES_URL = "https://api.github.com/repos/TauricResearch/TradingAgents/releases/latest"
-NOTICES_URL = "https://api.tauric.ai/v1/announcements"
+RELEASES_URL = "https://api.github.com/repos/yunguangli/research-agent/releases/latest"
+NOTICES_URL = ""
 CACHE = Path(_TRADINGAGENTS_HOME) / "update_check.json"
 CHECK_EVERY = 24 * 3600
 TIMEOUT = 2.0
@@ -102,9 +102,10 @@ def refresh(now: float | None = None) -> None:
     except Exception:
         pass
     try:
-        notices = parse_notices(_get_json(NOTICES_URL))
-        if notices is not None:
-            cache["notices"] = notices
+        if NOTICES_URL:
+            notices = parse_notices(_get_json(NOTICES_URL))
+            if notices is not None:
+                cache["notices"] = notices
     except Exception:
         pass
     try:

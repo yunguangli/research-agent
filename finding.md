@@ -1,35 +1,45 @@
 # TradingAgents — architecture, workflow and code review
 
-Reviewed: `6630404` (working tree), 2026-11-03.
-Evidence run: `C:\Users\yunguang\.tradingagents\logs\reports\4062.T_20261103_135144`
-(produced by this tree). Corpus: `...\YL P Drive\Ibiden`.
-Prior review artifacts in `review\4062.T_20261102\` were read for context only; findings
-below are re-verified against the current code.
+Reviewed: `e1e4fda` plus 34 uncommitted modified files (+1,132/−1,000), 2026-11-06.
+The working tree carries a new verification layer, a correction ledger and two
+decision-postprocessing gates, so this review covers the working tree, not only the tag.
 
-Method: read the graph, agents and reporting paths directly; reproduced the arithmetic
-and regex bugs with short scripts; re-read the run's report, audit, decision and `run.log`
-to confirm which paths actually fired. `ruff check .` is clean, so nothing here is lint.
+Method: read the graph, agents, research and reporting paths directly; reproduced the
+arithmetic, regex and postprocessing defects with short scripts; verified every router return
+value and every renderer against the parser that consumes it. `ruff check .` is clean, so
+nothing here is lint. The full suite was run: 2,092 passed, 5 failed, 9 skipped, 2 deselected.
+All five failures are POSIX assumptions in tests running on Windows (§11); none is a product
+defect.
 
-> **Status (implemented in this tree).** Every defect A1–A13 below is fixed, and the
-> model-truth layer, repair gate, dual audit and prompt changes are in place. See §12 for
-> what changed, how it is tested, and what is deliberately left out.
+Severity: **H** = wrong output or wrong recorded decision; **M** = quality loss or silent
+degradation; **L** = cosmetic, diagnostic, or latent.
 
 ---
 
 ## 1. What the system is
 
-A LangGraph multi-agent equity-research pipeline. Four analysts gather evidence in
-parallel, an adversarial reviewer challenges it, a Research Manager sets a plan, a Trader
-converts it into an action, three risk analysts debate it, and a Portfolio Manager issues
-the controlling decision. Reports are written as a sectioned markdown tree plus a
-self-contained HTML page.
+A LangGraph multi-agent equity-research pipeline. Four analysts gather evidence in parallel,
+an adversarial reviewer challenges it, a Research Manager sets a plan, a Trader converts it
+into an action, three risk analysts debate it, and a Portfolio Manager issues the controlling
+decision. Reports are written as a sectioned markdown tree plus a self-contained HTML page.
 
 Two packages: `tradingagents/` (library) and `cli/` (Typer + Rich).
 
+| Layer | Modules | Lines |
+|---|---|---|
+| `agents/` | 28 | ~6,250 |
+| `dataflows/` | 41 | ~5,300 |
+| `research/` | 34 | ~10,000 |
+| `graph/` | 7 | ~2,700 |
+| `llm_clients/` | 13 | ~1,500 |
+| `memory/` | 4 | ~550 |
+
 An opt-in deterministic layer sits on top of the LLM debate: with
-`TRADINGAGENTS_RESEARCH_DIR` set, a validated fundamental model (periods, bridges,
-valuation, scenarios) is built from the local corpus, then every agent that decides sees
-that model, and a number audit checks the figures the agents marked as the model's.
+`TRADINGAGENTS_RESEARCH_DIR` set, a validated fundamental model (periods, bridges, valuation,
+scenarios) is built from the local corpus, then every agent that decides sees that model, and
+a number audit checks the figures the agents marked as the model's. The working tree adds a
+three-check verification result, a correction ledger, and source-class policing of forecast
+claims on top of it.
 
 ---
 
@@ -42,19 +52,19 @@ cli/main.py                      parse flags, --price -> TRADINGAGENTS_MODEL_PRI
     TradingAgentsGraph.__init__  set_config, two LLM clients, memory log, GraphSetup, compile
     GraphSetup.setup_graph       one StateGraph; analyst subgraphs built per selected key
       .stream(...)               node-by-node events -> cli/display.py
-    prepare_final_state          case table -> audit -> repair -> conflicts -> stage status
+    prepare_final_state          case table -> audit -> repair -> conflicts -> verification -> stage
     record_decision              append to the memory log (production runs only)
     save_reports                 reporting.write_report_tree (+ HTML)
 ```
 
-`TradingAgentsGraph.propagate()` is the library equivalent and runs the same four steps;
-the CLI drives `stream_run()` and calls them itself so it can display progress.
+`TradingAgentsGraph.propagate()` is the library equivalent and runs the same four steps; the
+CLI drives `stream_run()` and calls them itself so it can display progress.
 
 ---
 
 ## 3. The graph
 
-`graph/setup.py:113-200`.
+`graph/setup.py:165-213`.
 
 ```
 START ─┬─ Market Analyst ───────┐
@@ -78,35 +88,38 @@ Each selected analyst is compiled as its **own** `StateGraph` (`setup.py:53-94`)
 - `START → agent`, `agent → tools | END`, `tools → agent | wrap_up`;
 - `output_schema` is a one-field TypedDict, so the subgraph returns only its report key.
 
-Consequences: analysts never see each other's messages, never write the same state key, and
-a model that keeps calling tools is cut off after `max_tool_rounds` and told to write
-(`WRAP_UP`, `agents/analysts/turn.py:7-27`). The wrap-up turn binds no tools and converts
-the history's tool calls/results into plain text first, so a provider that rejects an
-orphaned tool history still answers.
+Consequences: analysts never see each other's messages, never write the same state key, and a
+model that keeps calling tools is cut off after `max_tool_rounds` and told to write
+(`WRAP_UP`, `agents/analysts/turn.py:7-27`). The wrap-up turn binds no tools and converts the
+history's tool calls/results into plain text first, so a provider that rejects an orphaned
+tool history still answers.
 
 | Analyst (state key) | Node label | Tools | Model tier |
 |---|---|---|---|
 | `market` (`market_report`) | Market Analyst | `get_stock_data`, `get_indicators`, `get_verified_market_snapshot` | quick |
 | `social` (`sentiment_report`) | Sentiment Analyst | none — news + StockTwits + Reddit are prefetched into the prompt | quick |
 | `news` (`news_report`) | News Analyst | `get_news`, `get_global_news`, `get_macro_indicators` | quick |
-| `fundamentals` (`fundamentals_report`) | Fundamentals Analyst | statements, news, insider, plus `CORPUS_TOOLS` only when a corpus is configured | quick |
+| `fundamentals` (`fundamentals_report`) | Fundamentals Analyst | statements, insider, plus `CORPUS_TOOLS` only when a corpus is configured | quick |
 
 The analyst key is `social`; the report name is `sentiment`
 (`reporting.analyst_names()`). Saved configs and the state use `social`.
 
 ### 3.2 Adversarial Reviewer (the debate)
 
-Replaces the older bull/bear pair (`agents/researchers/adversarial_reviewer.py`).
+`agents/researchers/adversarial_reviewer.py`.
 
-- **Round 1** uses `TEMPLATE` (`:52-164`): a nine-heading Markdown contract (bull case, bear
-  case, what each fails to explain, decisive disagreement, resolving evidence, strongest
-  opposing argument, rebuttal/concession, confidence) plus two JSON case objects capped at
-  ±5% revenue/operating profit and ±20% multiple (`research/cases.py`).
-- **Round 2+** uses `DELTA_TEMPLATE` (`:167-195`): "report only what changed", or the literal
-  `NO MATERIAL UPDATE`, which ends the loop early (`conditional_logic.py:12-23`).
+- **Round 1** uses `TEMPLATE`: a nine-heading Markdown contract (bull case, bear case, what
+  each fails to explain, decisive disagreement, resolving evidence, strongest opposing
+  argument, rebuttal/concession, confidence), a `Decisive sensitivity ID` line, and two JSON
+  case objects capped at ±25% revenue/operating profit and ±20% multiple
+  (`research/cases.py`).
+- **Round 2+** uses `DELTA_TEMPLATE` (and `delta.py`): "report only what changed", or the
+  literal `NO MATERIAL UPDATE`, which ends the loop early (`conditional_logic.py:19-20`).
 - Missing sections trigger **one repair pass that only asks for the missing headings**
-  (`merge_sections`, `:281-319`): the raw answer is never replaced, only completed. Missing
-  rebuttal triggers a second focused retry (`:409-416`).
+  (`merge_sections`): the raw answer is never replaced, only completed. Missing rebuttal
+  triggers a second focused retry.
+- The decisive sensitivity ID is validated against the ranked IDs in state; a missing or
+  unrecognised one gets one retry, then `not established`.
 - `first_review` / `first_review_raw` / `last_review` are kept separately so the report can
   show "Round 1" and a later material update without losing what was first written.
 
@@ -117,13 +130,13 @@ crash LangGraph with a missing path.
 ### 3.3 Research Manager and Trader
 
 - **Research Manager** (`agents/managers/research_manager.py`): structured `ResearchPlan` →
-  `ResearchPlanMinimal` → free text. Enforces the no-benchmark rule: `Overweight` /
+  retry → `ResearchPlanMinimal` → free text. Enforces the no-benchmark rule: `Overweight` /
   `Underweight` are relative ratings and are rewritten to `Hold` plus an explicit absolute
-  view when no benchmark is configured (`:115-126`).
-- **Trader** (`agents/trader/trader.py`): structured `TraderProposal` → free text; receives
-  the technical market report so entry/stop levels are grounded in price structure. With no
-  portfolio or an unverified model it clears sizing/entry/stop, downgrades `Buy` to `Hold`,
-  and scrubs any execution levels the free text invented (`:112-147`).
+  view when no benchmark is configured.
+- **Trader** (`agents/trader/trader.py`): structured `TraderProposal` → retry → free text;
+  receives the technical market report so entry/stop levels are grounded in price structure.
+  With no portfolio or an unverified model it clears sizing/entry/stop, downgrades `Buy` to
+  `Hold`, and scrubs any execution levels the free text invented.
 
 ### 3.4 Risk loop
 
@@ -132,21 +145,27 @@ Three fixed personas (`agents/risk_mgmt/*.py`) alternate
 (`conditional_logic.py:25-35`). Each gets the others' latest arguments through
 `opponent_argument_or_opening`, which substitutes an explicit "has not spoken yet" marker
 instead of an empty string — an empty string used to make the model invent the opponent's
-position.
+position. Each module is ~93 lines and differs mainly in role constant and prompt text.
 
 ### 3.5 Portfolio Manager
 
-`agents/managers/portfolio_manager.py`. Structured `PortfolioDecision` → `PortfolioDecisionMinimal`
-→ free text. The typed object is the decision; the markdown is its rendering, so a rating
-quoted in the thesis cannot replace the actual call.
+`agents/managers/portfolio_manager.py` (1,697 lines). Structured `PortfolioDecision` → retry →
+`PortfolioDecisionMinimal` → free text. The typed object is the decision; the markdown is its
+rendering, so a rating quoted in the thesis cannot replace the actual call.
 
 It also:
-- backfills `time_horizon` from the run's decision horizon (`:430-432`);
-- backfills a missing fair-value range from the research package (`:433-440`, see finding B2);
-- clears valuation fields and forces `confidence = Low` when the model is unavailable
-  (`:441-449`);
-- rewrites `Overweight`/`Underweight` to `Hold` without a benchmark (`:472-482`);
-- runs the sizing gate when there is no portfolio (`:456-461`).
+
+- stores the verified model's fair-value band on state and prefers it over parsing prose;
+- backfills `time_horizon` from the run's decision horizon;
+- clears valuation fields and forces `confidence = Low` when the model is unavailable;
+- rewrites `Overweight`/`Underweight` to `Hold` without a benchmark;
+- runs the sizing gate when there is no portfolio;
+- detects a contradictory entry condition (`agents/resolution.py`) and a reconstructed P/E;
+- renders the decision framework table with explicit `not provided` cells
+  (`agents/schemas.py:423-517`);
+- (working tree) removes rejected-scenario outputs from the decision text
+  (`_enforce_rejected_outputs`) and gates a technical trigger above base fair value
+  (`_technical_trigger_gate`). Both run after `decision_audit.assess` — see F15–F17.
 
 ---
 
@@ -155,30 +174,31 @@ It also:
 ### 4.1 Two tiers
 
 `llm_clients/factory.create_tier_client(config, "quick"|"deep")`. Quick serves analysts,
-the reviewer, debaters and trader; deep serves Research Manager and Portfolio Manager.
-Each tier may name its own provider and endpoint (`deep_think_provider`, `quick_think_provider`).
+the reviewer, debaters and trader; deep serves Research Manager and Portfolio Manager. Each
+tier may name its own provider and endpoint (`deep_think_provider`, `quick_think_provider`).
 
 ### 4.2 Structured-output ladder
 
-`agents/structured.py:42-107`:
+`agents/structured.py`:
 
 1. `bind_structured(llm, Schema, name)` at agent creation — skipped if the provider has no
    structured output.
 2. `invoke_structured(...)` at call time; any failure records `status["reason"]` and returns
    `None`.
-3. The agent then tries a **minimal schema** (rating + summary only), then free text.
+3. The agent retries the **full** schema once with `STRUCTURED_RETRY` ("call the tool, do not
+   answer in prose"), then tries a **minimal schema** (rating + summary only), then free text.
 4. `invoke_structured_or_freetext` is the sentiment analyst's version.
 
-Failures are reported, not hidden: the agent returns `structured_fallbacks`, which merge
-into state (`agents/state.py:7-9`) and reach the header
-(`- Structured output: …`, `reporting.py:113-121`) and `decision_integrity`.
+Failures are reported, not hidden: the agent returns `structured_fallbacks`, which merge into
+state (`agents/state.py`) and reach the header (`- Structured output: …`) and
+`decision_integrity`.
 
 ### 4.3 Prompt assembly
 
-- `agents/context.py` owns the shared blocks: `instrument_context`, the verified-model
-  block (`research_package_block`, `:265-282`), `FIGURE_MARKER_RULE` (`:227-241`),
-  `COMPARATIVE_CLAIM_RULE` (`:243-254`), `SIZING_RULE`, `case_block`, `evidence_pack`,
-  `report_or_absent`, `get_language_instruction`.
+- `agents/context.py` owns the shared blocks: `instrument_context`, the verified-model block
+  (`research_package_block`), `FIGURE_MARKER_RULE`, `COMPARATIVE_CLAIM_RULE`, `SIZING_RULE`,
+  `EVIDENCE_DISCIPLINE`, `case_availability`, `case_block`, `corrections_block`,
+  `evidence_pack`, `report_or_absent`, `get_language_instruction`.
 - The model figures are marked `[[229.5]]` by the agents that quote them; `reporting` strips
   the brackets once for the published tree.
 - `NO_EXTERNAL_TOOLS` is appended wherever structured output binds exactly one tool, because
@@ -186,42 +206,103 @@ into state (`agents/state.py:7-9`) and reach the header
 
 ### 4.4 Language
 
-`get_language_instruction()` is appended to every report-producing agent; the labelled
-lines (`**Rating**:`) stay English so the parsers keep working.
+`get_language_instruction()` is appended to every report-producing agent; the labelled lines
+(`**Rating**:`) stay English so the parsers keep working.
 
 ---
 
-## 5. Deterministic research model (opt-in)
+## 5. The deterministic layer
 
-`TRADINGAGENTS_RESEARCH_DIR` enables it; unset, behaviour is unchanged.
+This is the strongest part of the design: Python decides what a model's words are allowed to
+mean. It has grown into seven gates plus the working tree's verification and ledger.
 
-```
-corpus manifest -> filing parser (Japanese tanshin, optional) -> filing facts
-   -> vendor annual/quarterly statement (fallback evidence)
-   -> builder.py: the LLM returns one JSON spec
-   -> kernel.py: validates every identity (bridges sum, margins recompute, EPS divides);
-                 a failing spec is handed back once, then rejected
-   -> compact_summary (prompt text) + compact_summary(instructions=False) (published artifact)
-   -> agents -> audit.py checks marked figures against the model
-   -> cases.py recomputes the reviewer's bull/bear deltas on the model
-   -> valuation.py sets fair value / scenarios / sensitivity
-```
+### 5.1 Model build and repair
 
-Provenance: a built spec gets a `.meta.json`; a reused spec is checked as
-`compatible` / `unknown` / `incompatible` (`research/provenance.py`). A production run
-rebuilds rather than publish numbers it cannot verify. A rejected spec is reported as
-`MODEL UNAVAILABLE` in the header, never silently dropped.
+`corpus manifest → filing parser → filing facts → vendor statements → builder (one JSON spec)
+→ kernel (every identity recomputed) → package + provenance`. A failing spec is handed back
+once, then rejected; a rejected spec is reported as `MODEL UNAVAILABLE`, never silently
+dropped.
 
-The audit (`research/audit.py`) has four families, deliberately different in kind:
+The repair gate runs at the **entry of the existing Adversarial Reviewer node**
+(`setup.py:145-156`), so the graph keeps its nodes and checkpoint topology. It mines the
+Fundamentals report for explicit model defects, applies scalar corrections to a copy of the
+spec, revalidates through the kernel, and writes a v2 spec (`<TICKER>.v2.json`). It is
+idempotent via `active_model_version`. A blocking challenge that cannot be applied marks the
+model unavailable; the existing degradation path takes over.
 
-- **figures** — only `[[marked]]` values, checked against the model (provenance-based);
-- **relations** — "38.6 already exceeds 63.7" checked against the operands printed in the
-  same sentence, or an explicit model period label; one LLM repair pass, accepted only if
-  the rewrite passes the same check;
-- **percentages** — "the 50 SMA sits 20.9% above price" recomputed against the run price,
-  with a deterministic fixer before any model repair;
-- **grounding / terminology** — warnings: an untagged numeric sentence in the review, a
-  growth rate labelled an incremental margin.
+### 5.2 Technical evidence
+
+`research/technical.py`. The Market Analyst appends a `TECHNICAL_EVIDENCE:` JSON array of
+items with stable IDs (`tech_close_below_50sma`, `tech_macd_negative`, …), two compared
+values, a direction, a timeframe and source refs. Each item verifies only when its own
+numbers support its direction and its ID belongs to the catalogue. The block is stripped from
+the report; only verified IDs reach the PM, and the audit rejects a technical claim the
+analyst did not verify.
+
+### 5.3 Packets and output statuses
+
+`research/packets.py` builds purpose-specific decision inputs. When the model is unverified,
+`filter_decision_inputs` removes every model-derived field rather than annotating it, and the
+PM's answer is scanned for a reconstructed P/E; a second violation invalidates the
+controlling decision instead of scrubbing a sentence. `research/dependencies.py` derives each
+output's status from its declared inputs, so an unverified EPS basis suppresses P/E and
+per-share targets while EV/EBITDA stays usable.
+
+### 5.4 Sensitivities and cases
+
+`research/sensitivity.py` shocks one bridge line at a time and propagates the shock through
+every later period (bridges rebased, forecast rows carried, revenue shocks as an explicit
+pass-through line), then ranks by fair-value impact. Items carry stable IDs, the valuation
+method and a verification status; a shock that cannot propagate is a named failure, never a
+zero. The reviewer must cite a `Decisive sensitivity ID` from that table.
+
+`research/cases.py` recomputes each debate case as a delta chain (operating profit → pretax →
+tax → net income → EPS → value) and rejects a case whose figures do not reconcile. Caps are
+±25% on revenue/operating profit and ±20% on the multiple.
+
+### 5.5 Audits
+
+`research/audit.py` checks only figures an agent marked as the model's (`[[229.5]]`);
+`reporting` strips the marks. It deliberately does not infer over unmarked prose — that
+produced more false findings than real ones. The relational check verifies a comparative
+claim only against operands printed in the same sentence, or an explicit model period label,
+with one LLM repair pass that must pass the same check.
+
+The percentage audit searches the text **before** the claim for the indicator level, so a
+claim that quotes another analyst's percentage cannot be read as its own operand
+(`audit.py:752`). The figure audit is provenance-based, not inference-based.
+
+### 5.6 Decision audit and publication
+
+A directional call without a verified valuation must pass `research/decision_audit.py`:
+zero suppressed figures, three independent evidence clusters, a cash-flow/balance-sheet/event
+or severe-operating leg, two primary disclosures, and stated horizon/confirmation/
+invalidation. Failure normalises Sell → Reduce/Hold and marks the decision provisional.
+
+`complete_report.md` is the investor report and is capped at `MAX_MAIN_WORDS = 5000`; the
+full analyst reports, debate transcript, model diagnostics, audit findings, retry logs,
+conflicts and rejected scenarios live in `appendix.md`. Sections are budgeted, never cut
+mid-sentence.
+
+### 5.7 Corrections and verification (working tree)
+
+- `trading_graph._correction_records` turns every extracted challenge into a ledger record:
+  original value from v1, corrected value, evidence refs, affected fields, downstream
+  outputs and `ACCEPTED` / `REJECTED` / `UNRESOLVED`. The PM receives the accepted rows as
+  text (`context.corrections_block`) as well as through the model.
+- `research/verification.py` computes SOURCE_CHECK, MODEL_CHECK and DECISION_CHECK from
+  disjoint argument groups; `trading_graph._derive_verification` assembles them and publishes
+  the worst applicable outcome in the header (`reporting.py:310-318`).
+- The intended behaviour matches `AGENTS.md`. The wiring does not: DECISION_CHECK is handed
+  an empty sensitivity list on every run (F14).
+
+### 5.8 Source classes (working tree)
+
+`research/evidence.py` classifies every material input as `COMPANY_ACTUAL`,
+`COMPANY_GUIDANCE`, `AGENT_FORECAST`, `EXTERNAL_ESTIMATE` or `AGENT_DERIVED` from the spec
+section, and `claim_findings` flags a forecast presented as company guidance or as a
+company-guided hurdle. `benchmark_statement` publishes which benchmark the run used. The
+rewrite that precedes the audit is silent (F16).
 
 ---
 
@@ -231,14 +312,15 @@ The audit (`research/audit.py`) has four families, deliberately different in kin
 
 - The configured vendor string **is** the chain (comma-separated = ordered fallback); no
   silent fallback to a vendor the user did not choose. `"default"` means all vendors that
-  implement the method (`router.py:238-263`).
+  implement the method.
 - Failures: `VendorUnavailableError` / `VendorNotConfiguredError` / `NoMarketDataError` are
   turned into explicit `DATA_UNAVAILABLE` / `NO_DATA_AVAILABLE` sentinels with instructions
   not to fabricate; optional categories (macro, prediction markets) degrade instead of
-  aborting a core call (`router.py:299-335`).
+  aborting a core call.
 - Point-in-time: every dated tool takes `trade_date` from state via `InjectedState` and
   clamps through `dataflows/date_window.py`. Present-day-only vendor snapshots are withheld
-  from historical runs.
+  from historical runs. `read_research_document` carries the same clamp as list and search
+  (`agents/tools.py:269-291`, `as_of=trade_date`).
 
 ---
 
@@ -247,8 +329,8 @@ The audit (`research/audit.py`) has four families, deliberately different in kin
 `memory/log.py` — an append-only markdown file of decisions and, after settlement, their
 outcome (realized return, alpha, reflection).
 
-- The `Memory Log` node runs **alongside** the analysts (`trading_graph.py:1028-1055`):
-  settles every ticker's due decisions, then reads the past context known by the trade date.
+- The `Memory Log` node runs **alongside** the analysts: it settles every ticker's due
+  decisions, then reads the past context known by the trade date.
 - Only the Portfolio Manager consumes `past_context`.
 - A failure there does not end the run; `memory_note` says what could not be settled.
 - Diagnostic runs (`run_purpose != production`) do not write decisions.
@@ -257,803 +339,424 @@ outcome (realized return, alpha, reflection).
 
 ## 8. Reporting and CLI
 
-`reporting.write_report_tree` (`reporting.py:214-266`) writes:
+`reporting.write_report_tree` writes:
 
-- the investor-facing sections to `complete_report.md` and their own files;
-- the debate transcript, number audit and case table to `appendix.md`;
-- `complete_report.html` when asked (`report_html.render_report`) — a self-contained page
-  with inline CSS, no scripts, raw HTML and images disabled.
+- the investor-facing sections to `complete_report.md` and their own files
+  (`1_analysts/`, `1b_research/`, `1c_audit/`, `1d_cases/`, `1e_metrics/`, `2_research/`,
+  `3_trading/`, `4_risk/`, `5_portfolio/`);
+- the uncut analyst reports, debate transcript, number audit, cases and repair note to
+  `appendix.md`;
+- `complete_report.html` when asked — a self-contained page with inline CSS, no scripts, raw
+  HTML and images disabled, and a content-security policy.
 
-The header (`reporting.py:20-122`) states analysis date, rating (with `(provisional)` when
-the decision is degraded), version/providers/models, analysts, rounds actually used,
-horizon, vendors, research-model provenance, run authority, decision integrity, stage
-status, controlling decision, and every structured fallback.
+The header states analysis date, rating (with `(provisional)` when degraded), version/
+providers/models, analysts, rounds actually used, horizon, vendors, research-model
+provenance, run authority, decision integrity, stage status, controlling decision, the
+benchmark basis, every per-check verification outcome, and every structured fallback.
 
-The CLI's own `<results_dir>/<ticker>/<date>/reports/*.md` writer
-(`cli/run.py:204-217`) is a second, independent report tree — see finding B13.
+The CLI writes a second report tree under `<results_dir>/<ticker>/<date>/reports/*.md`; it
+strips the `[[…]]` audit marks like the published tree (`cli/run.py:224-234`).
 
 ---
 
 ## 9. Findings
 
-Severity: **H** = wrong output or wrong recorded decision; **M** = quality loss or silent
-degradation; **L** = cosmetic/diagnostic.
+### A. Verification and decision postprocessing (working-tree additions)
 
-### A. Bugs
+#### F14 (H) — DECISION_CHECK never sees a ranked sensitivity
 
-#### A1 (H) — The percentage audit mis-reads its own target sentence
-
-`research/audit.py:492-548`.
-
-`_PCT_LEVEL` is `\b(?:SMA|EMA|VWMA|moving average|average)\b[^\d]{0,16}(\d[\d,]*(?:\.\d+)?)`.
-`[^\d]{0,16}` happily spans the words between the indicator name and the **percentage in the
-claim itself**, so the percentage becomes the "level".
-
-Reproduced on the sentence the 13:51 run actually published:
-
-```
-sentence: "You say the 200 SMA is only 3.4% below spot and was pierced intraday to 7,695, ..."
-level   : 3.4      (the claim's own percentage)
-price   : 8,045
-expected: -100.0%  -> finding
-```
-
-This is the only audit failure in that run (`1c_audit/numbers.md`), and it is false: 3.4 is
-the distance, not a level. The docstring at `:505-509` claims the sentence "must name the
-indicator and its level"; the code never checks that a level was printed.
-
-Effect: a false finding on every run that quotes another analyst's percentage; it triggers
-the LLM repair pass and survives into the appendix (verified in `appendix.md` of 13:51).
-
-Fix: exclude the claim span and require a real price scale: add `(?!\s*%)` after the level
-group, and skip a candidate whose span overlaps the claim. Add a test with the quoted
-sentence — the existing tests only cover the "50-day SMA 10,168.07 … 20.9% above price"
-shape.
-
-#### A2 (H) — The Portfolio Manager's fair-value backfill cannot match the package it reads
-
-`agents/managers/portfolio_manager.py:346-362` vs `research/report.py:31` and `:151-292`.
-
-`_FAIR_VALUE_RANGE` looks for `Fair-value range: 6,304-9,246`. That line exists only in
-`report._header`, the **full research report**. The state key the PM reads is
-`research_package`, which is `compact_summary(...)` and prints:
-
-```
-Valuation: price 8,045 JPY, FY3/28 EPS 229.6 on full_share, P/E 35.0x, fair value 6,428-9,642 JPY.
-```
-
-Reproduced:
-
-```
-real package   -> (None, None)
-test fixture   -> (6304.0, 9246.0)
-```
-
-The test (`tests/test_structured_agents.py:829-868`) feeds the hand-written
-`"- Fair-value range: 6,304-9,246 JPY"`, a string the application never produces. So the
-PHASE11 §4 fix ("the range is read from the model's printed `Fair-value range` line") is not
-wired: when the minimal schema omits the range, the decision still prints
-`**Price Target**: not provided` beside a verified model that has one.
-
-Fix: match the renderer's actual line (`fair value`, case-insensitive, optional
-`range:`/hyphen), or better, carry `fair_value_low/base/high` on the state when the package
-is built instead of re-parsing prose. Build the test from `compact_summary` output.
-
-#### A3 (H) — `read_research_document` has no point-in-time guard
-
-`agents/tools.py:268-290`, `dataflows/vendors/research_corpus/store.py:203-238,341-348`.
-
-`list_research_documents` and `search_research_documents` both take `trade_date` and clamp;
-`read_research_document` takes only `document_id`, `ticker`, `max_chars`. The listing prints
-withheld documents' `storage_path` (`store.py:329-332`) and ids are derived from the
-filename (`manifest.py:186-188`), so the id of a document published after the run date is
-both visible and guessable.
-
-Effect: a historical run can read a post-cutoff filing in full. That is the one leak every
-other dated path in `dataflows/` is built to prevent.
-
-Fix: add `trade_date: InjectedState("trade_date")` to the tool, pass it into
-`read_document(..., as_of=...)`, and refuse (same sentinel shape as the search tool) when
-`published_at` is later. Add a lookahead test mirroring the existing corpus tests.
-
-#### A4 (H) — `TRADINGAGENTS_RUN_PURPOSE` is ignored by the CLI
-
-`cli/run.py:144`, `cli/main.py:77-81`.
+`graph/trading_graph.py:841`, `:349`, `:1381`.
 
 ```python
-config["run_purpose"] = str(flags.get("run_purpose") or "production").strip().lower()
+sensitivities = _json(final_state.get("sensitivity_items"), [])
 ```
 
-The typer option defaults to `"production"`, so `flags["run_purpose"]` is never falsy and
-the `or` never fires. `_build_run_config` copied `DEFAULT_CONFIG`, which had already folded
-in `TRADINGAGENTS_RUN_PURPOSE` (`default_config.py:22`) — and this line overwrites it.
+`sensitivity_items` is not a state key and nothing ever writes it. The ranked table lives on
+`self._sensitivity_items` (`:349`, set at `:1381`) and is passed to the number audit directly
+(`:1044`, `:1063`). So `verification.decision_check` always receives `sensitivities=[]`, and
+the loop that returns `FAIL` on a `DECISIVE` item (`research/verification.py:273-296`) never
+runs in production.
 
-Effect: `TRADINGAGENTS_RUN_PURPOSE=comparison` alone does nothing. The run is recorded as a
-production decision in the memory log and loses the "Authority: diagnostic" header. The
-harnesses under `review\4062.T_20261102\arm-*\run.ps1` set both the variable and the flag,
-which is why it was not noticed.
+Effect: the header can publish `DECISION_CHECK PASS` while the top-ranked shock crosses the
+price or the neutral band. That is the exact failure `AGENTS.md` says the check exists to
+catch ("Only DECISIVE fails DECISION_CHECK"). `tests/test_verification_checks.py` calls
+`decision_check(sensitivities=...)` directly, so the wiring gap is invisible.
 
-Fix: make the option default `None` and fall back to `config.get("run_purpose")`; or only
-write the line when the flag differs from its default.
+Fix: write the items to state once (or pass `getattr(self, "_sensitivity_items", [])`, the
+pattern the audit already uses) and add a run-level test where a DECISIVE item must yield
+`FAIL`.
 
-#### A5 (M) — Structured output is best-effort on the default thinking model
+#### F15 (M) — rejected-scenario cleanup deletes verified sentences by substring
 
-`llm_clients/capabilities.py:54-60`, `llm_clients/openai_client.py:41-54`.
+`agents/managers/portfolio_manager.py:758-850`.
 
-DeepSeek thinking models get `supports_tool_choice = False`, so
-`with_structured_output(method="function_calling")` is called with `tool_choice=None`. The
-schema is bound as a tool but **not forced**, so the model may answer in prose. LangChain
-then returns no parsed object and `invoke_structured` records
-"structured output returned no parsed result" (`structured.py:79-83`).
+`_drop_sentences` removes any sentence containing a token; the tokens include the scenario
+percentage as a bare number (`-30%` contributes `-30%`, `-30` and `30%`) and the target as
+printed plus its ungrouped form. The test is plain substring containment (`t in s`), not a
+whole-token match.
 
-Evidence from the 13:51 run (`run.log`):
+Reproduced with a rejected bear case at `-30%` on base 7,400 (target 5,180), token set
+`{"5,180", "5180", "-30%", "-30", "30%"}`:
 
 ```
-13:44:49  Research Manager: structured-output invocation failed (… returned no parsed result)
-13:51:17  Portfolio Manager: structured-output invocation failed (… returned no parsed result)
+input : The model carries a 30% incremental margin. Verified band 5,180-9,246 with base
+        7,400. Cash flow covers the dividend.
+output: Cash flow covers the dividend.
 ```
 
-Both retried on the minimal schema, which succeeded; the report therefore has no typed
-`fundamental_view`, `valuation_view`, `technical_timing`, `new_investor_action`,
-`existing_holder_action` or `confidence`, and `render_pm_decision` **omits the whole
-Decision framework table** when every field is `None` (`schemas.py:424-475`). A reader
-cannot tell "not assessed" from "not reported" — the 13:51 `decision.md` has no table at
-all.
+The margin sentence is dropped because it states the same percentage as the rejected case; the
+band sentence is dropped because it quotes the rejected target. The ungrouped token also
+collides with longer figures:
 
-Fix, in order of value:
+```
+tokens {"5,180", "5180", ...}
+input : Consensus revenue is 15,180 million. Operating margin is 18%.
+output: Operating margin is 18%.
+```
 
-1. Retry the **full** schema once with an explicit "you must call the tool, do not answer in
-   prose" instruction before dropping to the minimal schema. The failure is a sampling
-   miss, not a capability gap.
-2. Render the framework table with explicit `not provided` cells instead of omitting it.
-3. For thinking models, consider `json_mode` + the schema in the prompt as
-   `preferred_structured_method`; the capability table already models that choice.
+The executive summary and investment thesis therefore lose verified content while the appended
+note tells the reader that only rejected outputs were removed.
 
-#### A6 (M) — `--price` is rounded before it reaches the valuation
+Fix: compare whole numeric tokens (regex boundaries or numeric equality), remove the clause
+that names the rejected scenario, and never drop a sentence merely because it repeats the
+rejected case's percentage.
 
-`cli/main.py:109-110`: `os.environ["TRADINGAGENTS_MODEL_PRICE"] = f"{price:g}"`.
+#### F16 (M) — a forecast relabelled as company guidance is rewritten silently
 
-`%g` keeps six significant digits: `1234.5678 → 1234.57`, `1234567 → 1.23457e+06 →
-1234570.0`. The override is also not echoed in the header, so the substitution is
-undetectable after the run.
+`graph/trading_graph.py:1030-1039`, `research/evidence.py:266-292`, `research/audit.py:1400-1411`.
 
-Fix: `repr(price)` (round-trips exactly) and add the override to `run_settings()` so the
-header can show it.
+`enforce_forecast_labels` rewrites the Portfolio Manager's decision and the Research
+Manager's plan **before** `audit.audit_state` runs, and the `findings` it returns are
+discarded (`rewritten, findings = ...` only tests truthiness). Because the audit's
+`claim_findings` pass runs on the rewritten text, the `evidence` finding that `AGENTS.md`
+promises ("a violation is an audit finding of kind `evidence`") never appears, and no note
+records that the published decision is not what the PM wrote.
 
-#### A7 (M) — "Nobody answered the prompt" means "yes"
+The substitution is also narrow: it replaces "company/management guidance" and "verified
+consensus", but a sentence with bare "guidance" keeps its wording and its figure, so the
+claim survives the rewrite and only the audit would have caught it.
 
-`cli/run.py:470,496` vs `:502-522`.
+Fix: emit the rewrite as an `evidence` finding with a `repaired` flag, and add a visible
+"forecast label corrected" note to the decision or the appendix; or drop the rewrite and let
+the audit finding stand.
+
+#### F17 (M) — the technical-trigger gate reads any large number as the trigger
+
+`agents/managers/portfolio_manager.py:855-880`, pattern at `:733`.
+
+`_PRICE_IN_TEXT` collects every 4-digit or thousands-grouped number in `entry_condition`, and
+the gate treats `max(prices)` as the trigger.
+
+```
+"entry on a close above 3,000 with a 4,500 target" -> ['3,000', '4,500']  -> trigger 4,500
+"entry above 3,000 (stop 2,700)"                   -> ['3,000', '2,700']  -> trigger 3,000
+```
+
+With base fair value 4,000 the first case fires the gate, appends "confirmation changes timing
+only", and downgrades `INITIATE` to `WAIT` although the entry is 25% below base. The gate also
+runs after `decision_audit.assess` (`:1414`) and after `action = _action_from_decision(...)`
+(`:1395`), so the published action is not the audited one.
+
+Fix: read the number that follows "above/below/at/through" and ignore numbers attributed to
+a stop or target; re-run the audit after an action change.
+
+### B. Decision-input gaps
+
+#### F1 (H) — News and sentiment never reach the research phase
+
+`agents/researchers/adversarial_reviewer.py:95-111` and `:444-486`;
+`agents/managers/portfolio_manager.py:1229` (no `news_report` or `sentiment_report`
+reference anywhere in the file).
+
+The reviewer template says: *"Use news and sentiment only when the evidence is
+company-specific…"* and *"Select the strongest bull case, bear case and opposing argument only
+from the evidence in this prompt: the current-run fundamental analysis, technical analysis,
+news and sentiment reports."* The fill mapping supplies corpus listing, fundamentals,
+technical, model package, horizon, position and prior review — there is no `news_report` or
+`sentiment_report` entry anywhere in it.
+
+The Portfolio Manager is the same: it receives `case_availability(state)`
+(`agents/context.py:297-309`), which prints *"News and sentiment reports: both available"*
+when the keys are non-empty — a statement that they exist, with none of their content. The
+only path by which a news event or retail sentiment reaches the controlling decision is the
+prose of the risk-debate transcript, compressed by three other models.
+
+Effect: the reviewer is asked to tag evidence `[news_sentiment]` and to reason over inputs it
+was never given; the PM is told the sources are available. That is a recorded decision that
+claims to have weighed evidence it never saw. Either pass both reports into `_fill` for the
+reviewer and the PM, or delete the instructions that ask for them.
+
+#### F2 (M) — A pretty-printed technical block is silently dropped and leaves residue
+
+`research/technical.py:41-43`.
 
 ```python
-save = (_ask("Save report?") or "").strip().upper() in ("Y", "YES", "")
+_BLOCK = re.compile(r"TECHNICAL_EVIDENCE:\s*(\[[\s\S]*?\])\s*(?:\n|$)", re.IGNORECASE)
 ```
 
-`_ask` returns `None` on EOF / Ctrl-C / Ctrl-D, and its docstring says callers treat `None`
-as "no". `or ""` converts that to the empty string, which **is** in the accepted set (it
-means "pressed Enter"). `_yes()` (`:518-522`) does it correctly with an explicit
-`if answer is None: return False` — which is why `--open` is safe and these two are not.
+The lazy `\[[\s\S]*?\]` stops at the first `]` followed by a newline. Every item contains
+`source_refs`, a nested array, so an indented answer ends the match at `source_refs`'s closing
+bracket. `json.loads` then fails, `parse` returns no items, and it still strips the matched
+prefix — leaving the tail of the JSON in the reader-facing report.
 
-Effect: a dropped SSH session or closed stdin finishes by writing the report tree and
-printing the whole report without consent, after printing "skipping the remaining
-questions".
+Reproduced with an indented array:
 
-Fix: use `_yes()` for both, and stop after the first `None`.
+```
+items: 0
+tail: 'Lead in.\n  }\n]\nTrend down.\n'
+```
 
-#### A8 (M) — Backtest `pending` is a residual, not a count
+Effect: the technical leg disappears (`render` prints "No verified technical evidence was
+produced"), the PM loses a verified technical input, and the market report published to the
+debate contains stray JSON. `tests/test_technical_evidence.py:101-125` only uses single-line
+`json.dumps`, so this shape is untested.
 
-`backtest.py:187-217`.
+Fix: match to the last bracket (`\[.*\]\s*$` with `re.S`) or use
+`json.JSONDecoder().raw_decode` from the marker; strip only after a successful parse and
+record a warning when the block is malformed.
+
+#### F3 (L) — The market analyst's fundamentals input is always empty
+
+`agents/analysts/market_analyst.py:66` vs `graph/setup.py:192`.
 
 ```python
-pending = len(entries) - len(resolved) - unscored
+fundamental = (state.get("fundamentals_report") or "").strip()
 ```
 
-A **settled** entry whose alpha cannot be parsed (legacy four-field tag → `_alpha` returns
-`None`) is neither resolved nor unscored, so it is reported as pending. The trailer then
-says "pending cells are not scored; re-run to settle them" for cells that are already
-settled and will never change.
+All analysts are added as `workflow.add_edge(START, node)` and run in the same superstep;
+state channels merge at the end of it. `fundamentals_report` is therefore `""` on every fresh
+run, and the block reliably prints "not supplied". It is dead prompt text in the largest
+prompt of the run. Remove the block, or move the market analyst after fundamentals if the
+intent was real.
 
-Fix: `pending = sum(1 for e in entries if e["pending"])` and report unreadable settled
-entries as their own count (or fold them into `unscored`).
+#### F4 (L) — The reviewer's "evidence pack" is an index, not evidence
 
-#### A9 (M, latent) — `parse_last_close` assumes Yahoo's CSV shape
+`agents/context.py:421`.
 
-`dataflows/prices.py:20-36`.
+`evidence_pack()` returns the corpus document listing (ids, dates, page counts, withheld
+section), not document text. The reviewer therefore reasons over the fundamentals analyst's
+prose plus a table of contents and cannot independently check a claim against a filing. That
+is defensible — the analyst did the reading — but "adversarial review" here checks reasoning,
+not sources.
 
-It requires a `Close` header and takes the **last** row. Alpha Vantage's CSV is lowercase
-(`close`) and newest-first, and `router` treats a successful call as a success. With
-`core_stock_apis: alpha_vantage`, `last_close` returns `None` and the valuation silently
-falls back to the spec price with a "no market price was available" warning — a parse
-problem reported as a data outage.
+### C. Numbers and model inputs
 
-Not triggered by the default chain (Bloomberg/Yahoo both fit). Fix: case-insensitive header
-lookup and pick the row with the greatest date, or route through `load_bars` as
-`closes()` already does.
+#### F5 (M) — Thousand-yen tables are labelled as millions
 
-#### A10 (M) — The HTML report drops the qualifiers the Markdown carries
-
-`report_html.py` (no reference to `decision_integrity` or `run_purpose`) vs
-`reporting.py:27-31,85-91`.
-
-`complete_report.md` says `- Rating: Hold (provisional)` and lists
-`- Decision integrity: DEGRADED: …` and, for diagnostic runs, `- Authority: diagnostic`.
-`complete_report.html` renders the bare rating and a resource list that contains neither.
-
-Effect: two artifacts in the same folder disagree about how trustworthy the decision is.
-
-Fix: add both rows to `_run_details`, and apply the same `(provisional)` suffix in the page
-masthead.
-
-#### A11 (L) — Two clocks for "today"
-
-`dataflows/date_window.py:34-36` uses `date.today()` (local); `in_window` (`:28-31`) uses
-`datetime.now(UTC)`; `cli/prompts.py:84-92` validates a new date against local today.
-
-On the CI job that runs `TZ=America/New_York`, a UTC-scheduled `--date` for the UTC date is
-rejected as "in the future" for the hours between UTC midnight and local midnight, while
-`in_window` already treats that date as "now". `reporting.py:32` and `report_html.py:226`
-also stamp a naive local time with no offset.
-
-Fix: one helper (`datetime.now(UTC).date()`) for the current date, and an explicit
-`+00:00` or `UTC` suffix on generated timestamps.
-
-#### A12 (L) — Trader downgrade note names a reason that may not apply
-
-`agents/trader/trader.py:123-132`. `downgraded = unverified and proposal.action == BUY`,
-but the appended note always says "because the valuation is unverified **and no portfolio
-context was supplied**". With a portfolio supplied, the sentence is false.
-
-Fix: build the note from the reasons that actually fired.
-
-#### A13 (L) — The CLI's live report tree keeps the audit marks
-
-`cli/run.py:204-217` writes `obj.report_sections[...]` verbatim; `reporting._report_parts`
-and `display_complete_report` both call `strip_marks`. Verified on the 13:51 run:
+`research/balance_sheet.py:53-59`.
 
 ```
-<results>/4062.T/2026-11-03/reports/fundamentals_report.md   [[ marks: 133
-<results>/reports/4062.T_20261103_135144/1_analysts/fundamentals.md  [[ marks: 0
+million[s]? of yen|百万円   -> JPY_m
+thousand[s]? of yen|千円    -> JPY_m
+million[s]? of u.s. dollars|百万米ドル -> USD_m
+thousand[s]? of u.s. dollars|千米ドル  -> USD_m
 ```
 
-The folder a user opens first is the one that shows the brackets.
+千円 is thousand yen, not million yen. The label reaches the builder through
+`balance_sheet.render` ("unit JPY_m"), and `KNOWN_UNITS` in `input_probe.py` has no `_k`
+suffix, so a standalone (千円) statement can hand the builder a source unit 1,000× too large.
+Add `JPY_k`/`USD_k` (and EUR equivalents) to the alias table and `KNOWN_UNITS`, or convert at
+extraction and state the conversion.
 
-Fix: `strip_marks(text)` in that writer too (one import).
+#### F6 (L) — `entry_price` can read an indicator period as the price
+
+`agents/resolution.py:19`.
+
+`_PRICE` takes the first number within 40 characters of "entry", so `"entry on a close above
+the 50-day SMA"` returns `50.0`. On a low-priced name this trips `contradiction_detected`
+(`entry > fair_value * 1.001`) and marks a sound decision as contradictory. Require a price
+shape (currency symbol or a 3+ digit number) and ignore `\d+-day` / `\d+-week` tokens. The
+working tree's new `_PRICE_IN_TEXT` gate fixes the `50-day` shape but introduces F17.
+
+### D. Structure and contract
+
+#### F7 (M) — The state contract is unenforced
+
+`agents/state.py` vs `tradingagents/graph/trading_graph.py` and `reporting.py`.
+
+Nine keys are written and read on `final_state` but absent from `AgentState`:
+`action_status`, `controlling_decision`, `debate_summary`, `decision_conflicts`,
+`decision_integrity`, `report_audit`, `research_rounds_used`, `risk_rounds_used`,
+`stage_status`. The working tree declared its new keys (`model_corrections`,
+`verification_checks`, `verification_status`, `decision_model_version`, `benchmark_basis`) but
+left these nine undeclared, so the report is still coupled to string keys the schema does not
+describe. The same gap is what `sensitivity_items` fell through (F14).
+
+#### F8 (M) — `trading_graph.py` is a 2,456-line class with a `self` side channel
+
+`_research_package()` returns four values and smuggles eight more through `self`
+(`_ev_diagnostic`, `_output_status`, `_basis_names`, `_sensitivity_items`,
+`_sensitivity_alias_map`, `_sensitivity_gaps`, `_sensitivity_table`), which
+`create_run_state` then reads with `getattr(self, ..., default)` (`:347-352`, `:1131-1187`).
+A run's state depends on call order on the same object, and two graphs sharing an instance
+would cross-contaminate. A dataclass return value removes the whole class of bug.
+
+The new verification code shows the cost: `_derive_verification` reads a *state* key for
+`sensitivity_items` while the data is on `self`, so the check silently loses its input (F14).
+The class still mixes graph compile, checkpoint lifecycle, model discovery/building, EV
+diagnostics, repair gate, number audit, status derivation, conflict detection, report saving
+and state logging. It is the single hardest file to change safely.
+
+#### F9 (L) — Dead branch in `create_run_state`
+
+`trading_graph.py:1166-1172` assigns `VERIFIED` or `NOT_APPLICABLE`, then tests for
+`UNVERIFIED` in the same expression. Harmless today, but the "unverified" arm of that status
+derivation cannot run there.
+
+#### F10 (L) — Global config mutation survives
+
+`TradingAgentsGraph.__init__` calls `set_config(self.config)` (`:297`), even though the
+contract says data/agent code reads `get_config()`. Two graphs in one process share whichever
+config was constructed last.
+
+#### F11 (L) — The three risk debators are near-copies
+
+`agents/risk_mgmt/*.py`, 93/93/92 lines, differing mainly in role constant and prompt text. A
+single factory parameterised by role would cut ~150 lines with no behaviour change.
+
+#### F12 (L) — `get_prediction_markets` is a maintained but unreachable tool
+
+`agents/tools.py:363` is wired end to end — router category, `polymarket` vendor, default
+config key, HTML label, tests — but no agent is offered it. Either re-expose it behind an
+explicit analyst or drop the tool and its category.
+
+#### F13 (L) — `ModelSpec.sector` is never produced by the build path
+
+`research/schemas.py:679` carries `sector`, and `default_config.severity_thresholds` has five
+sector-specific entries, but `research/builder.py` never mentions "sector". The sector table
+therefore only fires for hand-authored fixtures. Add it to the builder schema/prompt, or
+delete the table.
 
 ---
 
-### B. Dead code
+## 10. Dead code and dormant surface
 
-| Symbol | Where | Status |
+Confirmed by scanning every package module plus tests for references.
+
+| Symbol | Location | Evidence |
 |---|---|---|
-| `_periods_by_basis` | `research/render.py:38` | defined, never called anywhere |
-| `render_metrics` | `research/metrics.py:69` | only tests call it; `period_metrics` is used by the audit, but the metrics table is never printed in production |
-| `parse_case` | `research/cases.py:205` | production uses `parse_cases`; only tests import this |
-| `normalize_probabilities` | `research/cases.py:262` | only tests call it; `render_results` normalises inline |
-| `_package_fair_value_range` | `agents/managers/portfolio_manager.py:351` | reachable only through a string the app cannot produce (A2) |
-
-Not dead, for the record: `BlpapiBackend` looks unreferenced to a naive scan but is
-registered by the `@register_backend("blpapi")` decorator (`dataflows/vendors/bloomberg/`).
-
-Cosmetic: `graph/trading_graph.py:447-448` carries a "sizing" comment immediately above
-`_stage_status`, where it belongs to `_apply_decision_integrity` above it.
-
----
-
-### C. Tests that hide the bugs they describe
-
-- `tests/test_structured_agents.py:862` — the PM range backfill test uses
-  `"- Fair-value range: 6,304-9,246 JPY"`, a line no renderer emits. It passes while the
-  production path returns `(None, None)`.
-- `tests/test_cli_shutdown.py` — asserts "nothing saved without an answer", but the fake
-  graph has no `save_reports`, so the `AttributeError` lands in the `except` and the
-  consent branch is never exercised.
-- No test covers the percentage audit against a sentence that **quotes** another analyst's
-  percentage, which is the shape that fires in every run with a risk debate.
-
----
-
-### D. Checked and found sound
-
-- The rating parser (`agents/rating.py`) and the conflict detectors
-  (`trading_graph.py:473-499`) match the renderers: `**Rating**: X`, `**Recommendation**: X`,
-  `**Action**: X`, `| New investor | X |`, and the `**Stop Loss**: not provided` negative
-  lookahead.
-- Graph routing: every router return value is present in `DEBATE_PATH_MAP` /
-  `RISK_ANALYSIS_PATH_MAP`; `count // 3` is correct for the risk rounds.
-- Report path containment (`safe_ticker_component`, `_run_directory`) and HTML escaping
-  (CommonMark with `html=False`, images disabled, no scripts).
-- Sizing gates: they only fire without a portfolio, and a failed rewrite falls back to
-  scrubbing rather than trusting the model.
-- The audit's figure check really is provenance-based (only `[[marks]]`), so it does not
-  re-open the false-positive problem that inference over unmarked prose caused.
-- The 13:51 run's number audit reconciles: 135 marked = 135 checked + 0 reference + 0
-  skipped, 0 failed.
-
----
-
-## 10. Suggested fix order
-
-1. **A2 + its test** — the decision currently lies about its own valuation in the exact
-   case the code was written for. Small, self-contained.
-2. **A1** — five-line regex fix; removes a false audit finding from every debate run.
-3. **A4** — one line; restores the diagnostic/production separation the review harness
-   depends on.
-4. **A3** — small tool signature change; closes the only point-in-time hole left.
-5. **A5** — additive retry plus the framework table rendering; recovers the PM's typed
-   fields on the default model.
-6. Then A6–A13 as cleanup, and the dead-code sweep.
-
----
-
-## 11. One-paragraph summary
-
-The architecture is sound and unusually well defended: isolated analyst subgraphs, a
-bounded tool loop, provenance-checked structured output with visible fallbacks, a validated
-deterministic model, and a report/state pair that are now written from the same text. The
-remaining defects are in the seams between components: a regex written for a renderer that
-is not the one in use (A2), an audit pattern that matches the claim instead of the operand
-(A1), a tool that skipped the date clamp its siblings apply (A3), and a CLI line that
-overrides the environment it was supposed to read (A4). None of them changes the investment
-conclusion; all of them change what the report can prove about it.
-
----
-
-## 12. What changed in this tree
-
-### 12.1 Reliability fixes (A1–A13)
-
-| Fix | Change |
-|---|---|
-| A1 | `_PCT_LEVEL` no longer accepts the claim's own percentage, and a level must sit within an order of magnitude of the run price. Reproduced false positive now returns no finding. |
-| A2 | `research/report.fair_value_range_from_summary` parses **both** renderers and lives beside them; `create_run_state` stores `research_fair_value_low/high`; the PM prefers state and falls back to the parser. |
-| A3 | `read_research_document` takes `trade_date` and `CorpusStore.read_document(..., as_of=)` refuses a post-cutoff document with the same sentinel shape as list/search. |
-| A4 | `--run-purpose` defaults to `None`; `_resolve_run_purpose` falls back to the environment-derived config. |
-| A5 | The Research Manager and Portfolio Manager retry the **full** schema once with `STRUCTURED_RETRY` before the minimal schema or free text. |
-| A6 | `--price` is written with `repr(price)`, which round-trips exactly. |
-| A7 | Save/show prompts use `_yes()`, so "nobody answered" is no, not yes. |
-| A8 | Backtest `pending` counts pending entries instead of subtracting a residual. |
-| A9 | `parse_last_close` is header-case-insensitive and picks the greatest date, not the last row. |
-| A10 | The HTML page carries decision integrity, structured fallbacks, run authority, and a `(provisional)` rating like the Markdown. |
-| A11 | `get_current_date()` is UTC; the CLI's future-date check uses it; generated timestamps are labelled UTC. |
-| A12 | The Trader's downgrade note names the reason that actually fired. |
-| A13 | The CLI's live `reports/*.md` writer strips the `[[…]]` audit marks like the published tree. |
-
-### 12.2 Model truth layer
-
-- `research/periods.py` — canonical fiscal labels derived from the period's own end date
-  (`FY3/28`, `FY26`), plus a warning when a company label disagrees with its dates.
-- `research/shares.py` — named bases for market cap and forecast EPS, diluted-average and
-  post-period-conversion fields, and a warning when the two counts diverge by more than 5%
-  (the stale-566.3m failure).
-- `research/conflicts.py` — a record-only register of guidance/consensus/model disagreements
-  at a 0.5% tolerance, rendered into the research package.
-- `research/schemas.py` — additive fields on `ShareBase`, `ValuationSpec` and `Scenario`
-  (all optional, so existing specs still load).
-- `research/kernel.py` — attaches the register and the period/share warnings to every
-  result; market cap now reads the named basis.
-- `research/metrics.py::render_metrics` is now published in the appendix
-  (`1e_metrics/metrics.md`), so growth and incremental margin are both visible.
-
-### 12.3 Repair gate (no graph change)
-
-- `research/repair.py` — `ModelChallenge`, deterministic `apply_values`, `repair_model`
-  (revalidates through the kernel), `changed_fields`, `superseded_values`, and a bounded
-  addendum writer whose output is rejected if it introduces a figure the models do not
-  contain.
-- The gate runs at the **entry of the existing Adversarial Reviewer node**
-  (`setup.py::reviewer_with_repair`), so nodes, edges, routing and the checkpoint topology
-  are unchanged. It is idempotent: a second entry sees `active_model_version == "v2"`.
-- State: `research_model_path_v1`, `active_model_version`, `model_challenges`,
-  `model_repair_log`, `model_repair_addendum`, `fundamentals_challenge_check`, plus
-  `research_fair_value_low/high` and `metrics_table`.
-- A structural challenge that cannot be applied is recorded as unresolved; a **blocking**
-  challenge that cannot be applied marks the model unavailable, and the existing degradation
-  path (no valuation, confidence Low, Buy downgraded) takes over.
-- The v2 spec is written beside v1 as `<TICKER>.v2.json`; v1 is never overwritten.
-
-### 12.4 Audit across two model versions
-
-`audit_text` accepts a `superseded` set. A marked figure that fails against v2 but matches
-a value the repair replaced is counted under "superseded", listed in `1c_audit` as *not*
-an audit failure, and never fed to the debate. A figure matching an unchanged field still
-passes normally; anything matching neither is a genuine failure.
-
-The PM's prose is checked too: if the decision reuses a superseded value,
-`decision_integrity` becomes DEGRADED with that reason.
-
-### 12.5 Prompts and decision shape
-
-- The three risk personas keep their internal keys and gain display roles **Lead Analyst /
-  Skeptical Analyst / Risk Analyst**, each with an explicit line that the internal label is a
-  routing identifier, not a stance.
-- `EVIDENCE_DISCIPLINE` + `case_availability()` are appended to the reviewer, managers and
-  risk prompts: use every supplied input, label assumptions, and treat a missing news or
-  sentiment report as a gap.
-- The reviewer asks for one bull argument, one bear argument, a decisive load-bearing
-  variable, and an explicit market-edge statement (guidance versus consensus).
-- The scenario instructions now require driver-based construction, not a flat percentage.
-- The PM template states the resolution rules (do not vote; say which input controls; price
-  the cost of waiting; staged entry is allowed) and asks for the earnings-revision,
-  catalyst, position-constraint, invalidation and upgrade/downgrade fields.
-- `render_pm_decision` always prints the framework table and prints `not provided` where a
-  field was not answered; the three condition lists are always shown.
-- Case ceiling raised from ±5% to ±25% on revenue/operating profit (multiple stays ±20%),
-  with the prompt still requiring evidence for a wide case.
-
-### 12.6 Verification
-
-- `ruff check .` clean.
-- `pytest -q`: **1793 passed, 9 skipped, 5 failed**. The five failures are the pre-existing
-  Windows/platform failures documented in `review/4062.T_20261102/PHASE1.md`
-  (POSIX file modes ×2, `upgrade_command` on Windows ×2, a temp dir under `$HOME`).
-- New tests: `tests/test_review_fixes.py` (A1–A12 regressions) and
-  `tests/test_model_repair.py` (periods, share bases, conflicts, repair, superseded audit).
-
-### 12.7 Deliberately not in this change
-- **Driver-ranked sensitivities** (`research/sensitivity.py`): the valuation still exposes
-  the declared multiple sensitivity. A driver ranking needs a mapping from bridge lines to
-  scenario deltas, which the current schema does not carry; adding it would be a model-spec
-  change, not a kernel tweak.
-- **Rebuild-with-challenges**: a `requires_rebuild` challenge is recorded as unresolved
-  rather than sent back through the corpus builder. Doing that well needs the builder to
-  accept an instruction overlay and its own validation budget; the gate is already one
-  LLM call, and this would be two to four more.
-- **Full publication trimming**: the appendix already carries the audit, cases and repair
-  note, and the header names missing inputs; the debate transcript is still a main section.
-  Moving it is a renderer layout change with no correctness effect.
-- **Conflict-register publication block**: the register records and the model's figure
-  controls, as agreed. It does not block a run when sources disagree, because the
-  precedence rules already picked a source before the spec existed.
-
-
----
-
-## Review 2026-11-04 — architecture, agent workflow and dead code
-
-> This is a second, independent review pass. Its section numbers restart at 1 and are
-> standalone; the review above (§1–§12) covers the 2026-11-03 tree and its fixes.
-
-Repository: `research-agent` @ `3c9f399` (2026-11-04)
-Scope: `tradingagents/` (138 modules, ~32.5k lines) and `cli/` (10 modules), read against `AGENTS.md`.
-Method: Serena symbol/reference lookups, AST scan of every top-level definition and class method,
-cross-module reference counts, `ruff check .` (clean), and targeted reads of each agent node.
-
----
-
-### TL;DR — five findings, ranked
-
-1. **News and sentiment analysts are a side branch.** Their reports reach only the three risk debators.
-   The Adversarial Reviewer, the Research Manager, the Trader and the Portfolio Manager never receive them.
-   The reviewer prompt even tells the model to "use news and sentiment", but no news or sentiment text is in
-   its prompt. ([adversarial_reviewer.py:95](tradingagents/agents/researchers/adversarial_reviewer.py#L95),
-   [portfolio_manager.py:441](tradingagents/agents/managers/portfolio_manager.py#L441) — zero mentions of `news`/`sentiment`)
-2. **One input in the market analyst's prompt can never be populated.** It injects `fundamentals_report`,
-   but all four analysts start in the same LangGraph superstep, so that key is always `""`.
-   ([market_analyst.py:66](tradingagents/agents/analysts/market_analyst.py#L66), [setup.py:191-193](tradingagents/graph/setup.py#L191))
-3. **`tradingagents/research/quarterly.py` is an orphan module** — 131 lines, imported by nothing, not even tests.
-   A second, older implementation of quarterly-plan derivation that the schema + builder now own.
-4. **`research/packets.py` carries a whole dead API** (`filter_decision_inputs`, `verified_packet`,
-   `unverified_packet`, `packet_for_prompt`, `unverified_reason`, `technical_packet`). Production withholds
-   model inputs elsewhere; these functions are only exercised by tests.
-5. **The state contract is unenforced.** Nine keys are written and read on `final_state` but absent from
-   `AgentState`, and `TradingAgentsGraph` is a 2,036-line class mixing orchestration, model loading,
-   repair, audit and reporting.
-
----
-
-### 1. Layer map
-
-| Layer | Location | Size | Responsibility |
-|---|---|---|---|
-| CLI | `cli/` | 10 files | Typer app, prompts, Rich live view, run loop, backtest command |
-| Orchestration | `graph/` | 7 files, 2,554 lines | `trading_graph.py` (entry + post-processing), `setup.py` (LangGraph wiring), `analyst_execution.py` (analyst specs), `conditional_logic.py`, `propagation.py`, `checkpointer.py` |
-| Agents | `agents/` | 26 files, 6,751 lines | 4 analysts, 1 adversarial reviewer, RM, Trader, 3 risk debators, PM, plus schemas/structured/sizing/rating/context |
-| Deterministic research | `research/` | 31 files, 9,952 lines | Model spec, kernel, valuation, audit, repair, packets, status, sensitivities, cases |
-| Data | `dataflows/` | 41 files, 6,353 lines | Router → vendors (bloomberg, yahoo, sec_edgar, alpha_vantage, fred, polymarket, reddit, stocktwits, research_corpus), point-in-time clamping |
-| LLM clients | `llm_clients/` | 13 files | Provider factory, per-provider adapters, tier selection, model catalog |
-| Memory | `memory/` | 4 files | Append-only decision log, settlement, reflection |
-
-Dependency direction is clean and enforced: `agents → dataflows.router → dataflows.vendors`; only
-`dataflows/` imports `yfinance` (`tests/test_layering.py`). No agent imports a vendor module directly
-except the sentiment analyst, which imports the Reddit and StockTwits fetchers at module import
-([sentiment_analyst.py:34-40](tradingagents/agents/analysts/sentiment_analyst.py#L34)) — a small
-layering exception worth noting, since those are vendor code paths bypassing `route_to_vendor`.
-
----
-
-### 2. Run workflow
-
-Entry points: `cli/main.py` (Typer) → `cli/run.py:run_analysis`, or `TradingAgentsGraph.propagate()`.
-
-```
-START ─┬─ Market Analyst ────────┐
-       ├─ Sentiment Analyst ─────┤   (independent subgraphs, same superstep)
-       ├─ News Analyst ──────────┤
-       ├─ Fundamentals Analyst ──┤
-       └─ Memory Log ────────────┘
-                                 └──▶ Adversarial Reviewer ──┐
-                                        ▲                   │ loop while round < max_debate_rounds
-                                        └───────────────────┤ and not "NO MATERIAL UPDATE"
-                                                            ▼
-                                                    Research Manager
-                                                            │
-                                                          Trader
-                                                            │
-                                                    Aggressive Analyst ──┐
-                                                            ▲            │ 3 speakers per round
-                                          Conservative ◀────┤            │ then Portfolio Manager
-                                              │              │
-                                              └──▶ Neutral ──┘
-                                                            │
-                                                    Portfolio Manager ──▶ END
-```
-
-Wiring is in [setup.py:167-211](tradingagents/graph/setup.py#L167); routing rules in
-[conditional_logic.py:12-35](tradingagents/graph/conditional_logic.py#L12).
-
-#### Step by step
-
-1. **CLI collects selections** (`ticker`, `date`, analysts, depth, provider, models, language, horizon).
-   No TTY ⇒ every missing answer is named before any model is called (`cli/run.py:144-150`).
-2. **Config assembled** from `DEFAULT_CONFIG` + selections + `TRADINGAGENTS_*` env, with "explicit env wins"
-   rules (`cli/run.py:71-116`).
-3. **Graph constructed** (`TradingAgentsGraph.__init__`): two tier clients, memory log, conditional logic,
-   `GraphSetup.setup_graph()`. `set_config(self.config)` still mutates the process-global config at
-   construction (`trading_graph.py:173`).
-4. **Run state built** by `create_run_state` (`trading_graph.py:835-957`): instrument identity, portfolio
-   block, decision horizon, and — when a research corpus is configured — the verified model package,
-   packets, share bases, sensitivity table and output statuses.
-5. **Optional checkpoint**: graph recompiled with a per-ticker `SqliteSaver`; the thread id folds in a
-   signature of everything that changes the graph shape (`trading_graph.py:252-284`).
-6. **Analysts run concurrently**, each as its own subgraph with a private message history and its own tool
-   node. After `max_tool_rounds` the graph injects a wrap-up message and forces the report
-   ([setup.py:53-94](tradingagents/graph/setup.py#L53), [turn.py:13-27](tradingagents/agents/analysts/turn.py#L13)).
-7. **Memory Log** settles past decisions for this ticker and loads lessons; it runs in parallel with the
-   analysts because only the PM consumes `past_context`.
-8. **Repair gate** runs inside the reviewer's entry (`setup.py:145-156` → `trading_graph.py:1434`): mine the
-   fundamentals report for model challenges, apply scalar corrections, re-run the kernel, write a v2 spec,
-   emit a repair note. Idempotent via `active_model_version`.
-9. **Adversarial review loop**: one reviewer per round; round ≥ 2 is a delta-only prompt; a round answering
-   `NO MATERIAL UPDATE` ends the loop early.
-10. **Research Manager** turns the review into a typed `ResearchPlan` (depth model).
-11. **Trader** produces a 5-field technical stance — no size, no stop price (`trader.py:57-100`).
-12. **Risk debate**: Aggressive → Conservative → Neutral, then PM. Each debator sees all four analyst
-    reports plus the trader plan.
-13. **Portfolio Manager** produces a typed `PortfolioDecision` (depth model), then a deterministic layer
-    audits it (see §5).
-14. **Post-run `prepare_final_state`** (`trading_graph.py:406-644`, ~240 lines): number audit + one LLM
-    repair pass, case table, metrics table, superseded-conclusion replacement, model/decision status
-    derivation, conflict detection, stage status, debate summary.
-15. **Record + render**: memory log entry, state log JSON, report tree (`reporting.py`) and HTML.
-
----
-
-### 3. How each agent talks to the LLM
-
-Two clients are built once (`trading_graph.py:179-180`): **quick** and **deep**. Nothing else varies per
-agent — no per-agent temperature, token cap or caching.
-
-| Agent | Tier | Call pattern | Extra deterministic guards |
-|---|---|---|---|
-| Market | quick | ReAct loop: `prompt \| llm.bind_tools(TOOLS)`, ToolNode, wrap-up turn | `technical.parse()` extracts `TECHNICAL_EVIDENCE:` JSON and strips it |
-| Sentiment | quick | No tools; three sources pre-fetched into the prompt; structured `SentimentReport` → free text | Jev screening optional (`post_screen.py`) |
-| News | quick | ReAct loop over news / global news / FRED | — |
-| Fundamentals | quick | ReAct loop over statements + insider + optional corpus tools | model block with `[[figure]]` marking rules |
-| Adversarial Reviewer | quick | Plain `llm.invoke(prompt)`; up to 3 extra calls (section repair, rebuttal retry, sensitivity retry) per round | heading contract, case JSON parse, sensitivity-id validation |
-| Research Manager | deep | Structured `ResearchPlan` → retry → `ResearchPlanMinimal` → free text | sizing gate, benchmark rule |
-| Trader | quick | Structured `TraderProposal` ×2 → free text | sizing gate, execution-level scrub, unverified-Buy downgrade |
-| Risk debators ×3 | quick | One `llm.invoke` each | — |
-| Portfolio Manager | deep | Structured `PortfolioDecision` → retry → minimal → free text, plus P/E-reconstruction retry, action retry, range retry | decision audit, rating normalisation, `decision_integrity` |
-| Repair gate | deep | Structured challenge extraction ×2 + addendum call | kernel revalidation |
-| Number-audit repair | quick | One rewrite call when a claim contradicts its own operands | re-audit must pass |
-| Reflection (memory) | quick | One call per settled entry | — |
-
-**Consequence:** the nominal 9 nodes can issue 20+ model calls in one run. The stated benefit is
-resilience; the cost is that "one agent = one prompt" no longer holds, and latency/cost are dominated by
-retry paths rather than by the agents themselves.
-
-**Prompt-as-code.** 85% of `fundamentals_analyst.py` (1,291 of 1,527 lines) is one module-level string.
-The portfolio manager carries a 300-line `TEMPLATE` plus a 70-line `_rating_framework` and an `ACTION_RETRY`.
-Prompts are not versioned, diffed or evaluated anywhere; a wording change is indistinguishable from a
-logic change in review.
-
----
-
-### 4. Agent-to-agent information flow
-
-What each stage actually receives (verified from each node's prompt construction):
-
-| Consumer | market | sentiment | news | fundamentals | model pkg | review | plan | trader | risk debate | lessons |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Reviewer | ✅ | ❌ | ❌ | ✅ (with repair notice) | ✅ | prior rounds | — | — | — | — |
-| Research Manager | — | ❌ | ❌ | via review only | ✅ | ✅ | — | — | — | — |
-| Trader | ✅ | ❌ | ❌ | via plan | ✅ | — | ✅ | — | — | — |
-| Risk debators | ✅ | ✅ | ✅ | ✅ | — | — | via trader | ✅ | history | — |
-| Portfolio Manager | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-#### Finding 1 — news and sentiment bypass the research phase and the decision
-
-Only `risk_mgmt/*` and `reporting.py`/`audit.py` reference `news_report` / `sentiment_report`.
-The reviewer's template says *"Use news and sentiment only when the evidence is company-specific…"*
-but its inputs are: corpus listing, fundamentals report, model audit, technical report, horizon,
-position, mandate, prior review. No news, no sentiment.
-
-The PM's template contains **no occurrence of "news" or "sentiment"** at all. It receives
-`case_availability(state)`, which appends "News and sentiment reports: both available" — a statement
-that they exist, with none of their content. The only path by which retail sentiment or a company news
-event reaches the final decision is the prose of the risk-debate transcript, compressed by three other
-models.
-
-If the design intent is "sentiment/news are tactical colour for the risk debate only", the reviewer prompt
-should stop asking for them. If not, this is a wiring bug with a real effect on ratings.
-
-#### Finding 2 — the market analyst's fundamentals input is always empty
-
-```python
-fundamental = (state.get("fundamentals_report") or "").strip()   # market_analyst.py:66
-...
-"Fundamental conclusion, if supplied: " + (... if fundamental else "not supplied")
-```
-
-All analysts are added as `workflow.add_edge(START, node)` and therefore run in the same superstep; state
-channels only merge at the end of it. `fundamentals_report` is `""` on every fresh run. The block is dead
-prompt text (it reliably prints "not supplied"), and it costs tokens in the largest prompt of the run.
-
-#### Finding 3 — the reviewer's "evidence pack" is an index, not evidence
-
-`evidence_pack()` returns the corpus document listing (ids, dates, page counts), not document text
-([context.py:366-388](tradingagents/agents/context.py#L366)). The reviewer therefore reasons over the
-fundamentals analyst's prose plus a table of contents — it cannot independently check a claim against a
-filing. This is defensible (the analyst did the reading), but it means "adversarial review" checks
-reasoning, not sources.
-
----
-
-### 5. The determinism layer (the strongest part of the design)
-
-The interesting architecture is not the agent graph — it is the set of deterministic gates around it.
-Each gate converts a model output into a checked object or refuses it:
-
-1. **Verified model** (`research/kernel.py`): every identity in the spec (bridges, EPS, market cap,
-   EV/EBITDA) is recomputed in Python. `research/schemas.py` + `research/valuation.py` + `research/capital.py`.
-2. **Packets** (`research/packets.py`): when the model is unverified, model-derived inputs are replaced by
-   notices; the PM's answer is then scanned for a reconstructed P/E (`reconstruction_findings`) and
-   invalidated on a second violation.
-3. **Decision audit** (`research/decision_audit.py`): a directional call without a verified valuation must
-   prove three independent evidence clusters, one risk leg and two primary disclosures; failure normalises
-   Sell → Reduce/Hold.
-4. **Output statuses** (`research/status.py` → `research/dependencies.py`): per-output statuses, so an
-   unverified EPS suppresses P/E and per-share targets while EV/EBITDA stays usable.
-5. **Number audit** (`research/audit.py`, 1,382 lines): only figures the agent marked `[[…]]` are checked;
-   relational claims are checked against the sentence's own operands, with one LLM repair pass.
-6. **Sizing and level scrubbing** (`agents/sizing.py`): exact sizes and execution levels are detected by
-   regex and rewritten when no portfolio is supplied.
-7. **Rating integrity** (`agents/rating.py`): unreadable decisions become `REVIEW`, never `Hold`.
-
-This is a coherent "LLM proposes, Python disposes" architecture, and it is where most of the test mass sits.
-The weakness is that the gates live partly in the graph (`prepare_final_state`) and partly in agents
-(PM normalisation), so the same rule appears in two places — e.g. the unverified-model suppression is
-implemented in the PM node *and* re-derived in `prepare_final_state`.
-
----
-
-### 6. State contract and orchestration
-
-- `AgentState` declares 100 fields; `final_state` carries nine more that nothing declares:
-  `action_status`, `controlling_decision`, `debate_summary`, `decision_conflicts`, `decision_integrity`,
-  `report_audit`, `research_rounds_used`, `risk_rounds_used`, `stage_status`.
-  They are written in `trading_graph.py` and read by `reporting.py` / `report_html.py`, so the report is
-  coupled to string keys the state schema does not describe.
-- `trading_graph.py` is one class with 40 methods over 2,036 lines: graph compile, checkpoint lifecycle,
-  model discovery/building, EV diagnostics, repair gate, number audit, status derivation, conflict
-  detection, report saving and state logging. It is the single hardest file to change safely.
-- `_research_package()` returns four values and smuggles eight more through `self`
-  (`_ev_diagnostic`, `_output_status`, `_basis_names`, `_sensitivity_items`, `_sensitivity_gaps`,
-  `_sensitivity_table`, `_fundamental_packet`, `_valuation_packet`). `create_run_state` then reads them with
-  `getattr(self, ..., default)`. A run's state therefore depends on call order on the same object, and two
-  graphs sharing an instance would cross-contaminate. A dataclass return value would remove the whole class
-  of bug.
-- `create_run_state` contains an unreachable branch: it sets `model_status` to `"VERIFIED"` or
-  `"NOT_APPLICABLE"` and then tests `if state["model_status"] == "UNVERIFIED"` in the same expression
-  ([trading_graph.py:906-914](tradingagents/graph/trading_graph.py#L906)).
-
----
-
-### 7. Dead code to remove
-
-Line numbers are current-file. Every item below was confirmed by scanning all 138 package modules plus
-tests for references — none are reached by a decorator, `getattr`, or string dispatch (except where noted).
-
-#### High confidence — delete
-
-| # | Symbol | Location | Evidence |
-|---|---|---|---|
-| 1 | **entire module** `research/quarterly.py` (`QuarterlyPlan`, `QuarterLine`, `build`, `compare`, 131 lines) | `tradingagents/research/quarterly.py:1` | no import of `research.quarterly` anywhere, including tests; superseded by `ModelSpec.quarterly_plan` + `builder._repair_quarterly_plan` |
-| 2 | `filter_decision_inputs`, `verified_packet`, `unverified_packet` | `research/packets.py:42,55,72` | used only by `packet_for_prompt` (itself unused) and `tests/test_unverified_mode.py` |
-| 3 | `packet_for_prompt` | `research/packets.py:77` | zero references |
-| 4 | `unverified_reason` | `research/packets.py:83` | zero references |
-| 5 | `technical_packet` | `research/packets.py:138` | zero references |
-| 6 | `capital.convertible_list` | `research/capital.py:157` | zero references; also makes the `Convertible` import removable |
-| 7 | `repair.is_material` | `research/repair.py:176` | zero references |
-| 8 | `status._material_per_share` (+ the `_PER_SHARE` regex it alone uses) | `research/status.py:31,44` | zero references; `challenge_fields` is forwarded straight to `dependencies` |
-| 9 | `TradingMemoryLog.batch_update_with_outcomes` | `memory/log.py:234` | only a test reference; superseded by `update_with_outcome` used by `memory/settlement.py:157` |
-
-Deleting #2–#5 lets `packets.py` shrink to `model_verified`, `UNVERIFIED_FUNDAMENTALS_NOTICE`,
-`fundamental_packet`, `valuation_packet`, `pe_suppressed`, `reconstruction_findings` — the parts actually
-imported by `agents/context.py` and `portfolio_manager._packet_block`.
-
-#### Lower priority — test-only helpers
-
-Either delete with their test, or mark as the public API they are:
-
-- `research/cases.py:208 parse_case` and `:265 normalize_probabilities` — tests only. Probabilities are
-  displayed unnormalised now.
-- `research/periods.py:57 fiscal_year` — tests only.
-- `research/capital.py:136 dilution_shares` — tests only; the dilution sensitivity computes its own count.
-- `research/valuation.py:51 Valuation.upside_to_mid` — tests only.
-- `graph/trading_graph.py:959 TradingAgentsGraph.research_package` — 7 test references, 0 production callers.
-  Keep if it is the documented programmatic API; otherwise remove.
-
-#### Dormant surface — decide, don't delete blindly
-
-- `agents/tools.py:362 get_prediction_markets` — a tool no agent is offered (deliberately removed from the
-  news analyst per `review/4062.T_20261102/PHASE5.md`), but still wired end to end: router category,
-  `polymarket` vendor, default config key, HTML label, and two test files. This is ~250 lines of maintained
-  code for an unreachable tool. Either re-expose it behind an explicit analyst or drop the tool + category.
-- `ModelSpec.sector` (`research/schemas.py:670`) — nothing produces it in the LLM build path: `builder.py`
-  never mentions "sector", so it stays `""` unless a spec is hand-authored. The five sector-specific entries
-  in `default_config.severity_thresholds` (`bank`, `insurer`, `reit`, `software`, `commodity`) therefore only
-  fire for fixtures. Add `sector` to the builder schema/prompt, or delete the sector table.
-- `InvestDebateState.bull_history` / `bear_history` / `first_review_raw` — retained deliberately for old
-  checkpoints and the state log (comment at `adversarial_reviewer.py:513`). `first_review_raw` is written but
-  never read by any decision path; it is diagnostic only.
-
-#### Dead prompt slots (not code, but always-null inputs)
-
-These template fields are filled with literal `"null"` on every run and can only produce hedged prose:
-
-- `fundamentals_analyst.py:1468-1491`: `primary_listing_or_null`, `exchange_timezone_or_null`,
+| `batch_update_with_outcomes` | `memory/log.py:234` | only a test reference; superseded by `update_with_outcome` used by `memory/settlement.py` |
+| `parse_case` | `research/cases.py:322` | tests only; `parse_cases` uses `_scan_cases` |
+| `normalize_probabilities` | `research/cases.py:379` | tests only; probabilities are displayed unnormalised |
+| `fiscal_year` | `research/periods.py:57` | tests only |
+| `dilution_shares` | `research/capital.py:218` | tests only; the dilution sensitivity computes its own count |
+| `upside_to_mid` | `research/valuation.py:64` | tests only |
+| `TradingAgentsGraph.research_package` | `graph/trading_graph.py:1227` | 7 test calls, 0 production callers — keep only if it is the documented programmatic API |
+
+One near-miss, for the record: `research/quarterly.py` looks orphaned to a top-level import
+scan, but `kernel.py:386` imports it inside the quarterly build. It is live.
+
+### Dead prompt slots
+
+Template fields that are filled with literal `"null"` on every run and can only produce
+hedged prose:
+
+- `fundamentals_analyst.py`: `primary_listing_or_null`, `exchange_timezone_or_null`,
   `reporting_currency_or_null`, `fiscal_year_end_or_null`, `accounting_standard_or_null`,
   `portfolio_weight_or_null`, `mandate_constraints_or_null`, `risk_tolerance_or_null`,
-  `rating_vocabulary_or_null` — 9 permanently-null slots.
-- `portfolio_manager.py:480-482`: `portfolio_weight_or_null`, `mandate_constraints_or_null`,
+  `rating_vocabulary_or_null` — nine permanently-null slots.
+- `portfolio_manager.py`: `portfolio_weight_or_null`, `mandate_constraints_or_null`,
   `validated_trading_rules_or_null`.
-- `market_analyst.py:70-77`: hardcoded "Exchange and timezone: not supplied", "Validated trading rules, if
-  supplied: not supplied".
+- `market_analyst.py`: hardcoded "Exchange and timezone: not supplied", "Validated trading
+  rules, if supplied: not supplied".
 
-Either wire a source (portfolio weight and mandate are obvious candidates) or remove the slots so the model
-stops spending attention on absences it cannot fix.
-
----
-
-### 8. Further debt worth tracking
-
-1. **`reporting.py` depends on undeclared state keys** (`decision_integrity`, `stage_status`,
-   `controlling_decision`, `debate_summary`, `report_audit`) — see §6. Add them to `AgentState` and the
-   report's coupling becomes typed.
-2. **Global config mutation survives** at `TradingAgentsGraph.__init__` (`set_config(self.config)`), even
-   though `AGENTS.md` tells data/agent code to read `get_config()`/`run_config()`. Two graphs in one process
-   (the backtest runner is sequential today, but the API allows it) share whichever config was constructed last.
-3. **Three risk debators duplicate ~70 lines each** (69% similar by diff). A single factory parameterised by
-   role constant would cut ~140 lines with no behaviour change.
-4. **Documentation drift.** `AGENTS.md` and `.serena/memories/graph/core.md` still describe "researchers
-   (bull/bear)"; the code has one Adversarial Reviewer and the bull/bear histories are legacy fields.
-5. **Two modules named `extract`** (`research/extract.py` = filing facts → spec; `dataflows/vendors/research_corpus/extract.py`
-   = pdf/docx text extraction). Renaming one would remove a recurring source of confusion.
-6. `get_config()` deep-copies the whole config on every call, including inside vendor and audit loops.
-   Correctness wins over micro-optimisation here, but it is measurable on a 20-round run.
+Either wire a source (portfolio weight and mandate are the obvious candidates) or remove the
+slots so the model stops spending attention on absences it cannot fix.
 
 ---
 
-### 9. Suggested order of work
+## 11. Tests that hide bugs
 
-1. Decide the news/sentiment intent (§4, Finding 1). If they should reach the debate, add both reports to
-   `_fill` in the reviewer and PM; if not, delete the "use news and sentiment" instruction.
-2. Remove the market analyst's `fundamentals_report` block (§4, Finding 2) — 12 lines, zero behaviour change.
-3. Delete the dead symbols in §7 "High confidence" (9 items, ~230 lines incl. `quarterly.py`), then run
-   `pytest -q`; expect only `test_unverified_mode.py` to need rewriting.
-4. Declare the nine missing state keys in `AgentState`; replace `_research_package`'s `self` side channel with
-   a return dataclass.
-5. Only then consider splitting `trading_graph.py`: the natural seams are `research_model.py` (load/build/
-   diagnostic), `repair_gate.py`, and `finalize.py` (`prepare_final_state` + audit + statuses).
+- `tests/test_technical_evidence.py:101-125` builds the evidence block with a single-line
+  `json.dumps`. The nested `source_refs` array and a pretty-printed answer — the shape that
+  triggers F2 — are never exercised.
+- `tests/test_cli_shutdown.py:20-29` asserts "nothing saved without an answer", but the fake
+  graph has no `save_reports` and `_offer_reports` catches every exception around the save
+  call (`cli/run.py:516-522`). If `_yes` regressed and returned `True`, the save would raise
+  `AttributeError`, print "Error saving report", create no directory, and the assertion would
+  still pass. The test never exercises the branch it names.
+- `tests/test_structured_agents.py:851` still builds the PM range-backfill fixture from a
+  hand-written `- Fair-value range: 6,304-9,246 JPY` line. The renderer-shaped case is covered
+  separately in `tests/test_review_fixes.py:197`, so this is a fixture smell rather than a
+  hole — but the test no longer proves the production path on its own.
+- `tests/test_verification_checks.py` tests each check in isolation with hand-built inputs.
+  Nothing asserts that `_derive_verification` supplies them, which is how F14 survives.
+- Portability: the suite is green only on POSIX. On Windows, 5 tests fail:
+  `test_chatgpt_auth` (2) assert `0o600` on a file the platform reports as `0o666`;
+  `test_cli_updates` (2) expect a POSIX upgrade command although `upgrade_command` returns
+  `None` when `os.name == "nt"` (`cli/updates.py:186-187`); `test_suite_isolation` (1) asserts
+  the yfinance cache is outside `Path.home()` while the temp root is under it. The first and
+  third are test-only assumptions; the second leaves the Windows user without an upgrade
+  hint, by design.
 
-Steps 1–4 are mechanical and low-risk; step 5 is a multi-hour refactor that needs the integration tests.
+---
+
+## 12. Checked and found sound
+
+- Graph routing: every router return value is present in `DEBATE_PATH_MAP` /
+  `RISK_ANALYSIS_PATH_MAP`; `count // 3` is correct for the risk rounds.
+- The rating parser (`agents/rating.py`) and the conflict detectors match the renderers:
+  `**Rating**: X`, `**Recommendation**: X`, `**Action**: X`, `| New investor | X |`, and the
+  `**Stop Loss**: not provided` negative lookahead.
+- The corpus read path carries the run date: `read_research_document` injects `trade_date` and
+  passes it as `as_of`, so a post-cutoff filing is refused with the same sentinel shape as
+  list and search.
+- The percentage audit searches only text before the claim, so a quoted percentage is not read
+  as the indicator level.
+- The CLI honours `TRADINGAGENTS_RUN_PURPOSE` (`_resolve_run_purpose` falls back to config),
+  and the save/show prompts use `_yes()`, so "nobody answered" is no.
+- The CLI's live report tree strips `[[…]]` marks; the published tree and the HTML page carry
+  the same provisional/authority/integrity qualifiers.
+- Report path containment (`safe_ticker_component`) and HTML escaping (CommonMark with
+  `html=False`, images disabled, no scripts, CSP) hold.
+- Publication is split correctly: the main report is capped and sectioned; raw prose and
+  diagnostics are in the appendix.
+- The three verification checks are genuinely independent as functions: each accepts only its
+  own arguments, and `assess` takes the worst applicable outcome, never an average
+  (`research/verification.py:325-352`). Only the wiring is wrong (F14).
+- The correction ledger's identity matching is sound: `repair.verify_challenges` returns the
+  same `ModelChallenge` objects it classifies (`repair.py:233-260`), so `id()` membership in
+  `_correction_records` cannot silently mislabel an accepted challenge.
+
+---
+
+## 13. Suggested order
+
+1. **F14** — one line, and it decides whether the published verification verdict means
+   anything. Add the run-level test with it.
+2. **F2** — small, user-visible, and it silently weakens the decision audit.
+3. **F1** — decide the intent: pass news and sentiment to the reviewer and PM, or delete the
+   instructions that ask for them. This is the only finding that changes what a rating is
+   based on.
+4. **F15 + F16 + F17** — the three postprocessing gates: stop deleting sentences, stop
+   rewriting the decision silently, and stop reading a target as the entry trigger.
+5. **F5** — small; prevents a 1,000× unit error in the EV build.
+6. **F7 + F8** — declare the missing keys, then replace `_research_package`'s `self` side
+   channel with a return dataclass. This is the enabling change for every later refactor and
+   is what allowed F14.
+7. **F3, F4, F6, F9–F13**, then the dead-code sweep.
+
+Steps 1–5 are self-contained. Step 6 is a few hours but mechanical. Splitting
+`trading_graph.py` (research model, repair gate, finalize) is a multi-hour refactor that
+should wait for step 6.
+
+---
+
+## 14. Summary
+
+The architecture is sound and unusually well defended: isolated analyst subgraphs, a bounded
+tool loop, provenance-checked structured output with visible fallbacks, a validated
+deterministic model, a repair gate that revalidates, and a report/state pair written from the
+same text.
+
+The working tree adds the right instincts — a correction ledger, source classes, three
+independent verification checks — and three of them misfire at the seam: the published
+verification never sees the ranked sensitivities (F14), the rejected-scenario cleanup deletes
+verified sentences (F15), and the forecast relabelling erases its own audit finding (F16). The
+older defects remain: two narrative analysts whose reports the prompt promises and the fill
+never supplies (F1); a technical-evidence parser that only survives single-line JSON (F2); a
+unit table that confuses thousand with million (F5); and a 2,456-line orchestrator that keeps
+part of each run's state on `self` (F8).
+
+None of them changes the investment conclusion on its own. All of them change what the report
+can prove about it.

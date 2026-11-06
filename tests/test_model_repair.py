@@ -83,8 +83,8 @@ def test_a_march_year_end_gets_the_fy3_label_and_its_dates():
 
 
 def test_a_december_year_end_keeps_the_short_label():
-    assert periods.fiscal_year(12, 2026).label == "FY26"
-    assert periods.canonical_label("2026-12-31", 12) == "FY26"
+    assert periods.fiscal_year(12, 2026).label == "FY2026"
+    assert periods.canonical_label("2026-12-31", 12) == "FY2026"
 
 
 def test_a_company_label_that_disagrees_with_its_dates_is_flagged():
@@ -93,7 +93,7 @@ def test_a_company_label_that_disagrees_with_its_dates_is_flagged():
 
     warnings = periods.audit_periods(model)
 
-    assert any("FY2027 ends 2026-12-31, which is FY26" in message for message in warnings)
+    assert any("FY2027 ends 2026-12-31, which is FY2026" in message for message in warnings)
 
 
 # --- share bases --------------------------------------------------------------

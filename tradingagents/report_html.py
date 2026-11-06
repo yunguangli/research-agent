@@ -8,7 +8,6 @@ off, so nothing a model wrote can inject markup or load a remote asset.
 
 from datetime import UTC, datetime
 from html import escape
-from importlib.resources import files
 
 from markdown_it import MarkdownIt
 
@@ -17,13 +16,6 @@ from tradingagents.reporting import analyst_names
 
 # Ratings by direction, so the page can show which way the call leans.
 _TONE = {"Buy": "up", "Overweight": "up", "Hold": "level", "Underweight": "down", "Sell": "down"}
-
-# The Tauric Research logo as published (tauric.ai/brand/tauric-logo.svg), drawn
-# in the page so it loads nothing.
-_LOGO = files("tradingagents").joinpath("assets/tauric-logo.svg").read_text(encoding="utf-8").strip()
-_COMPANY = "https://tauric.ai"
-_ORG = "https://github.com/TauricResearch"
-_PROJECT = f"{_ORG}/TradingAgents"
 
 _CSS = """
 :root {
@@ -39,9 +31,6 @@ _CSS = """
     --accent: #14c290; --up: #14c290; --down: #ef6f63; --level: #9aa6af; --edge: #3d4c55; --mark: #66737c;
   }
 }
-@media (prefers-color-scheme: dark) {
-  .masthead .logo [stroke="#363636"] { stroke: var(--muted); }
-}
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -55,10 +44,6 @@ h1, h2, h3, h4 { text-wrap: balance; }
 a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .masthead { padding-bottom: 1.75rem; border-bottom: 1px solid var(--rule); }
-/* The logo leads at the top left, where readers look for it, 24px tall (the usual
-   on-screen floor for a wordmark) with at least its height clear below. */
-.masthead .logo { display: block; width: fit-content; margin: 0 0 2.25rem; }
-.masthead .logo svg { display: block; height: 1.5rem; width: auto; }
 .masthead h1 {
   margin: 0; font: 600 2.6rem/1.1 var(--sans); letter-spacing: -0.02em;
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2em 0.5em;
@@ -125,9 +110,6 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* The maker's credit: one quiet line at the foot. */
 .credit { margin-top: 4.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
   color: var(--muted); font: 0.8rem/1.4 var(--sans); }
-.credit a { color: inherit; text-decoration: none; }
-.credit a.brand { color: var(--accent); }
-.credit a:hover, .credit a:focus-visible { text-decoration: underline; }
 
 /* Three levels of separation: the five groups, the agents within a group, and
    breaks an agent draws inside its own text. */
@@ -163,7 +145,6 @@ tbody tr:last-child td { border-bottom: 0; }
   body { font-size: 16px; }
   .page { padding: 2rem 1rem 3rem; }
   .masthead h1 { font-size: 2rem; }
-  .masthead .logo svg { height: 1.25rem; }
   .run { grid-template-columns: 1fr; gap: 0 0; }
   .run dd { margin-bottom: 0.45rem; }
   .run .group { white-space: normal; }
@@ -251,6 +232,21 @@ def _run_details(final_state: dict, settings: dict | None) -> list[tuple[str, st
     integrity = str(final_state.get("decision_integrity") or "").strip()
     if integrity:
         details.append(("Decision integrity", escape(integrity)))
+    if final_state.get("publication_status"):
+        reasons = final_state.get("publication_reasons") or []
+        value = str(final_state["publication_status"])
+        if reasons:
+            value += " - " + "; ".join(str(reason) for reason in reasons)
+        details.append(("PUBLICATION_STATUS", escape(value)))
+    if final_state.get("research_price"):
+        from tradingagents.research import price_authority
+
+        details.append((
+            "Price",
+            escape(price_authority.describe(
+                price_authority.PriceResolution.from_state(final_state)
+            )),
+        ))
     fallbacks = final_state.get("structured_fallbacks") or {}
     if fallbacks:
         details.append(("Structured output", escape("; ".join(
@@ -263,7 +259,10 @@ def render_report(ticker: str, final_state: dict, settings: dict | None, parts) 
     """The report page: title and rating, what produced the run, contents, sections."""
     md = _markdown()
     base_rating = run_rating(final_state) if final_state.get("final_trade_decision") else ""
-    if base_rating and str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
+    if str(final_state.get("publication_status") or "").upper() == "BLOCKED":
+        rating = "Not Rated (publication blocked)"
+        tone = "review"
+    elif base_rating and str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
         rating = "Not Rated (provisional)"
         tone = "review"
     else:
@@ -318,7 +317,6 @@ def render_report(ticker: str, final_state: dict, settings: dict | None, parts) 
 <body>
 <div class="page" id="top">
 <header class="masthead">
-<a class="logo" href="{_COMPANY}" rel="noopener" aria-label="Tauric Research">{_LOGO}</a>
 <h1>{title}</h1>
 <p class="date">{escape(f"Analysis of {date}" if date else "Analysis")}</p>
 <dl class="run">{details}</dl>
@@ -327,7 +325,7 @@ def render_report(ticker: str, final_state: dict, settings: dict | None, parts) 
 <main>
 {"".join(body)}
 </main>
-<footer class="credit"><a href="{_PROJECT}" rel="noopener">TradingAgents</a> powered by <a class="brand" href="{_ORG}" rel="noopener">Tauric Research</a></footer>
+<footer class="credit">TradingAgents powered by AI Research</footer>
 </div>
 <a class="to-top" href="#top">Top</a>
 </body>

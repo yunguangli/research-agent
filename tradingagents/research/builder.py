@@ -129,9 +129,11 @@ RULES = """Rules:
 - Write cash-flow figures in the model's unit. Japanese filings quote 億円
   (100 million yen): 403億円 is JPY40.3bn, not JPY403bn. A capex figure near or
   above 20% of revenue is almost always a unit error.
-- Use the issuer's own fiscal calendar. A March year-end company labels the year
-  ending March 2027 as FY3/27 (or FY2027); a December year-end company uses FY12/27.
-  Do not convert one company's periods to another company's fiscal year.
+- Use the issuer's own fiscal calendar, and write the canonical label derived
+  from the period's end date: a March year-end company writes FY3/27 (or FY3/2027);
+  a December year-end company writes FY2026 (no month). If the company calls the
+  year ending March 2027 "FY2026", that is the 2026年度 convention: the period is
+  FY3/27 in this model. Do not convert one company's periods to another company's fiscal year.
 - market_cap_shares_m is shares outstanding (issued shares minus treasury shares),
   used for market capitalisation. It is not the EPS share count: EPS may use a
   larger full-share or average count, which would overstate the market cap.

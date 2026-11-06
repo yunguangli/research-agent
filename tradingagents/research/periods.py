@@ -1,8 +1,8 @@
 """Canonical fiscal periods: one date-derived label per fiscal year.
 
 Company labels disagree across markets: a Japanese filing calls the year ending
-March 2027 "FY2027", a US filing calls it "FY2027" too but ends in December, and
-a broker note may write "FY3/27". The model keeps one canonical label per
+March 2027 "FY2026" (the 2026年度 convention), a broker note may write "FY3/27", and
+a December filer calls its year "FY2027". The model keeps one canonical label per
 period, derived from the period's own end date and the company's fiscal-year-end
 month, so every table, bridge and citation agrees on which year is meant.
 
@@ -44,13 +44,13 @@ def _month_end(year: int, month: int) -> date:
 
 
 def _label(end_month: int, end_year: int) -> str:
-    """The canonical label: ``FY3/28`` for a March year-end, ``FY26`` for December.
+    """The canonical label: ``FY3/27`` for a March year-end, ``FY2026`` for December.
 
     A December year-end is the common case where "FY2026" already means the
-    calendar year, so adding the month would create a label nobody uses.
+    calendar year, so the label is the plain end year.
     """
     if end_month == 12:
-        return f"FY{end_year % 100:02d}"
+        return f"FY{end_year}"
     return f"FY{end_month}/{end_year % 100:02d}"
 
 

@@ -346,6 +346,11 @@ class ValuationSpec:
     price: float
     fair_value_multiple_low: float
     fair_value_multiple_high: float
+    # Authority of the price, so a later repair cannot silently replace a verified
+    # analysis-date close with an older report value or a market-cap derivation.
+    price_source: str = ""            # USER_EXPLICIT | VERIFIED_CLOSE | REPORT_PRICE | SPEC_PRICE
+    price_as_of: str = ""             # the date the price belongs to
+    price_ref: str = ""               # the source that supplied it
     fair_value_low: float | None = None
     fair_value_high: float | None = None
     fair_value_basis: str = ""        # which share base the range refers to
@@ -373,6 +378,9 @@ class ValuationSpec:
             price=float(data["price"]),
             fair_value_multiple_low=float(data["fair_value_multiple_low"]),
             fair_value_multiple_high=float(data["fair_value_multiple_high"]),
+            price_source=str(data.get("price_source") or ""),
+            price_as_of=str(data.get("price_as_of") or ""),
+            price_ref=str(data.get("price_ref") or ""),
             fair_value_low=_opt(data.get("fair_value_low")),
             fair_value_high=_opt(data.get("fair_value_high")),
             fair_value_basis=data.get("fair_value_basis", ""),

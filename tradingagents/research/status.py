@@ -73,6 +73,7 @@ def assess(
     market_cap_verified: bool | None = None,
     eps_basis_verified: bool | None = None,
     equity_basis_verified: bool | None = None,
+    share_price_verified: bool | None = None,
 ) -> dict[str, Any]:
     """The component statuses for this run, plus what each suppression means.
 
@@ -100,6 +101,7 @@ def assess(
         market_cap_verified=market_cap_verified,
         eps_basis_verified=eps_basis_verified,
         equity_basis_verified=equity_basis_verified,
+        share_price_verified=share_price_verified,
     )
     operating = statuses["operating_forecast"]
     eps = statuses["forecast_eps"]

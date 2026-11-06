@@ -493,6 +493,11 @@ If the independent forecast equals guidance or consensus, state once, neutrally,
 model has no independent forecast differentiation for that metric, and explain why the
 evidence does not support a different value. Do not repeat it as a bearish argument.
 
+Label the source of every material number: company actual, company guidance, external
+consensus, or your own forecast. Never call your own forecast "company guidance", never
+present it as mechanically derived when a discretionary assumption is involved, and never
+use it as a company-guided beat/miss, upgrade/downgrade or catalyst hurdle.
+
 Never call an operating-profit growth rate an incremental margin. Growth is
 current / prior - 1; incremental margin is (change in operating profit) / (change in
 revenue). Label the number you quote: "operating profit +97% year on year" and

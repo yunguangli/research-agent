@@ -309,6 +309,42 @@ def case_availability(state: Mapping[str, Any]) -> str:
     )
 
 
+def corrections_block(state: Mapping[str, Any]) -> str:
+    """Accepted model corrections, so the decision is written against them.
+
+    A correction accepted before the decision must reach it as text as well as
+    through the model: the PM is told which values changed, what they affect and
+    where the evidence is, and that the originals are superseded.
+    """
+    try:
+        records = json.loads(str(state.get("model_corrections") or "[]"))
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(records, list):
+        return ""
+    accepted = [
+        record for record in records
+        if isinstance(record, dict) and str(record.get("status") or "").upper() == "ACCEPTED"
+    ]
+    if not accepted:
+        return ""
+    lines = ["\n\nACCEPTED MODEL CORRECTIONS (already applied to the controlling model):"]
+    for record in accepted[:6]:
+        corrected = ", ".join(
+            f"{str(path).split('.')[-1]} {value:g}" if isinstance(value, (int, float))
+            else f"{str(path).split('.')[-1]} {value}"
+            for path, value in (record.get("corrected_value") or {}).items()
+        ) or "value changed"
+        outputs = ", ".join(record.get("downstream_outputs") or []) or "not named"
+        evidence = ", ".join(record.get("evidence_refs") or []) or "not stated"
+        lines.append(
+            f"- {record.get('challenge_type') or 'correction'}: {corrected}; "
+            f"affects {outputs}; evidence {evidence}"
+        )
+    lines.append("Use the corrected values. The superseded originals may not be cited.")
+    return "\n".join(lines)
+
+
 def research_package_block(state: Mapping[str, Any], max_chars: int = 4000) -> str:
     """The verified model, for the agents that decide rather than gather.
 

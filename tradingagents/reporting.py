@@ -50,7 +50,9 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         lines.append(f"- Analysis date: {final_state['trade_date']}")
     if final_state.get("final_trade_decision"):
         rating = run_rating(final_state)
-        if str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
+        if str(final_state.get("publication_status") or "").upper() == "BLOCKED":
+            rating = "Not Rated (publication blocked)"
+        elif str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
             rating = "Not Rated (provisional)"
         elif str(final_state.get("decision_integrity") or "").startswith("DEGRADED"):
             # The 5-tier value is unchanged; the qualifier says the decision rests
@@ -126,6 +128,18 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
     status = str(final_state.get("model_status") or "")
     if status:
         lines.append(f"- Model status: {status}")
+    if final_state.get("research_price"):
+        from tradingagents.research import price_authority
+
+        resolution = price_authority.PriceResolution.from_state(final_state)
+        lines.append(f"- Price: {price_authority.describe(resolution)}")
+        if final_state.get("price_override"):
+            lines.append(
+                "- Price override: USER_OVERRIDE - supplied for this analysis; "
+                "it is not a conflict with the session close"
+            )
+        if final_state.get("price_note"):
+            lines.append(f"- Price note: {final_state['price_note']}")
     aliases = {"eps_model_status": "eps_status", "sensitivity_model_status": "sensitivity_status"}
     for label, key in (
         ("Operating model", "operating_model_status"),
@@ -193,8 +207,14 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         controlling_sensitivity = component.get("controlling_sensitivity") or {}
         failed_rows = int(sensitivity.get("failed_rows") or 0)
         if failed_rows:
+            scope = ""
+            controlling_verified = int(controlling_sensitivity.get("verified") or 0)
+            controlling_expected = int(controlling_sensitivity.get("expected") or 0)
+            if controlling_expected and controlling_verified == controlling_expected:
+                scope = " (non-controlling rows; controlling candidates verified)"
             lines.append(
-                f"- Reason: {failed_rows} published rows failed downstream propagation"
+                f"- Reason: {failed_rows} published row(s) failed downstream "
+                f"propagation{scope}"
             )
         if controlling_sensitivity.get("status"):
             lines.append(
@@ -222,6 +242,10 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         lines.append(f"- Price conflict: {final_state['price_conflict']}")
     if final_state.get("decision_status"):
         lines.append(f"- Decision status: {final_state['decision_status']}")
+    if final_state.get("publication_status"):
+        reasons = final_state.get("publication_reasons") or []
+        detail = f" - {'; '.join(reasons)}" if reasons else ""
+        lines.append(f"- PUBLICATION_STATUS: {final_state['publication_status']}{detail}")
     if status == "UNVERIFIED":
         lines.append(
             "- Model output: suppressed — no unverified model figure may be used for the decision"
@@ -288,8 +312,15 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
     high = final_state.get("controlling_fair_value_high")
     base = final_state.get("controlling_fair_value_base")
     if low is not None and high is not None:
-        centre = f" (base {base:,.0f})" if isinstance(base, (int, float)) else ""
-        lines.append(f"- Controlling fair value: {float(low):,.0f}–{float(high):,.0f}{centre}")
+        if str(final_state.get("publication_status") or "").upper() == "BLOCKED":
+            lines.append("- Controlling fair value: withheld (publication blocked)")
+        else:
+            centre = f" (base {base:,.0f})" if isinstance(base, (int, float)) else ""
+            lines.append(
+                f"- Controlling fair value: {float(low):,.0f}\u2013{float(high):,.0f}{centre}"
+            )
+    elif str(final_state.get("publication_status") or "").upper() == "BLOCKED":
+        lines.append("- Controlling fair value: withheld (publication blocked)")
     else:
         lines.append("- Controlling fair value: not provided")
     if settings and settings.get("run_purpose") not in (None, "production"):
@@ -297,8 +328,19 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
             f"- Authority: diagnostic (run purpose: {settings['run_purpose']}); "
             "this run is not recorded as a production decision"
         )
+    if final_state.get("benchmark_basis"):
+        lines.append(f"- {final_state['benchmark_basis']}")
     if final_state.get("decision_integrity"):
         lines.append(f"- Decision integrity: {final_state['decision_integrity']}")
+    if final_state.get("verification_status"):
+        try:
+            checks = json.loads(str(final_state.get("verification_checks") or "{}")).get("checks") or []
+        except ValueError:
+            checks = []
+        detail = "; ".join(
+            f"{check.get('name')} {check.get('outcome')}" for check in checks
+        ) or str(final_state["verification_status"])
+        lines.append(f"- Verification: {detail}")
     repairs = final_state.get("model_repair_log")
     if repairs and str(final_state.get("active_model_version") or "") == "v2":
         try:
@@ -999,6 +1041,44 @@ def _catalysts_components(pm: str) -> list[str]:
     return ["No catalyst or risk conditions were stated in the decision."]
 
 
+def _current_only(final_state: dict, text: str, label: str) -> str:
+    """A narrative section, unless it presents a repaired-away controlling figure."""
+    from tradingagents.research.superseded import controlling_pairs_from_log, uses_superseded
+
+    if uses_superseded(text, controlling_pairs_from_log(final_state)):
+        return (
+            f"**{label} withheld**: it presents a figure the model repair replaced. "
+            "The full text and the repair note are in `appendix.md`."
+        )
+    return text
+
+
+def _fundamentals_for_publication(final_state: dict) -> str:
+    """The analyst summary, unless it still presents a repaired-away figure.
+
+    A repair runs after the Fundamentals Analyst wrote its report. The reviewer
+    and the PM see a repair notice; the investor report must not reprint the old
+    conclusion as current. When the section cites a superseded value, publish the
+    repair's own conclusion list instead (and keep the original in the appendix).
+    """
+    text = str(final_state.get("fundamentals_report") or "")
+    from tradingagents.research.superseded import controlling_pairs_from_log, uses_superseded
+
+    if not uses_superseded(text, controlling_pairs_from_log(final_state)):
+        return text
+    note = str(final_state.get("model_repair_addendum") or "").strip()
+    if note:
+        return (
+            "**Model repair**: the analyst's summary used a figure the repair replaced; "
+            "the repaired conclusions follow. The original text is in `appendix.md`.\n\n"
+            + note
+        )
+    return (
+        "**Fundamental summary withheld**: it cites a figure the model repair replaced. "
+        "The full record and the repair note are in `appendix.md`."
+    )
+
+
 def _valuation_components(package: str) -> list[str]:
     if not package.strip():
         return ["### Verified valuation\nNo verified model in this run."]
@@ -1028,12 +1108,26 @@ def _publication_sections(final_state: dict, total_budget: int = MAX_MAIN_WORDS 
     model at publication time.
     """
     pm = _clean(str(final_state.get("final_trade_decision") or ""))
-    fundamentals = str(final_state.get("fundamentals_report") or "")
+    if str(final_state.get("publication_status") or "").upper() == "BLOCKED":
+        reasons = "; ".join(
+            str(reason) for reason in (final_state.get("publication_reasons") or []) if reason
+        ) or "a controlling value conflicts with the accepted model version"
+        return [(
+            "Publication blocked",
+            "No rating, fair value or target is published for this run: "
+            + reasons
+            + ". The controlling inputs must be reconciled before a decision is "
+            "investor-facing. The full analyst reports, model diagnostics and the "
+            "Portfolio Manager's provisional text remain in `appendix.md`.",
+        )]
+    fundamentals = _fundamentals_for_publication(final_state)
     package = str(
         final_state.get("research_package_artifact") or final_state.get("research_package") or ""
     )
-    debate = str(final_state.get("debate_summary") or "")
-    technical = str(final_state.get("market_report") or "")
+    debate = _current_only(final_state, str(final_state.get("debate_summary") or ""),
+                           "Debate summary")
+    technical = _current_only(final_state, str(final_state.get("market_report") or ""),
+                              "Technical summary")
 
     # The PM's own summary repeats the rating line; the section already has one.
     executive = [
