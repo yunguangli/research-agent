@@ -300,7 +300,7 @@ def test_a_same_authority_conflict_blocks_the_report():
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
-    status, reasons = graph._publication_status({
+    status, reasons, _qualifications = graph._publication_status({
         "price_authority_conflict": (
             "AUTHORITY_CONFLICT: two VERIFIED_CLOSE prices disagree (29,485 vs 32,980)"
         )
@@ -323,7 +323,7 @@ def test_a_decision_that_names_the_old_price_as_superseded_is_not_blocked():
         ),
     }
 
-    status, reasons = graph._publication_status(state)
+    status, reasons, _qualifications = graph._publication_status(state)
 
     assert status == "OK"
     assert reasons == []
@@ -343,7 +343,7 @@ def test_a_decision_that_describes_both_prices_is_not_blocked():
         ),
     }
 
-    status, _reasons = graph._publication_status(state)
+    status, _reasons, _qualifications = graph._publication_status(state)
 
     assert status == "OK"
 
@@ -359,7 +359,7 @@ def test_a_decision_that_uses_a_superseded_price_blocks_publication():
         "final_trade_decision": "**Rating**: Hold\n\nThe shares trade at 29,485.",
     }
 
-    status, reasons = graph._publication_status(state)
+    status, reasons, _qualifications = graph._publication_status(state)
 
     assert status == "BLOCKED"
     assert "superseded" in reasons[0]
@@ -369,7 +369,7 @@ def test_a_decision_written_against_another_model_version_blocks_publication():
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
-    status, reasons = graph._publication_status({
+    status, reasons, _qualifications = graph._publication_status({
         "active_model_version": "v2",
         "decision_model_version": "v1",
     })
@@ -392,7 +392,15 @@ def test_prepare_final_state_withholds_the_rating_when_a_conflict_remains():
 
     assert out["publication_status"] == "BLOCKED"
     assert out["final_rating"] == "Not Rated"
-    assert out["decision_status"] == "PROVISIONAL"
+    assert out["decision_status"] == "NOT_RATED"
+    assert out["controlling_fair_value_low"] is None
+    assert out["controlling_fair_value_base"] is None
+    assert out["controlling_fair_value_high"] is None
+    assert out["controlling_fair_value_method"] is None
+    assert out["publication_fair_value_status"] == "NOT_PUBLISHED"
+    assert str(out["decision_integrity"]).startswith("DEGRADED")
+    assert out["production_decision_allowed"] is False
+    assert out["decision_safety_check"] == "PASS"
     assert "**Publication blocked**" in out["final_trade_decision"]
 
 

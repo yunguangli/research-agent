@@ -124,6 +124,74 @@ class ValuationStatus(StrEnum):
 # ---------------------------------------------------------------------------
 
 
+class TriggerEvidence(BaseModel):
+    """One claim inside a trigger, with the sources that support it."""
+
+    claim: str = Field(description="The evidence claim, one complete sentence.")
+    source_ids: list[str] = Field(
+        default_factory=list, description="Document or data identifiers behind the claim."
+    )
+
+
+class DecisionTrigger(BaseModel):
+    """One event that would change a forecast, the rating or the thesis.
+
+    The separation is the point: repeating company guidance can revise a forecast
+    without invalidating the business, and a single quarterly threshold is not a
+    thesis break unless it is material, unexplained and linked to the thesis.
+    """
+
+    trigger_id: str = Field(default="", description="Stable identifier for this trigger.")
+    trigger_type: Literal[
+        "FORECAST_REVISION_TRIGGER",
+        "RATING_REVIEW_TRIGGER",
+        "THESIS_INVALIDATION_TRIGGER",
+    ] = Field(default="FORECAST_REVISION_TRIGGER")
+    # Legacy field; migrated into trigger_type when absent.
+    kind: Literal[
+        "FORECAST_REVISION_TRIGGER",
+        "RATING_REVIEW_TRIGGER",
+        "THESIS_INVALIDATION_TRIGGER",
+        "",
+    ] = Field(default="")
+    description: str = Field(description="The event, one sentence.")
+    evidence: list[TriggerEvidence] = Field(
+        default_factory=list,
+        description="Structured claims and source ids; never a punctuation-separated string.",
+    )
+    metric: str = Field(default="", description="revenue | operating_profit | net_profit | eps | segment_margin | advances | other")
+    period: str = Field(default="", description="The fiscal period the metric belongs to.")
+    threshold: float | None = Field(default=None, description="The numeric threshold, when stated.")
+    direction: Literal["ABOVE", "BELOW", "CHANGE", "CAUSE_DEPENDENT", ""] = Field(default="")
+    severity: Literal["warning", "material", "structural", "minor", ""] = Field(default="")
+    materiality: Literal["high", "material", "minor", ""] = Field(default="")
+    temporary_explanation: str = Field(
+        default="",
+        description="A credible temporary explanation already documented; empty when none exists.",
+    )
+    thesis_link: str = Field(
+        default="",
+        description="The structural thesis claim the event contradicts; required for thesis invalidation.",
+    )
+    cause: Literal[
+        "",
+        "cancellation",
+        "deferral",
+        "renegotiation",
+        "loss_of_funding",
+        "applied_to_revenue",
+        "construction_milestone",
+    ] = Field(default="", description="For an advances event: the documented cause.")
+    committed_capex_continues: bool | None = Field(
+        default=None,
+        description="For an advances decline: whether committed capex still continues.",
+    )
+
+    @property
+    def effective_type(self) -> str:
+        return self.trigger_type or self.kind or "FORECAST_REVISION_TRIGGER"
+
+
 class ResearchPlan(BaseModel):
     """Structured investment plan produced by the Research Manager.
 
@@ -157,6 +225,10 @@ class ResearchPlan(BaseModel):
             "portfolio manager apply the actual position."
         ),
     )
+    forecast_revision_triggers: list[DecisionTrigger] = Field(default_factory=list)
+    rating_review_triggers: list[DecisionTrigger] = Field(default_factory=list)
+    thesis_invalidation_triggers: list[DecisionTrigger] = Field(default_factory=list)
+    trigger_taxonomy_version: int = 2
 
 
 class ResearchPlanMinimal(BaseModel):
@@ -164,6 +236,18 @@ class ResearchPlanMinimal(BaseModel):
 
     recommendation: PortfolioRating
     rationale: str
+
+
+def _render_triggers(items) -> str:
+    lines: list[str] = []
+    for item in items or []:
+        description = getattr(item, "description", str(item))
+        lines.append(f"- {description}")
+        for evidence in getattr(item, "evidence", []) or []:
+            claim = getattr(evidence, "claim", str(evidence))
+            ids = ", ".join(getattr(evidence, "source_ids", []) or [])
+            lines.append(f"  - {claim}" + (f" ({ids})" if ids else ""))
+    return "\n".join(lines) if lines else "not provided"
 
 
 def render_research_plan(plan: ResearchPlan) -> str:
@@ -174,6 +258,10 @@ def render_research_plan(plan: ResearchPlan) -> str:
         f"**Rationale**: {plan.rationale}",
         "",
         f"**Strategic Actions**: {plan.strategic_actions}",
+        "",
+        f"**Forecast revision triggers**: {_render_triggers(plan.forecast_revision_triggers)}",
+        f"**Rating review triggers**: {_render_triggers(plan.rating_review_triggers)}",
+        f"**Thesis invalidation**: {_render_triggers(plan.thesis_invalidation_triggers)}",
     ])
 
 
@@ -252,7 +340,8 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
         "",
         f"**Entry Condition**: {proposal.entry_condition}",
         "",
-        f"**Deterioration Condition**: {proposal.deterioration_condition}",
+        f"**Deterioration Condition**: {proposal.deterioration_condition} "
+        "(rating review trigger, not thesis invalidation)",
         "",
         f"**Evidence**: {evidence}",
         "",
@@ -349,6 +438,10 @@ class PortfolioDecision(BaseModel):
         description="What caps the position (liquidity, ATR, mandate, concentration); never a size.",
     )
     thesis_invalidation: list[str] = Field(default_factory=list)
+    forecast_revision_triggers: list[DecisionTrigger] = Field(default_factory=list)
+    rating_review_triggers: list[DecisionTrigger] = Field(default_factory=list)
+    thesis_invalidation_triggers: list[DecisionTrigger] = Field(default_factory=list)
+    trigger_taxonomy_version: int = 2
     upgrade_evidence: list[str] = Field(default_factory=list)
     downgrade_evidence: list[str] = Field(default_factory=list)
     # Traceability: every published bound names the source it came from, and a
@@ -488,11 +581,17 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     parts.extend(["", "**Decision framework**:", "", "| Item | Assessment |", "|---|---|"])
     parts.extend(f"| {label} | {value if value else 'not provided'} |" for label, value in rows)
     for title, items in (
-        ("Thesis invalidation", decision.thesis_invalidation),
+        ("Forecast revision triggers", decision.forecast_revision_triggers),
+        ("Rating review triggers", decision.rating_review_triggers),
+        ("Thesis invalidation", decision.thesis_invalidation_triggers),
         ("Evidence to upgrade", decision.upgrade_evidence),
         ("Evidence to downgrade", decision.downgrade_evidence),
     ):
-        parts.extend(["", f"**{title}**: " + ("; ".join(items) if items else "not provided")])
+        if items and hasattr(items[0], "description"):
+            parts.extend(["", f"**{title}**:", _render_triggers(items)])
+        else:
+            text = "; ".join(str(item) for item in items) if items else "not provided"
+            parts.extend(["", f"**{title}**: {text}"])
     parts.extend(["", f"**Downgrade applicability**: {decision.downgrade_applicability}"])
     if decision.evidence_to_downgrade:
         parts.extend([

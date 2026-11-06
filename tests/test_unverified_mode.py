@@ -67,7 +67,9 @@ def test_an_unverified_packet_removes_every_model_output():
 
 
 def test_a_verified_packet_is_unchanged():
-    packet = filter_decision_inputs(_state(model_status="VERIFIED"))
+    packet = filter_decision_inputs(
+        _state(model_status="VERIFIED", research_model_source="built")
+    )
 
     assert packet["verified"] is True
     assert packet["package"] == "FUNDAMENTAL MODEL ..."

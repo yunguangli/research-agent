@@ -29,6 +29,34 @@ RATINGS_5_TIER: tuple[str, ...] = (
 # (e.g. ``PortfolioRating(signal)``) should guard with ``is_review`` first.
 RATING_REVIEW = "REVIEW"
 
+# Canonical upper-case codes stored in ``provisional_decision`` and
+# ``published_decision``. The display form stays the 5-tier label.
+DECISION_CODES: tuple[str, ...] = (
+    "BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL", "NOT_RATED",
+)
+_DISPLAY_BY_CODE = {
+    "BUY": "Buy",
+    "OVERWEIGHT": "Overweight",
+    "HOLD": "Hold",
+    "UNDERWEIGHT": "Underweight",
+    "SELL": "Sell",
+    "NOT_RATED": "Not Rated",
+}
+_CODE_BY_DISPLAY = {display.upper(): code for code, display in _DISPLAY_BY_CODE.items()}
+_CODE_BY_DISPLAY["REVIEW"] = "NOT_RATED"
+_CODE_BY_DISPLAY["NOT RATED"] = "NOT_RATED"
+
+
+def canonical_decision(value: str | None) -> str:
+    """Normalise a rating to its stored code; an unreadable call is NOT_RATED."""
+    text = " ".join(str(value or "").replace("_", " ").split()).upper()
+    return _CODE_BY_DISPLAY.get(text, "NOT_RATED")
+
+
+def display_decision(code: str | None) -> str:
+    """The investor-facing form of a stored decision code."""
+    return _DISPLAY_BY_CODE.get(str(code or "").strip().upper(), "Not Rated")
+
 _RATING_SET = {r.lower() for r in RATINGS_5_TIER}
 
 # Matches "Rating: X" / "rating - X" / "Rating — **X**" — tolerates markdown

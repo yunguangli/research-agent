@@ -25,6 +25,7 @@ import time
 from tradingagents.agents.context import (
     EVIDENCE_DISCIPLINE,
     FIGURE_MARKER_RULE,
+    bridge_arithmetic_block,
     case_availability,
     case_block,
     corrections_block,
@@ -32,17 +33,22 @@ from tradingagents.agents.context import (
     fill_placeholders,
     fundamentals_with_repair_notice,
     get_language_instruction,
+    model_facts_block,
     position_fields,
     report_or_absent,
+    resolved_status_block,
+    source_facts_block,
 )
 from tradingagents.agents.rating import RATING_REVIEW, parse_rating
 from tradingagents.agents.schemas import (
     DecisionConfidence,
+    DecisionTrigger,
     HolderAction,
     NewInvestorAction,
     PortfolioDecision,
     PortfolioDecisionMinimal,
     PortfolioRating,
+    TriggerEvidence,
     ValuationStatus,
     render_pm_decision,
 )
@@ -283,7 +289,25 @@ You may give qualitative timing guidance such as:
 
 Distinguish fundamental invalidation from ordinary price volatility.
 
+Trigger classification. Put each event in exactly one list:
+- forecast_revision_triggers: evidence challenges a forecast assumption or annual
+  estimate;
+- rating_review_triggers: a forecast or valuation change may alter expected return;
+- thesis_invalidation_triggers: evidence contradicts the structural investment thesis.
+Repeating company guidance belongs in forecast revision, not thesis invalidation.
+A single quarterly threshold belongs in thesis invalidation only when it is material,
+has no documented temporary explanation, and names the structural claim it contradicts
+(thesis_link). For a customer-advances event, state the documented cause
+(cancellation, deferral, renegotiation, loss_of_funding, applied_to_revenue or
+construction_milestone) and whether committed capex continues; a decline with no cause
+is not a negative trigger.
+
 TARGET AND VALUATION
+
+When the model states CALCULATION_STATUS=VERIFIED and
+ASSUMPTION_STATUS=ANALYST_ASSUMPTION, say the valuation is mechanically verified
+but the multiple is an analyst assumption. Never call that range or target simply
+verified. The same rule applies to EV/EBITDA, P/B, DCF and scenario multiples.
 
 {{valuation_sources_or_null}}
 
@@ -1209,6 +1233,7 @@ def create_portfolio_manager(llm):
         audit_result: dict = {}
         decision_basis = ""
         technical_overlay = ""
+        trigger_findings: list[str] = []
 
         if str(state.get("model_status") or "").upper() == "UNVERIFIED" and not _valid_non_model_basis(state):
             # No verified valuation and no audited non-model basis: the decision
@@ -1224,6 +1249,10 @@ def create_portfolio_manager(llm):
         prompt = (
             _fill(state, ticker, analysis_date)
             + corrections_block(state)
+            + bridge_arithmetic_block(state)
+            + resolved_status_block(state)
+            + source_facts_block(state)
+            + model_facts_block(state)
             + NO_EXTERNAL_TOOLS
             + EVIDENCE_DISCIPLINE
             + case_availability(state)
@@ -1572,6 +1601,20 @@ def create_portfolio_manager(llm):
                 time.monotonic() - started,
                 status.get("reason") or "schema",
             )
+            # Legacy free-text invalidations migrate into the structured taxonomy;
+            # they are never rendered as a separate legacy section.
+            if decision.thesis_invalidation and not decision.thesis_invalidation_triggers:
+                decision.thesis_invalidation_triggers = [
+                    DecisionTrigger(
+                        kind="THESIS_INVALIDATION_TRIGGER",
+                        trigger_type="THESIS_INVALIDATION_TRIGGER",
+                        description=str(item),
+                        evidence=[TriggerEvidence(claim=str(item))],
+                    )
+                    for item in decision.thesis_invalidation
+                    if str(item).strip()
+                ]
+            decision.thesis_invalidation = []
             action_notes = _normalize_actions(decision)
             action_notes += _align_rating_with_holder_action(decision)
             action_note = action_note_from_retry
@@ -1581,6 +1624,34 @@ def create_portfolio_manager(llm):
                 decision, state
             )
             _technical_trigger_gate(decision)
+            trigger_findings: list[str] = []
+            try:
+                from tradingagents.research import (
+                    report as research_report,
+                    triggers as triggers_module,
+                )
+
+                spec = (
+                    research_report.load_spec(state.get("research_model_path"))
+                    if state.get("research_model_path") else None
+                )
+                (
+                    decision.forecast_revision_triggers,
+                    decision.rating_review_triggers,
+                    decision.thesis_invalidation_triggers,
+                    trigger_findings,
+                ) = triggers_module.normalise(
+                    decision.forecast_revision_triggers,
+                    decision.rating_review_triggers,
+                    decision.thesis_invalidation_triggers,
+                    spec,
+                )
+            except Exception as exc:  # noqa: BLE001 - a trigger check must not lose the decision
+                logger.info("Trigger classification skipped: %s", exc)
+            if trigger_findings:
+                action_note += (
+                    "\n\n**Trigger classification**: " + "; ".join(trigger_findings)
+                )
             final_trade_decision = (
                 render_pm_decision(decision)
                 + range_note
@@ -1672,6 +1743,20 @@ def create_portfolio_manager(llm):
         if package_update and package_update != str(state.get("research_package") or ""):
             result["research_package"] = package_update
             result["research_package_artifact"] = artifact_update
+        if decision is not None:
+            result["decision_triggers"] = json.dumps({
+                "trigger_taxonomy_version": decision.trigger_taxonomy_version,
+                "forecast_revision": [
+                    trigger.model_dump() for trigger in decision.forecast_revision_triggers
+                ],
+                "rating_review": [
+                    trigger.model_dump() for trigger in decision.rating_review_triggers
+                ],
+                "thesis_invalidation": [
+                    trigger.model_dump() for trigger in decision.thesis_invalidation_triggers
+                ],
+            }, default=str)
+            result["trigger_taxonomy_version"] = decision.trigger_taxonomy_version
         from tradingagents.research.report import decision_fair_value
 
         low, base, high = decision_fair_value(final_trade_decision)
@@ -1690,6 +1775,11 @@ def create_portfolio_manager(llm):
             valuation_verified=valuation_verified,
             audit_passed=bool(audit_result.get("validation_passed", True)),
         )
+        if trigger_findings:
+            result["decision_findings"] = json.dumps([
+                {"code": "TRIGGER_RECLASSIFIED", "detail": detail}
+                for detail in trigger_findings
+            ])
         if status.get("reason"):
             result["structured_fallbacks"] = {"Portfolio Manager": status["reason"]}
         return result

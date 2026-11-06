@@ -25,8 +25,10 @@ from tradingagents.agents.context import (
     fill_placeholders,
     fundamentals_with_repair_notice,
     get_language_instruction,
+    model_facts_block,
     position_fields,
     report_or_absent,
+    source_facts_block,
 )
 from tradingagents.research.cases import (
     CAP_FORECAST_PCT,
@@ -486,6 +488,8 @@ def create_adversarial_reviewer(llm):
 
         prompt = (
             _fill(state, ticker)
+            + source_facts_block(state)
+            + model_facts_block(state)
             + COMPARATIVE_CLAIM_RULE
             + EVIDENCE_DISCIPLINE
             + case_availability(state)

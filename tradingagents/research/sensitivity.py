@@ -36,6 +36,9 @@ class Sensitivity:
     model_field: str
     base_assumption: float
     alternative_assumption: float
+    driver_id: str = ""
+    economic_driver_id: str = ""
+    shocked_input: str = ""
     revenue_impact: float | None = None
     operating_profit_impact: float | None = None
     pretax_profit_impact: float | None = None
@@ -64,6 +67,9 @@ class Sensitivity:
         return {
             "sensitivity_id": self.sensitivity_id,
             "driver": self.driver,
+            "driver_id": self.driver_id,
+            "economic_driver_id": self.economic_driver_id,
+            "shocked_input": self.shocked_input,
             "model_field": self.model_field,
             "bridge_id": self.bridge_id,
             "model_field_id": self.model_field_id,
@@ -376,10 +382,100 @@ def _apply_shift(shock, base_model, spec, metric: str, period: str, delta: float
         period = later.target_period
 
 
+def _normalise_label(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _gap_driver_label(gap: str) -> str:
+    for prefix in (
+        "SENSITIVITY_PROPAGATION_FAILED: ",
+        "RESEARCH_GAP_NO_PROPAGATION: ",
+    ):
+        if str(gap).startswith(prefix):
+            return str(gap)[len(prefix):].split(":", 1)[0].strip()
+    return ""
+
+
+def _canonical_driver_key(text: str) -> str:
+    """The economic driver's identity, without qualifiers.
+
+    "Cell 8 loading / utilisation (operating-profit contribution)" and
+    "Cell 8 loading (operating-profit contribution)" are one driver, not two.
+    """
+    base = re.split(r"[/\(\[]", str(text or ""), maxsplit=1)[0]
+    return _slug(base)
+
+
+def _canonical_driver_map(spec) -> dict[str, str]:
+    """Every display label the model uses, resolved to its canonical driver id."""
+    mapping: dict[str, str] = {}
+    for bridge in getattr(spec, "bridges", []) or []:
+        for line in bridge.lines:
+            canonical = _canonical_driver_key(line.driver or line.label)
+            for label in (line.driver, line.label):
+                key = _normalise_label(label)
+                if key:
+                    mapping[key] = canonical
+    return mapping
+
+
+def _verified_driver_ids(items) -> set[str]:
+    return {
+        _canonical_driver_key(item.driver)
+        for item in items
+        if item.verification_status == "VERIFIED"
+    }
+
+
+def filter_gaps(spec, items, gaps: list[str]) -> list[str]:
+    """Drop a failed mapping when the same canonical driver verified elsewhere."""
+    canonical = _canonical_driver_map(spec)
+    verified = _verified_driver_ids(items)
+    verified_labels = [
+        _normalise_label(item.driver) for item in items
+        if item.verification_status == "VERIFIED"
+    ]
+    kept: list[str] = []
+    for gap in gaps:
+        label = _gap_driver_label(gap)
+        driver_id = (
+            canonical.get(_normalise_label(label)) or _canonical_driver_key(label)
+        )
+        if driver_id in verified:
+            continue
+        if label and any(
+            _normalise_label(label) in display for display in verified_labels
+        ):
+            continue
+        kept.append(gap)
+    return kept
+
+
+def mapping_summary(spec, items, gaps: list[str]) -> dict:
+    """Economic-driver coverage, kept separate from model-node propagation."""
+    canonical = _canonical_driver_map(spec)
+    failed: dict[str, str] = {}
+    for gap in gaps:
+        label = _gap_driver_label(gap)
+        driver_id = (
+            canonical.get(_normalise_label(label)) or _canonical_driver_key(label)
+        )
+        if driver_id and driver_id not in failed:
+            failed[driver_id] = label
+    return {
+        "economic_driver_mapping_status": "PARTIAL" if failed else "COMPLETE",
+        "failed_driver_mappings": len(failed),
+        "failed_driver_mapping_ids": sorted(failed),
+    }
+
+
 def rank(
     spec: ModelSpec, top: int = 5, *, eps_verified: bool = True, pe_verified: bool = True
 ) -> tuple[list[Sensitivity], list[str]]:
     """``(ranked sensitivities, research gaps)`` for the spec's own assumptions."""
+    from . import drivers
+
+    drivers.normalize(spec)
     try:
         base_model = kernel.run(spec)
         base_valuation = valuation_module.value(base_model)
@@ -463,12 +559,42 @@ def rank(
             # so a review written before this change still resolves.
             bridge_id = f"{_slug(bridge.metric)}_{_slug(bridge.target_period)}"
             model_field_id = _slug(line.label)
-            sensitivity_id = f"{bridge_id}_{model_field_id}"
+            shocked = str(
+                line.shocked_input
+                or ("operating_profit" if bridge.metric == "operating_profit" else bridge.metric)
+            )
+            value_id = _slug(
+                line.economic_driver_id if line.explicit_contract and line.economic_driver_id
+                else line.label
+            )
+            display_driver = line.driver or line.label
+            economic_id = value_id
+            misleading_capacity_name = bool(
+                re.search(
+                    r"utilis|utiliz|loading|capacity",
+                    f"{line.driver or ''} {line.label or ''}",
+                    re.IGNORECASE,
+                )
+            )
+            if (
+                bridge.metric == "operating_profit"
+                and not line.capacity_source
+                and line.utilization is None
+                and shocked == "operating_profit"
+                and (line.explicit_contract or line.shocked_input or misleading_capacity_name)
+                and not value_id.endswith("op_contribution")
+            ):
+                # A shock applied directly to operating profit is not capacity
+                # utilisation: name the input it actually moves.
+                value_id = f"{value_id}_op_contribution"
+                display_driver = f"{display_driver} (operating-profit contribution)"
+            sensitivity_id = f"{bridge_id}_{value_id}"
             if sensitivity_id in seen:
                 sensitivity_id = f"{sensitivity_id}_{len(seen)}"
             seen.add(sensitivity_id)
             legacy = _slug(line.driver)
-            aliases = [legacy]
+            aliases = [legacy, economic_id, _slug(line.driver_id), _slug(line.label)]
+            aliases.extend(_slug(alias) for alias in (line.driver_aliases or []))
             if legacy != model_field_id:
                 aliases.append(f"{legacy}_{_slug(line.label)}")
             base_eps = base_row.eps.get(basis) if base_row else None
@@ -485,7 +611,10 @@ def rank(
             )
             item = Sensitivity(
                     sensitivity_id=sensitivity_id,
-                    driver=line.driver,
+                    driver=display_driver,
+                    driver_id=line.driver_id or value_id,
+                    economic_driver_id=line.economic_driver_id or economic_id,
+                    shocked_input=shocked,
                     model_field=f"{bridge.metric} bridge {bridge.target_period}: {line.label}",
                     base_assumption=line.value,
                     alternative_assumption=line.alternative,
@@ -550,6 +679,9 @@ def rank(
             item.sensitivity_id,
         ),
     )
+    # A canonical verified result suppresses a stale failure recorded under one
+    # of its aliases; the same driver may not be both verified and failed.
+    gaps = filter_gaps(spec, published, gaps)
     return published, gaps
 
 

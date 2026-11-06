@@ -133,8 +133,8 @@ def test_the_header_reports_each_output_status_separately():
 
     assert "- Operating model: VERIFIED" in header
     assert "- EPS model: SUPPRESSED" in header
-    assert "- Valuation: SUPPRESSED" in header
-    assert "- Sensitivity model: UNAVAILABLE" in header
+    assert "- Valuation: CALCULATION_STATUS=SUPPRESSED" in header
+    assert "- MODEL_NODE_SENSITIVITY_STATUS: UNAVAILABLE" in header
 
 
 def test_pm_actions_stated_only_in_prose_become_advisory():

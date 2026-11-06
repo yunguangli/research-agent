@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
+from .assumptions import MethodAssumption
+
 PROVENANCE = ("disclosed", "guidance", "derived", "assumption", "internal_note")
 BASIS = ("actual", "guidance", "forecast")
 
@@ -69,6 +71,37 @@ class Line:
     # it to. Empty driver = no explicit assumption (a research gap).
     driver: str = ""
     alternative: float | None = None
+    # What the driver is made of, so one broad label cannot stand for existing
+    # utilisation, new capacity, mix and pricing at the same time. All optional for
+    # specs written before the driver contract.
+    driver_id: str = ""
+    segment: str = ""
+    basis: str = ""                    # revenue | cost | capacity | volume | price_mix | fixed_cost | depreciation
+    capacity_source: str = ""
+    start_period: str = ""
+    utilization: float | None = None
+    price_mix: float | None = None
+    incremental_cost: float | None = None
+    depreciation_treatment: str = ""
+    revenue_base_id: str = ""
+    capacity_block_id: str = ""
+    volume_increment_id: str = ""
+    allocation_ref: str = ""           # reconciles an overlap when two drivers share a base
+    shocked_input: str = ""            # the input the sensitivity actually moves
+    # The current driver contract. The older aliases above are kept so cached
+    # specs still load; normalization fills these from them.
+    economic_driver_id: str = ""
+    model_stage: str = ""
+    affected_segment: str = ""
+    revenue_or_cost_basis: str = ""
+    utilisation_assumption: str = ""
+    price_mix_assumption: str = ""
+    incremental_cost_assumption: str = ""
+    ramp_cost_treatment: str = ""
+    evidence_class: str = ""
+    propagation_ref: str = ""
+    driver_aliases: list[str] = field(default_factory=list)
+    explicit_contract: bool = False
 
     def __post_init__(self) -> None:
         normalised = PROVENANCE_ALIASES.get(str(self.provenance).strip().lower(), self.provenance)
@@ -80,6 +113,14 @@ class Line:
             )
         if self.provenance == "derived" and not self.formula:
             raise ModelError(f"Derived line {self.label!r} must state its formula")
+        if not self.evidence_class:
+            self.evidence_class = {
+                "disclosed": "COMPANY_REPORTED",
+                "guidance": "COMPANY_GUIDANCE",
+                "derived": "DERIVED_FROM_SOURCED_INPUTS",
+                "assumption": "ANALYST_ASSUMPTION",
+                "internal_note": "ANALYST_ASSUMPTION",
+            }.get(self.provenance, "UNRESOLVED")
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -88,6 +129,15 @@ class Line:
 
     @classmethod
     def from_dict(cls, data: dict) -> Line:
+        utilization, utilisation_assumption = _numeric_or_assumption(
+            data, "utilization", "utilisation_assumption"
+        )
+        price_mix, price_mix_assumption = _numeric_or_assumption(
+            data, "price_mix", "price_mix_assumption"
+        )
+        incremental_cost, incremental_cost_assumption = _numeric_or_assumption(
+            data, "incremental_cost", "incremental_cost_assumption"
+        )
         return cls(
             label=data["label"],
             value=float(data["value"]),
@@ -96,7 +146,60 @@ class Line:
             cite=[Citation.from_dict(c) for c in data.get("cite", [])],
             driver=str(data.get("driver") or ""),
             alternative=_opt(data.get("alternative")),
+            driver_id=str(data.get("driver_id") or ""),
+            segment=str(data.get("segment") or ""),
+            basis=str(data.get("basis") or ""),
+            capacity_source=str(data.get("capacity_source") or ""),
+            start_period=str(data.get("start_period") or ""),
+            utilization=utilization,
+            price_mix=price_mix,
+            incremental_cost=incremental_cost,
+            depreciation_treatment=str(data.get("depreciation_treatment") or ""),
+            revenue_base_id=str(data.get("revenue_base_id") or ""),
+            capacity_block_id=str(data.get("capacity_block_id") or ""),
+            volume_increment_id=str(data.get("volume_increment_id") or ""),
+            allocation_ref=str(data.get("allocation_ref") or ""),
+            shocked_input=str(data.get("shocked_input") or ""),
+            economic_driver_id=str(data.get("economic_driver_id") or ""),
+            model_stage=str(data.get("model_stage") or ""),
+            affected_segment=str(data.get("affected_segment") or ""),
+            revenue_or_cost_basis=str(data.get("revenue_or_cost_basis") or ""),
+            utilisation_assumption=utilisation_assumption,
+            price_mix_assumption=price_mix_assumption,
+            incremental_cost_assumption=incremental_cost_assumption,
+            ramp_cost_treatment=str(data.get("ramp_cost_treatment") or ""),
+            evidence_class=str(data.get("evidence_class") or ""),
+            propagation_ref=str(data.get("propagation_ref") or ""),
+            driver_aliases=[str(item) for item in (data.get("driver_aliases") or [])],
+            explicit_contract=(
+                bool(data["explicit_contract"])
+                if "explicit_contract" in data
+                else any(
+                    data.get(key) for key in (
+                        "driver_id", "economic_driver_id", "model_stage", "affected_segment",
+                        "revenue_or_cost_basis", "capacity_source", "start_period",
+                        "utilisation_assumption", "price_mix_assumption",
+                        "incremental_cost_assumption", "depreciation_treatment",
+                        "ramp_cost_treatment", "evidence_class",
+                    )
+                )
+            ),
         )
+
+
+@dataclass
+class BridgeArithmetic:
+    """The deterministic bridge identity, consumed by every downstream stage."""
+
+    base: float
+    components: list[float]
+    calculated_total: float
+    declared_total: float
+    difference: float
+    reconciliation_status: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 @dataclass
@@ -118,6 +221,20 @@ class Bridge:
     @property
     def total(self) -> float:
         return self.base_value + sum(line.value for line in self.lines)
+
+    @property
+    def arithmetic(self) -> BridgeArithmetic:
+        calculated = self.total
+        declared = self.declared_total if self.declared_total is not None else calculated
+        difference = calculated - declared
+        return BridgeArithmetic(
+            base=self.base_value,
+            components=[line.value for line in self.lines],
+            calculated_total=calculated,
+            declared_total=declared,
+            difference=difference,
+            reconciliation_status="VERIFIED" if abs(difference) <= 1e-9 else "UNRESOLVED",
+        )
 
     @property
     def deltas(self) -> float:
@@ -365,9 +482,16 @@ class ValuationSpec:
     ev_ebitda_multiple_provenance: str = "analyst_assumption"
     ev_ebitda_multiple_rationale: str = ""
     ev_ebitda_multiple_refs: list[str] = field(default_factory=list)
+    # Per-method evidence: a P/E can be mechanically correct with an analyst
+    # multiple. Empty means the method was not declared, not that it is supported.
+    assumptions: list[MethodAssumption] = field(default_factory=list)
     provenance: str = ""              # reported | guidance | consensus | derived | assumption
     sensitivity_multiples: list[float] = field(default_factory=list)
     method_note: str = ""
+    # Which method controls the decision. The method-level ``controlling`` flag
+    # is a consistency check, not a second authority.
+    controlling_valuation_method: str = "pe"
+    valuation_methods: dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -398,9 +522,20 @@ class ValuationSpec:
                 data.get("ev_ebitda_multiple_rationale") or ""
             ),
             ev_ebitda_multiple_refs=list(data.get("ev_ebitda_multiple_refs") or []),
+            assumptions=[
+                MethodAssumption.from_dict(item)
+                for item in (data.get("assumptions") or [])
+            ],
             provenance=str(data.get("provenance") or ""),
             sensitivity_multiples=[float(m) for m in data.get("sensitivity_multiples", [])],
             method_note=data.get("method_note", ""),
+            controlling_valuation_method=str(
+                data.get("controlling_valuation_method") or "pe"
+            ),
+            valuation_methods=(
+                data.get("valuation_methods")
+                if isinstance(data.get("valuation_methods"), dict) else {}
+            ),
         )
 
 
@@ -670,6 +805,13 @@ class ModelSpec:
     quarterly_fy: str = ""
     h1_label: str = ""
     segments: dict[str, list[Segment]] = field(default_factory=dict)
+    # True when the corpus discloses segment results, whether or not the model
+    # carries them. It separates "no dominant segment" from "segment data missing".
+    segment_disclosure: bool = False
+    # True only when segment reconciliation is an explicit controlling input to
+    # the valuation or the decision. An incomplete segment build is otherwise a
+    # published qualification, not a blocker.
+    segment_reconciliation_controlling: bool = False
     cashflow: dict[str, CashFlow] = field(default_factory=dict)
     scenarios: list[Scenario] = field(default_factory=list)
     eps_basis: str = "full_share"
@@ -688,6 +830,7 @@ class ModelSpec:
     # Optional share-count ledger. When absent, the named ShareBase entries are
     # the source of truth.
     capital_structure: CapitalStructure | None = None
+    trigger_taxonomy_version: int = 2
 
     def __post_init__(self) -> None:
         # A caller may still pass a bare net-debt figure. Keep it, but as an
@@ -731,6 +874,8 @@ class ModelSpec:
             "quarterly_fy": self.quarterly_fy,
             "h1_label": self.h1_label,
             "segments": {k: [s.to_dict() for s in v] for k, v in self.segments.items()},
+            "segment_disclosure": self.segment_disclosure,
+            "segment_reconciliation_controlling": self.segment_reconciliation_controlling,
             "cashflow": {k: v.to_dict() for k, v in self.cashflow.items()},
             "bridges": [b.to_dict() for b in self.bridges],
             "share_bases": [s.to_dict() for s in self.share_bases],
@@ -769,6 +914,10 @@ class ModelSpec:
                 k: [Segment.from_dict(s) for s in _sequence(v)]
                 for k, v in _mapping(data.get("segments")).items()
             },
+            segment_disclosure=bool(data.get("segment_disclosure", False)),
+            segment_reconciliation_controlling=bool(
+                data.get("segment_reconciliation_controlling", False)
+            ),
             cashflow={
                 k: CashFlow.from_dict(v) for k, v in _mapping(data.get("cashflow")).items()
                 if isinstance(v, dict)
@@ -792,7 +941,36 @@ class ModelSpec:
                 CapitalStructure.from_dict(data["capital_structure"])
                 if isinstance(data.get("capital_structure"), dict) else None
             ),
+            trigger_taxonomy_version=int(data.get("trigger_taxonomy_version", 2)),
         )
+
+
+def _numeric_or_assumption(
+    data: dict, numeric_key: str, assumption_key: str
+) -> tuple[float | None, str]:
+    """Read a numeric legacy field, or keep a qualitative answer as an assumption.
+
+    A model may answer ``"flat ASP on base volume"`` for ``price_mix`` even though
+    the old field is numeric; the current contract has ``price_mix_assumption``
+    for exactly that. A percentage such as ``"100%"`` is 1.0 utilisation.
+    """
+    raw = data.get(numeric_key)
+    assumption = str(data.get(assumption_key) or "").strip()
+    if raw is None or isinstance(raw, bool) or raw == "":
+        return None, assumption
+    if isinstance(raw, (int, float)):
+        return float(raw), assumption
+    text = str(raw).strip()
+    try:
+        return float(text.replace(",", "")), assumption
+    except ValueError:
+        pass
+    if text.endswith("%"):
+        try:
+            return float(text[:-1].strip().replace(",", "")) / 100.0, assumption
+        except ValueError:
+            pass
+    return None, assumption or text
 
 
 def _opt(value):

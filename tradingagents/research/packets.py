@@ -34,8 +34,12 @@ def model_verified(state: dict[str, Any]) -> bool:
 
     Only an explicit UNVERIFIED blocks: a run with no deterministic model
     (NOT_APPLICABLE) is the classic pipeline, which never had model figures to
-    withhold, and an old checkpoint without the key must keep working.
+    withhold, and an old checkpoint without the key must keep working. A run whose
+    model source is ``unavailable`` is blocked even if its older status key has not
+    been updated yet.
     """
+    if str(state.get("research_model_source") or "") == "unavailable":
+        return False
     return str(state.get("model_status") or "").upper() != "UNVERIFIED"
 
 

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -1333,7 +1334,34 @@ WRITING
 - Numerical comparisons agree with the accompanying figures;
 - Unsupported certainty has been removed.
 
-Correct every identified issue before finalizing."""
+Correct every identified issue before finalizing.
+
+============================================================
+25. MACHINE-READABLE SEGMENT EVIDENCE
+============================================================
+
+After the narrative, append exactly one block on its own lines:
+
+SEGMENT_EVIDENCE:
+{"segment_evidence": [
+  {"segment_name": "...", "period": "...", "revenue": 0,
+   "operating_profit": 0, "currency": "...", "source_ids": ["..."],
+   "evidence_status": "REPORTED"}
+], "segment_disclosure_status": "SEGMENT_DATA_DISCLOSED"}
+
+Rules:
+- Report every segment the documents disclose for the latest reported period,
+  with revenue and operating profit in whole currency units.
+- Use reported segment figures only; do not estimate a missing segment.
+- "period" is the disclosed period, e.g. "H1 FY3/2027".
+- "currency" is the ISO code; "source_ids" must name the documents.
+- "evidence_status" is REPORTED or GUIDANCE.
+- If the company does not disclose segment revenue and operating profit, return:
+  {"segment_evidence": [], "segment_disclosure_status": "NO_SEGMENT_DISCLOSURE"}
+- If the documents discuss segments but do not provide both revenue and
+  operating profit, return [] with "SEGMENT_DATA_INCOMPLETE".
+- Do not put this block in the narrative and do not mention it in prose.
+"""
 
 
 def _tool_schemas(tools) -> str:
@@ -1443,6 +1471,101 @@ def _benchmark_for(config, ticker: str) -> str:
     return str(benchmark_map.get("", "SPY") or "SPY")
 
 
+SEGMENT_EVIDENCE_RETRY_SYSTEM = (
+    "You correct one machine-readable block in an analyst report. You never "
+    "rewrite the narrative, never add commentary and never invent a figure."
+)
+
+SEGMENT_EVIDENCE_RETRY_INSTRUCTIONS = """Return only the SEGMENT_EVIDENCE block for the report below.
+
+It must be one JSON object on its own lines, beginning with the marker:
+
+SEGMENT_EVIDENCE:
+{"segment_evidence": [{"segment_name": "...", "period": "...", "revenue": 0,
+ "operating_profit": 0, "currency": "...", "source_ids": ["..."],
+ "evidence_status": "REPORTED"}], "segment_disclosure_status": "SEGMENT_DATA_DISCLOSED"}
+
+Rules:
+- Use only figures the report itself states; do not estimate or invent any number.
+- Every row needs segment_name, period, revenue, operating_profit, currency and
+  at least one source_id.
+- If the report states that the company discloses no segment revenue and
+  operating profit, return exactly:
+  {"segment_evidence": [], "segment_disclosure_status": "NO_SEGMENT_DISCLOSURE"}
+- If the report discusses segments but does not give both revenue and operating
+  profit for them, return exactly:
+  {"segment_evidence": [], "segment_disclosure_status": "SEGMENT_DATA_INCOMPLETE"}
+- Do not write the report again. Do not add prose before or after the JSON.
+"""
+
+
+def _message_text(message) -> str:
+    content = getattr(message, "content", message)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part if isinstance(part, str) else str((part or {}).get("text") or "")
+            for part in content
+        )
+    return str(content or "")
+
+
+def _request_segment_evidence(llm, narrative: str) -> str:
+    """One focused, tool-free correction call; returns the raw answer."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    prompt = (
+        SEGMENT_EVIDENCE_RETRY_INSTRUCTIONS
+        + "\nReport:\n"
+        + (narrative or "").strip()
+    )
+    response = llm.invoke(
+        [SystemMessage(content=SEGMENT_EVIDENCE_RETRY_SYSTEM), HumanMessage(content=prompt)]
+    )
+    return _message_text(response).strip()
+
+
+def ensure_segment_evidence(llm, report: str, enabled: bool = True):
+    """Parse the analyst's block and, when invalid, retry it once.
+
+    The narrative is never regenerated: the retry answer supplies only the
+    missing block, and the published report keeps the original text with the
+    block stripped. A still-invalid answer is marked schema-missing, which the
+    reviewer-entry audit turns into a blocked publication.
+    """
+    from tradingagents.research import segment_evidence as segment_module
+
+    evidence = segment_module.extract(report)
+    retry = {
+        "attempted": False,
+        "reason": "",
+        "valid_after_retry": False,
+        "findings": list(evidence.findings),
+    }
+    if not enabled or not segment_module.needs_retry(evidence):
+        return evidence, retry
+    retry["attempted"] = True
+    retry["reason"] = (
+        "absent" if evidence.source == segment_module.MISSING else "invalid"
+    )
+    try:
+        answer = _request_segment_evidence(llm, report)
+    except Exception as exc:  # noqa: BLE001 - a failed retry is a missing block
+        answer = ""
+        retry["findings"].append(f"segment evidence retry failed: {type(exc).__name__}")
+    corrected = segment_module.extract(answer, allow_bare=True) if answer else None
+    if corrected is not None and not segment_module.needs_retry(corrected):
+        # Keep the original narrative: only the structured block is replaced.
+        corrected.clean_text = evidence.clean_text
+        retry["valid_after_retry"] = True
+        return corrected, retry
+    extra = list(corrected.findings) if corrected is not None else []
+    segment_module.mark_retry_exhausted(evidence, extra)
+    retry["findings"] = list(evidence.findings)
+    return evidence, retry
+
+
 def create_fundamentals_analyst(llm, tools=None):
     active_tools = list(tools) if tools is not None else list(TOOLS)
     corpus_enabled = any(tool.name in CORPUS_TOOL_NAMES for tool in active_tools)
@@ -1533,9 +1656,24 @@ def create_fundamentals_analyst(llm, tools=None):
 
         result, report = take_turn(prompt, llm, active_tools, state["messages"])
 
+        evidence, retry = ensure_segment_evidence(
+            llm,
+            report,
+            enabled=bool(str(state.get("research_model_path") or "").strip()),
+        )
+        if retry.get("attempted"):
+            logger.info(
+                "SEGMENT_EVIDENCE %s; retry %s",
+                "valid after retry" if retry.get("valid_after_retry") else "still invalid",
+                retry.get("reason"),
+            )
         return {
             "messages": [result],
-            "fundamentals_report": report,
+            "fundamentals_report": evidence.clean_text,
+            "segment_evidence": json.dumps(evidence.to_dict()),
+            "segment_evidence_source": evidence.source,
+            "segment_evidence_schema_missing": evidence.schema_missing,
+            "segment_evidence_retry": json.dumps(retry),
         }
 
     return fundamentals_analyst_node

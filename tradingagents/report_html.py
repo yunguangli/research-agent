@@ -11,7 +11,7 @@ from html import escape
 
 from markdown_it import MarkdownIt
 
-from tradingagents.agents.rating import run_rating
+from tradingagents.agents.rating import display_decision, run_rating
 from tradingagents.reporting import analyst_names
 
 # Ratings by direction, so the page can show which way the call leans.
@@ -238,6 +238,49 @@ def _run_details(final_state: dict, settings: dict | None) -> list[tuple[str, st
         if reasons:
             value += " - " + "; ".join(str(reason) for reason in reasons)
         details.append(("PUBLICATION_STATUS", escape(value)))
+    if final_state.get("provisional_decision"):
+        details.append(("PROVISIONAL_DECISION", escape(
+            str(final_state["provisional_decision"])
+        )))
+    if final_state.get("published_decision"):
+        details.append(("PUBLISHED_DECISION", escape(
+            str(final_state["published_decision"])
+        )))
+    if final_state.get("segment_build_type"):
+        details.append(("FORECAST_BUILD_TYPE", escape(
+            str(final_state["segment_build_type"])
+        )))
+        details.append((
+            "BOTTOM_UP_CLAIM_ALLOWED",
+            "TRUE" if final_state.get("bottom_up_claim_allowed") else "FALSE",
+        ))
+        details.append(("OPERATING_MODEL_CONFIDENCE", escape(
+            str(final_state.get("operating_model_confidence") or "UNRESOLVED")
+        )))
+    fair_status = str(final_state.get("publication_fair_value_status") or "").strip()
+    if fair_status:
+        details.append(("FAIR_VALUE", escape(fair_status)))
+    qualifications = final_state.get("publication_qualifications") or []
+    if qualifications:
+        details.append((
+            "PUBLICATION_QUALIFICATIONS",
+            escape("; ".join(str(item) for item in qualifications)),
+        ))
+    for label, key, reason_key in (
+        ("DECISION_SAFETY_CHECK", "decision_safety_check", "safety_reasons"),
+        ("DECISION_PROCESS_CHECK", "decision_process_check", "process_reasons"),
+    ):
+        value = str(final_state.get(key) or "").strip()
+        if value:
+            reasons = final_state.get(reason_key) or []
+            if reasons:
+                value += " - " + "; ".join(str(reason) for reason in reasons)
+            details.append((label, escape(value)))
+    if "production_decision_allowed" in final_state:
+        details.append((
+            "PRODUCTION_DECISION_ALLOWED",
+            "TRUE" if final_state.get("production_decision_allowed") else "FALSE",
+        ))
     if final_state.get("research_price"):
         from tradingagents.research import price_authority
 
@@ -258,12 +301,17 @@ def _run_details(final_state: dict, settings: dict | None) -> list[tuple[str, st
 def render_report(ticker: str, final_state: dict, settings: dict | None, parts) -> str:
     """The report page: title and rating, what produced the run, contents, sections."""
     md = _markdown()
-    base_rating = run_rating(final_state) if final_state.get("final_trade_decision") else ""
+    published = str(final_state.get("published_decision") or "").strip()
+    base_rating = (
+        display_decision(published)
+        if published
+        else (run_rating(final_state) if final_state.get("final_trade_decision") else "")
+    )
     if str(final_state.get("publication_status") or "").upper() == "BLOCKED":
-        rating = "Not Rated (publication blocked)"
+        rating = f"{base_rating or 'Not Rated'} (publication blocked)"
         tone = "review"
     elif base_rating and str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
-        rating = "Not Rated (provisional)"
+        rating = f"{base_rating} (provisional)"
         tone = "review"
     else:
         tone = _TONE.get(base_rating, "review")

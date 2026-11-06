@@ -329,7 +329,7 @@ def test_the_report_gains_a_research_section_only_when_the_model_exists(tmp_path
     write_report_tree({"fundamentals_report": "f"}, "TEST", plain, html=False)
     plain_main = (plain / "complete_report.md").read_text(encoding="utf-8")
     assert PACKAGE.strip()[:20] not in plain_main
-    assert "No verified model in this run." in plain_main
+    assert "No usable model in this run." in plain_main
 
 
 def test_checkpoint_signature_changes_only_when_a_corpus_is_configured(monkeypatch, tmp_path):

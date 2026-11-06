@@ -24,6 +24,9 @@ SUPPRESSED = "SUPPRESSED"
 UNAVAILABLE = "UNAVAILABLE"
 UNVERIFIED = "UNVERIFIED"
 NOT_APPLICABLE = "NOT_APPLICABLE"
+# The current run did not test this output. It is not a verdict on the previous
+# model: a stale VERIFIED label must never survive a failed current-run gate.
+NOT_TESTED = "NOT_TESTED"
 # Validation failed (as distinct from "could not be validated"): a controlling
 # component in this state is what forces REVIEW.
 INVALID = "INVALID"
@@ -35,7 +38,8 @@ _SEVERITY = {
     UNAVAILABLE: 2,
     SUPPRESSED: 3,
     UNVERIFIED: 4,
-    INVALID: 5,
+    NOT_TESTED: 5,
+    INVALID: 6,
 }
 
 

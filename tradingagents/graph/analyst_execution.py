@@ -10,6 +10,10 @@ class AnalystNodeSpec:
     agent_node: str
     report_key: str
     tools: tuple = ()
+    # Channels beyond the report the analyst's subgraph must return to the run.
+    # The Fundamentals block is structured evidence: dropping it here forces the
+    # reviewer to re-parse the narrative, where only a legacy table remains.
+    extra_output: tuple[tuple[str, type], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,12 @@ ANALYST_NODE_SPECS: dict[str, AnalystNodeSpec] = {
         agent_node="Fundamentals Analyst",
         report_key="fundamentals_report",
         tools=fundamentals_analyst.TOOLS,
+        extra_output=(
+            ("segment_evidence", str),
+            ("segment_evidence_source", str),
+            ("segment_evidence_schema_missing", bool),
+            ("segment_evidence_retry", str),
+        ),
     ),
 }
 

@@ -5,10 +5,13 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage
 
 from tradingagents.agents.context import (
+    analyst_judgments_block,
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    model_facts_block,
     research_package_block,
+    source_facts_block,
 )
 from tradingagents.agents.schemas import (
     NewInvestorAction,
@@ -80,6 +83,8 @@ def create_trader(llm):
                 "content": (
                     f"Here is the research team's investment plan for {company_name}. "
                     f"{instrument_context}\n\n"
+                    f"{source_facts_block(state)}{analyst_judgments_block(state)}"
+                    f"{model_facts_block(state)}\n\n"
                     f"{report_section}"
                     f"{model_block}\n"
                     f"{portfolio_context}\n\n"

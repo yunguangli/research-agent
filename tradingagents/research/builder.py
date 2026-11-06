@@ -152,6 +152,15 @@ RULES = """Rules:
   advanced substrate pricing, Cell 8 loading, premium mix) and an "alternative" value
   the same unit could plausibly take. The sensitivity engine shocks one line at a
   time; a line without both is reported as a research gap, not estimated.
+- Every material bridge line must also carry "driver_id", "segment", "basis"
+  (revenue, cost, capacity, volume, price_mix, fixed_cost, depreciation),
+  "capacity_source", "start_period", "utilization", "price_mix", "incremental_cost"
+  and "depreciation_treatment" where they apply. When two drivers share a revenue
+  base, capacity block or volume increment, give each the same "revenue_base_id",
+  "capacity_block_id" or "volume_increment_id" AND an explicit "allocation_ref" that
+  reconciles the overlap. Otherwise the report flags POTENTIAL_DOUBLE_COUNT. Set
+  "shocked_input" to the input the sensitivity actually moves; a shock applied
+  directly to operating profit is not a utilisation driver.
 - Name the three share bases explicitly: `market_cap_basis` (current net shares),
   `forecast_eps_basis` (forecast diluted weighted average), `dilution_sensitivity_basis`
   (full conversion). `eps_basis` is the one forecast EPS and P/E use. A single
@@ -186,8 +195,26 @@ RULES = """Rules:
   If gross debt, cash, EBITDA (operating profit + depreciation) or the multiple is
   missing, EV/EBITDA becomes UNAVAILABLE on its own — do not guess an input, and do
   not let its absence remove the P/E.
+- Declare the evidence behind each valuation method in "valuation.assumptions": one
+  record per method ("pe", "ev_ebitda") with "earnings_source" and "multiple_source"
+  from COMPANY_REPORTED, COMPANY_GUIDANCE, EXTERNAL_ESTIMATE,
+  DERIVED_FROM_SOURCED_INPUTS, ANALYST_ASSUMPTION or UNRESOLVED. An EXTERNAL_ESTIMATE
+  also needs "source_name", "as_of", "metric", "period", "comparability"
+  (SAME_METRIC_SAME_PERIOD_SAME_BASIS, ADJUSTED or NOT_COMPARABLE) and "refs". A
+  multiple with no source is ANALYST_ASSUMPTION; never describe it as verified.
 - On a segment, set "commissioning" to the period label it starts operating. A segment
   that books revenue before that period is a timing error and is rejected.
+- If one disclosed segment carries at least the configured dominant-segment share of
+  segment operating profit (60% by default), forecast
+  that segment explicitly: revenue, operating profit and margin for EVERY annual
+  forecast year, with an adjustment/elimination row when the segments do not sum to
+  the group. The sum of segment forecasts plus eliminations must equal consolidated
+  revenue and operating profit. If the documents do not support a segment forecast,
+  leave it out and say so in "warnings"; the report then marks
+  SEGMENT_RECONCILIATION_STATUS = INSUFFICIENT_DATA and must not call the forecast
+  bottom-up. Never fabricate the missing segment. Set "segment_disclosure": true
+  whenever the documents disclose segment revenue or profit, even if you cannot
+  forecast the segment.
 - A bridge moves from one period to a DIFFERENT one. "base_period" is the earlier
   period and "base_value" is that period's reported figure; the lines are the
   changes that reach the target period. Never bridge a period to itself and never

@@ -309,6 +309,73 @@ def case_availability(state: Mapping[str, Any]) -> str:
     )
 
 
+def source_facts_block(state: Mapping[str, Any]) -> str:
+    """Verified reported/guided facts, kept even when the model is unavailable."""
+    text = str(state.get("source_facts") or "").strip()
+    return f"\n\n{text}" if text else ""
+
+
+def model_facts_block(state: Mapping[str, Any]) -> str:
+    """Make the model's withheld state explicit to a downstream agent."""
+    status = str(state.get("model_status") or "").upper()
+    if status != "UNVERIFIED" and str(state.get("research_model_source") or "") != "unavailable":
+        return ""
+    return (
+        "\n\nMODEL_DERIVED_FACTS: WITHHELD. The deterministic model did not verify "
+        "in this run. No model forecast, valuation, sensitivity, case or fair value "
+        "is available for the decision. Use SOURCE_FACTS and ANALYST_JUDGMENTS only; "
+        "do not reconstruct a model figure."
+    )
+
+
+def analyst_judgments_block(state: Mapping[str, Any]) -> str:
+    """Qualitative analyst work, with explicitly marked model figures removed.
+
+    Reported facts, guidance and transcript commentary stay available even when the
+    model fails. Sentences the analyst marked as model-derived (``[[...]]``) are
+    removed, so a judgment cannot smuggle a model figure into a decision prompt.
+    """
+    text = str(state.get("fundamentals_report") or "").strip()
+    if not text:
+        return ""
+    lines = []
+    for line in text.splitlines():
+        if "[[" in line:
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+", line)
+        kept = [sentence for sentence in sentences if "[[" not in sentence]
+        if kept:
+            lines.append(" ".join(kept))
+    body = "\n".join(lines).strip()
+    if not body:
+        return ""
+    return (
+        "\n\nANALYST_JUDGMENTS (qualitative; model-marked figures removed; not "
+        "decision evidence):\n" + body[:6000]
+    )
+
+
+def bridge_arithmetic_block(state: Mapping[str, Any]) -> str:
+    """The immutable bridge reconciliation, so no agent re-derives it."""
+    text = str(state.get("bridge_arithmetic") or "").strip()
+    if not text or text == "[]":
+        return ""
+    return (
+        "\n\nBRIDGE_ARITHMETIC (deterministic; do not recalculate or override):\n"
+        + text
+    )
+
+
+def resolved_status_block(state: Mapping[str, Any]) -> str:
+    """The final status object; the PM may challenge economics, not these statuses."""
+    text = str(state.get("resolved_status") or "").strip()
+    if not text or text == "{}":
+        return ""
+    return (
+        "\n\nRESOLVED_STATUS (deterministic; immutable for this decision):\n" + text
+    )
+
+
 def corrections_block(state: Mapping[str, Any]) -> str:
     """Accepted model corrections, so the decision is written against them.
 
@@ -472,7 +539,11 @@ def fundamentals_with_repair_notice(state: Mapping[str, Any]) -> str:
 
     packet = filter_decision_inputs(dict(state))
     if not packet["verified"]:
-        return packet["fundamentals"]
+        return (
+            packet["fundamentals"]
+            + source_facts_block(state)
+            + analyst_judgments_block(state)
+        )
     report = report_or_absent(state.get("fundamentals_report"), "fundamentals")
     note = str(state.get("model_repair_addendum") or "").strip()
     if not note:

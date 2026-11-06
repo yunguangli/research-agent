@@ -63,7 +63,10 @@ def _analyst_graph(spec, agent, max_tool_rounds: int, tools=None):
     research-corpus tools are added to the fundamentals analyst alone.
     """
     tool_list = list(tools if tools is not None else spec.tools)
-    output = TypedDict(f"{spec.key.capitalize()}Report", {spec.report_key: str})
+    output = TypedDict(
+        f"{spec.key.capitalize()}Report",
+        {spec.report_key: str, **dict(spec.extra_output)},
+    )
     graph = StateGraph(AgentState, output_schema=output)
     graph.add_node("agent", agent)
     graph.add_edge(START, "agent")

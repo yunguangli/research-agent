@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 
 import tradingagents
 from tradingagents.agents.context import build_instrument_context, resolve_instrument_identity
-from tradingagents.agents.rating import run_rating
+from tradingagents.agents.rating import canonical_decision, display_decision, run_rating
 from tradingagents.agents.sizing import has_exact_size
 from tradingagents.dataflows.config import run_config, run_config_context, set_config
 from tradingagents.dataflows.date_window import get_current_date, is_historical
@@ -265,6 +266,86 @@ def _cites_superseded(text: str, values: set[float]) -> bool:
         if any(abs(number - value) <= max(0.005, abs(value) * 0.002) for value in values):
             return True
     return False
+
+
+_SEGMENT_LIMITATION_MARKERS = (
+    "\n\nSEGMENT_RECONCILIATION_STATUS = ",
+    "\n\nSEGMENT_EVIDENCE_SCHEMA_MISSING. ",
+)
+
+
+def _invoke_with_timeout(llm, prompt: str, timeout: float):
+    """One model call with a hard ceiling, so a stalled provider cannot hang the run.
+
+    The worker is a daemon thread: a provider that never answers is abandoned, the
+    audit repair falls back to the original text, and the report still saves.
+    """
+    result: dict = {}
+
+    def run() -> None:
+        try:
+            result["value"] = llm.invoke(prompt)
+        except Exception as exc:  # noqa: BLE001 - re-raised in the caller
+            result["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError(f"the model did not answer within {timeout:.0f}s")
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
+def controlling_valuation_resolution(spec) -> tuple[str, str]:
+    """``(controlling method, conflict reason)`` from the spec.
+
+    The primary source is ``valuation.controlling_valuation_method``; a method's
+    own ``controlling`` flag is a consistency check. A disagreement is a
+    configuration contradiction, never silently resolved.
+    """
+    valuation = getattr(spec, "valuation", None)
+    method = str(
+        getattr(valuation, "controlling_valuation_method", "") or "pe"
+    ).strip().lower()
+    if method not in {"pe", "ev_ebitda"}:
+        return method or "pe", (
+            f"controlling_valuation_method {method!r} is not pe or ev_ebitda"
+        )
+    methods = getattr(valuation, "valuation_methods", {}) or {}
+    flags = {
+        str(name).strip().lower(): entry
+        for name, entry in methods.items()
+        if isinstance(entry, dict)
+    }
+    own = flags.get(method)
+    if isinstance(own, dict) and "controlling" in own and not own.get("controlling"):
+        return method, f"{method}.controlling is false but {method} is the controlling method"
+    others = sorted(
+        name for name, entry in flags.items()
+        if name != method and bool(entry.get("controlling"))
+    )
+    if others:
+        return method, (
+            f"{', '.join(others)}.controlling is true while {method} controls"
+        )
+    return method, ""
+
+
+def without_existing_segment_limitation(text: str) -> str:
+    """Drop a previously appended segment limitation so re-entry cannot stack it.
+
+    The reviewer's gate can run more than once for a run. The limitation is the
+    last block appended to the package, so the first marker cuts the old copy and
+    the current audit appends exactly one fresh one.
+    """
+    cut = len(text or "")
+    for marker in _SEGMENT_LIMITATION_MARKERS:
+        index = (text or "").find(marker)
+        if index >= 0:
+            cut = min(cut, index)
+    return (text or "")[:cut].rstrip()
 
 
 class TradingAgentsGraph:
@@ -578,6 +659,8 @@ class TradingAgentsGraph:
         if (
             final_state.get("debate_cases")
             and not final_state.get("case_table")
+            and final_state.get("model_status") != "UNVERIFIED"
+            and final_state.get("research_model_source") != "unavailable"
             and final_state.get("research_fair_value_verified", True)
         ):
             try:
@@ -701,6 +784,7 @@ class TradingAgentsGraph:
                             "valuation_status", "sensitivity_model_status",
                             "sensitivity_status"):
                     final_state[key] = statuses[key]
+                final_state["calculation_status"] = final_state.get("valuation_status", "")
                 final_state["valuation_method_statuses"] = json.dumps(
                     statuses["valuation_method_statuses"]
                 )
@@ -778,29 +862,114 @@ class TradingAgentsGraph:
         # Applied last: it upgrades the derived status to PROVISIONAL and adds
         # the reason to an integrity string the earlier steps may have written.
         apply_price_conflict(final_state)
-        publication_status, publication_reasons = self._publication_status(final_state)
+        # The PM's own decision, kept separately from what a reader may publish.
+        # Only the first pass captures it; prepare_final_state runs again from
+        # save_reports, when final_rating has already been gated.
+        if not final_state.get("provisional_decision"):
+            pre_gate = str(final_state.get("final_rating") or "").strip()
+            if not pre_gate:
+                pre_gate = str(run_rating(final_state) or "")
+            final_state["provisional_decision"] = canonical_decision(pre_gate)
+        provisional_code = str(
+            final_state.get("provisional_decision") or "NOT_RATED"
+        )
+        unavailable = (
+            str(final_state.get("model_status") or "").upper() == "UNVERIFIED"
+            or str(final_state.get("research_model_source") or "") == "unavailable"
+        )
+        if unavailable:
+            # A safe fallback: no decision output survives an unavailable model.
+            final_state["final_rating"] = display_decision("NOT_RATED")
+            final_state["overall_status"] = "Not Rated"
+            final_state["decision_status"] = "NOT_RATED"
+            final_state["published_decision"] = "NOT_RATED"
+            for key in (
+                "controlling_fair_value_low",
+                "controlling_fair_value_base",
+                "controlling_fair_value_high",
+                "controlling_fair_value_method",
+            ):
+                final_state[key] = None
+            final_state["publication_fair_value_status"] = "NOT_PUBLISHED"
+            final_state["production_decision_allowed"] = False
+            if not str(final_state.get("decision_integrity") or "").startswith("DEGRADED"):
+                final_state["decision_integrity"] = "DEGRADED: no usable model this run"
+        if final_state.get("research_model_path"):
+            try:
+                from tradingagents.research.report import load_spec
+
+                spec = load_spec(final_state["research_model_path"])
+                final_state["resolved_status"] = self._resolve_model_status(
+                    final_state,
+                    spec,
+                    str(final_state.get("segment_reconciliation_status") or ""),
+                    bool(final_state.get("dominant_segment"))
+                    and float(final_state.get("dominant_segment_share") or 0)
+                    >= float((getattr(self, "config", None) or {}).get(
+                        "segment_profit_share_threshold", 0.60
+                    )),
+                )
+            except Exception as exc:  # noqa: BLE001 - status is diagnostic
+                logger.info("Final resolved status could not be recomputed: %s", exc)
+        prior_blocked = (
+            str(final_state.get("publication_status") or "").upper() == "BLOCKED"
+        )
+        publication_status, publication_reasons, publication_qualifications = (
+            self._publication_status(final_state)
+        )
+        if prior_blocked and publication_status != "BLOCKED":
+            # A checkpoint may already have been published as blocked even when
+            # the original reasons are no longer re-derivable from this state.
+            # The fallback stays fail-closed rather than silently publishing.
+            publication_status = "BLOCKED"
+            publication_reasons = publication_reasons or [
+                "publication was blocked at an earlier checkpoint"
+            ]
         final_state["publication_status"] = publication_status
         final_state["publication_reasons"] = publication_reasons
+        final_state["publication_qualifications"] = publication_qualifications
         if publication_status == "BLOCKED":
-            # A controlling figure disagrees with the accepted model version. The
-            # report may describe the run, but it may not publish a rating or a
-            # fair value built on the conflicted input.
-            final_state["final_rating"] = "Not Rated"
-            final_state["decision_status"] = "PROVISIONAL"
-            final_state["overall_status"] = "Not Rated"
-            decision = str(final_state.get("final_trade_decision") or "").strip()
-            note = (
-                "**Publication blocked**: " + "; ".join(publication_reasons)
-                + ". No rating or fair value is published until the controlling "
-                "value is reconciled; the full record is in the appendix."
-            )
-            if decision and "**Publication blocked**" not in decision:
-                final_state["final_trade_decision"] = decision + "\n\n" + note
+            # A controlling figure disagrees with the accepted model version, or
+            # the current evidence did not confirm the requirement. The report may
+            # describe the run, but it may not publish a rating or a fair value.
+            self._apply_blocked_publication(final_state, publication_reasons)
+        elif not unavailable:
+            final_state["published_decision"] = provisional_code
+            final_state["final_rating"] = display_decision(provisional_code)
+        from tradingagents.research import decision_checks
+
+        final_state.update(decision_checks.assess(final_state))
         try:
             component = json.loads(str(final_state.get("component_status") or "{}"))
         except ValueError:
             component = {}
         if isinstance(component, dict):
+            try:
+                resolved_view = json.loads(
+                    str(final_state.get("resolved_status") or "{}")
+                )
+            except ValueError:
+                resolved_view = {}
+            if isinstance(resolved_view, dict):
+                ev_method = component.get("ev_ebitda_method")
+                if isinstance(ev_method, dict) and resolved_view.get(
+                    "ev_calculation_status"
+                ):
+                    ev_method["status"] = resolved_view["ev_calculation_status"]
+                comparison = component.get("ev_per_share_comparison")
+                if isinstance(comparison, dict) and resolved_view.get(
+                    "per_share_comparison_status"
+                ):
+                    comparison["status"] = resolved_view["per_share_comparison_status"]
+                controlling_method = str(
+                    resolved_view.get("controlling_method")
+                    or final_state.get("controlling_valuation_method")
+                    or "pe"
+                )
+                component["controlling_valuation"] = {
+                    "use": f"{controlling_method} only",
+                    "ev_controlling": controlling_method == "ev_ebitda",
+                }
             component["decision"] = {
                 "integrity": final_state.get("decision_integrity", ""),
                 "status": final_state.get("decision_status", ""),
@@ -811,23 +980,122 @@ class TradingAgentsGraph:
             final_state["component_status"] = json.dumps(component)
         return final_state
 
-    def _publication_status(self, final_state: dict) -> tuple[str, list[str]]:
+    def _apply_blocked_publication(self, final_state: dict, reasons: list[str]) -> None:
+        """Clear every decision output *before* the safety check runs.
+
+        Fail-closed means the published surfaces are empty, not merely annotated.
+        A stale ``controlling_fair_value_*`` left in state would make
+        DECISION_SAFETY_CHECK fail on a report that publishes no fair value at
+        all, which is the opposite of what the check is for.
+        """
+        final_state["final_rating"] = display_decision("NOT_RATED")
+        final_state["overall_status"] = "Not Rated"
+        final_state["decision_status"] = "NOT_RATED"
+        final_state["published_decision"] = "NOT_RATED"
+        for key in (
+            "controlling_fair_value_low",
+            "controlling_fair_value_base",
+            "controlling_fair_value_high",
+        ):
+            final_state[key] = None
+        final_state["controlling_fair_value_method"] = None
+        final_state["publication_fair_value_status"] = "NOT_PUBLISHED"
+        codes = "; ".join(str(reason) for reason in reasons if str(reason).strip())
+        final_state["decision_integrity"] = (
+            "DEGRADED: publication blocked"
+            + (f" — {codes}" if codes else "")
+        )
+        final_state["production_decision_allowed"] = False
+        decision = str(final_state.get("final_trade_decision") or "").strip()
+        note = (
+            "**Publication blocked**: "
+            + (codes or "publication is blocked")
+            + ". No rating or fair value is published until the controlling "
+            "value is reconciled; the full record is in the appendix."
+        )
+        if decision and "**Publication blocked**" not in decision:
+            final_state["final_trade_decision"] = decision + "\n\n" + note
+
+    def _publication_status(self, final_state: dict) -> tuple[str, list[str], list[str]]:
         """Whether the report may publish a controlling rating and fair value.
 
-        BLOCKED means two controlling values still disagree, or the decision was
-        written against a different model version, or it presents a repaired-away
-        figure as current. The article is still written (with the appendix); it
-        just carries no number a reader could act on.
+        Returns ``(status, blockers, qualifications)``. BLOCKED means a controlling
+        value disagrees, the decision was written against a different model
+        version, or it presents a repaired-away figure as current. A defect in a
+        non-controlling cross-check is a qualification, not a blocker:
+        OK_WITH_QUALIFICATION still publishes the controlling P/E decision.
         """
-        reasons: list[str] = []
+        blockers: list[str] = []
+        qualifications: list[str] = []
+
+        def add(target: list[str], value: str) -> None:
+            text = str(value or "").strip()
+            if text and text not in target:
+                target.append(text)
+
         conflict = str(final_state.get("price_authority_conflict") or "").strip()
         if conflict:
-            reasons.append(conflict)
+            add(blockers, conflict)
+        try:
+            resolved = json.loads(str(final_state.get("resolved_status") or "{}"))
+        except ValueError:
+            resolved = {}
+        controlling = str(
+            final_state.get("controlling_valuation_method") or "pe"
+        ).strip().lower()
+        ev_controlling = controlling == "ev_ebitda"
+        if isinstance(resolved, dict):
+            for item in resolved.get("contradictions") or []:
+                code = str(item)
+                if (
+                    code == "EV_COMPARISON_VERIFIED_WITH_SHARE_MISMATCH"
+                    and not ev_controlling
+                ):
+                    # A non-controlling cross-check cannot block the controlling
+                    # P/E decision. It stays as a visible qualification.
+                    add(qualifications, code)
+                else:
+                    add(blockers, code)
+        configuration_conflict = str(
+            final_state.get("controlling_valuation_conflict") or ""
+        ).strip()
+        if configuration_conflict:
+            add(
+                blockers,
+                "CONTROLLING_VALUATION_METHOD_CONFLICT: " + configuration_conflict,
+            )
+        if (
+            str(final_state.get("model_status") or "").upper() in {"VERIFIED", "UNVERIFIED"}
+            and final_state.get("segment_evidence_schema_missing")
+        ):
+            add(blockers, "SEGMENT_EVIDENCE_SCHEMA_MISSING")
+        if (
+            str(final_state.get("segment_reconciliation_status") or "") == "INCOMPLETE"
+            and final_state.get("segment_reconciliation_controlling")
+        ):
+            # Incomplete segment construction is a published qualification, not a
+            # blocker, unless segment reconciliation controls the valuation or the
+            # decision.
+            add(blockers, "SEGMENT_RECONCILIATION_INCOMPLETE_CONTROLLING")
+        if (
+            final_state.get("deterministic_checks_executed") is False
+            and str(final_state.get("model_status") or "").upper()
+            in {"VERIFIED", "UNVERIFIED"}
+        ):
+            add(blockers, "DETERMINISTIC_CHECKS_NOT_EXECUTED")
+        if (
+            int(final_state.get("trigger_taxonomy_version") or 2) >= 2
+            and "Legacy thesis invalidation" in str(
+                final_state.get("final_trade_decision") or ""
+            )
+        ):
+            add(blockers, "LEGACY_TRIGGER_RENDERED")
         active = str(final_state.get("active_model_version") or "").strip()
         decision_version = str(final_state.get("decision_model_version") or "").strip()
         if active and decision_version and active != decision_version:
-            reasons.append(
-                f"the decision was written against {decision_version}, but {active} controls"
+            add(
+                blockers,
+                f"the decision was written against {decision_version}, but {active} controls",
             )
         values = superseded_values(final_state)
         if values:
@@ -839,10 +1107,15 @@ class TradingAgentsGraph:
             pairs = controlling_pairs_from_log(final_state)
             decision = str(final_state.get("final_trade_decision") or "")
             if pairs and uses_superseded(decision, pairs):
-                reasons.append(
-                    "the controlling decision presents a figure superseded by the model repair"
+                add(
+                    blockers,
+                    "the controlling decision presents a figure superseded by the model repair",
                 )
-        return ("BLOCKED" if reasons else "OK"), reasons
+        if blockers:
+            return "BLOCKED", blockers, qualifications
+        if qualifications:
+            return "OK_WITH_QUALIFICATION", [], qualifications
+        return "OK", [], []
 
     # An exact size in prose: a percentage of a position, a share count, or a
     # tranche count. The pattern lives with the agent-side gate so both agree.
@@ -1099,9 +1372,27 @@ class TradingAgentsGraph:
             llm = getattr(self, "quick_thinking_llm", None)
             if llm is not None:
                 def _ask(prompt: str) -> str:
-                    return str(llm.invoke(prompt).content)
+                    timeout = float(
+                        (getattr(self, "config", None) or {}).get(
+                            "audit_repair_timeout", 180
+                        )
+                        or 180
+                    )
+                    response = _invoke_with_timeout(llm, prompt, timeout)
+                    return str(getattr(response, "content", response))
 
-                if audit.repair_relations(final_state, findings, _ask, model=model):
+                try:
+                    repaired = audit.repair_relations(
+                        final_state, findings, _ask, model=model
+                    )
+                except Exception as exc:  # noqa: BLE001 - the original text stands
+                    logger.warning(
+                        "Relational claim repair did not complete; the original "
+                        "text and its finding stand: %s",
+                        exc,
+                    )
+                    repaired = False
+                if repaired:
                     # audit_state mutates the stats dict it is handed: build the
                     # fresh one first, then re-audit into IT (assigning {} on the
                     # left of the call would discard the counts it just recorded).
@@ -1141,6 +1432,11 @@ class TradingAgentsGraph:
         )
         state["research_package"] = package
         state["research_package_artifact"] = artifact
+        state["source_facts"] = getattr(self, "_source_facts", "")
+        state["model_derived_facts"] = package
+        state["bridge_arithmetic"] = getattr(self, "_bridge_arithmetic", "[]")
+        state["resolved_status"] = getattr(self, "_resolved_status", "{}")
+        state["sensitivity_conflict"] = getattr(self, "_sensitivity_conflict", False)
         state["fundamental_packet"] = getattr(self, "_fundamental_packet", "")
         state["valuation_packet"] = getattr(self, "_valuation_packet", "")
         state["research_price"] = price_resolution.value or 0.0
@@ -1211,8 +1507,47 @@ class TradingAgentsGraph:
         state["valuation_status"] = output_status.get(
             "valuation_status", "UNVERIFIED" if spec_path else "SUPPRESSED"
         )
+        state["calculation_status"] = state["valuation_status"]
+        state["assumption_status"] = getattr(self, "_assumption_status", "")
+        state["assumption_detail"] = getattr(self, "_assumption_detail", "")
+        state["valuation_wording"] = getattr(self, "_valuation_wording", "")
+        segment = getattr(self, "_segment_status", None)
+        state["segment_reconciliation_status"] = segment.status if segment else ""
+        state["segment_reconciliation_detail"] = segment.detail if segment else ""
+        state["dominant_segment"] = segment.segment if segment else ""
+        state["dominant_segment_share"] = segment.share if segment else None
+        state["segment_table"] = getattr(self, "_segment_table", "")
+        state["segment_build_type"] = ""
+        state["bottom_up_claim_allowed"] = True
+        state["operating_model_confidence"] = "VERIFIED"
+        state["segment_reconciliation_controlling"] = False
+        state["controlling_valuation_method"] = "pe" if spec_path else ""
+        state["controlling_valuation_conflict"] = ""
+        state["ev_decision_use"] = "CROSS_CHECK_ONLY"
+        state["publication_qualifications"] = []
+        if spec_path:
+            # A cached NOT_REQUIRED is provisional until the current Fundamentals
+            # SEGMENT_EVIDENCE is audited at the reviewer's entry.
+            state["segment_reconciliation_status"] = "PENDING_CURRENT_EVIDENCE"
+            state["segment_reconciliation_detail"] = (
+                "awaiting the current Fundamentals SEGMENT_EVIDENCE block"
+            )
+            state["segment_requirement_provisional"] = True
+            state["segment_limitation"] = ""
         state["sensitivity_model_status"] = output_status.get("sensitivity_model_status", "UNAVAILABLE")
         state["sensitivity_status"] = state["sensitivity_model_status"]   # alias
+        state["model_node_sensitivity_status"] = state["sensitivity_model_status"]
+        state["economic_driver_mapping_status"] = getattr(
+            self, "_economic_driver_mapping_status", ""
+        )
+        state["failed_driver_mappings"] = getattr(self, "_failed_driver_mappings", 0)
+        state["failed_driver_mapping_ids"] = json.dumps(
+            getattr(self, "_failed_driver_mapping_ids", [])
+        )
+        state["deterministic_issues"] = ""
+        state["deterministic_checks_executed"] = False
+        state["provisional_decision"] = ""
+        state["published_decision"] = ""
         state["ev_per_share_status"] = output_status.get("ev_per_share_status", "")
         state["research_fair_value_verified"] = bool(output_status.get("valuation_controlling"))
         state["action_status"] = "controlling"
@@ -1341,6 +1676,18 @@ class TradingAgentsGraph:
         """
         from tradingagents.research import price_authority as price_authority_module
 
+        self._assumption_status = ""
+        self._assumption_detail = ""
+        self._valuation_wording = ""
+        self._segment_status = None
+        self._segment_table = ""
+        self._source_facts = ""
+        self._bridge_arithmetic = "[]"
+        self._resolved_status = "{}"
+        self._sensitivity_conflict = False
+        self._economic_driver_mapping_status = ""
+        self._failed_driver_mappings = 0
+        self._failed_driver_mapping_ids: list[str] = []
         root = research_dir_from_env()
         if root is None:
             return "", "", price_authority_module.PriceResolution(value=0.0), ""
@@ -1352,13 +1699,21 @@ class TradingAgentsGraph:
             return note, note, price_authority_module.PriceResolution(value=0.0), ""
 
         from tradingagents.research import (
+            assumptions,
             capital,
+            facts as facts_module,
             price_authority,
             report as research_report,
+            segments,
             sensitivity,
             status as status_module,
         )
         from tradingagents.research.shares import basis_report, diluted_kind
+
+        self._source_facts = facts_module.render_source_facts(model.spec)
+        self._bridge_arithmetic = json.dumps(
+            [bridge.arithmetic.to_dict() for bridge in model.spec.bridges]
+        )
 
         resolution = price_authority.PriceResolution.from_spec(model.spec)
         if resolution.value is None:
@@ -1375,6 +1730,17 @@ class TradingAgentsGraph:
         publishable_eps = bool(eps_ok and valuation.eps_available)
         items, gaps = sensitivity.rank(
             model.spec, top=3, eps_verified=publishable_eps, pe_verified=publishable_eps
+        )
+        gaps = sensitivity.filter_gaps(model.spec, items, gaps)
+        mapping = sensitivity.mapping_summary(model.spec, items, gaps)
+        self._economic_driver_mapping_status = mapping["economic_driver_mapping_status"]
+        self._failed_driver_mappings = mapping["failed_driver_mappings"]
+        self._failed_driver_mapping_ids = mapping["failed_driver_mapping_ids"]
+        _gap_text = " ".join(gaps)
+        self._sensitivity_conflict = any(
+            item.sensitivity_id in _gap_text
+            or any(alias and alias in _gap_text for alias in item.aliases)
+            for item in items
         )
         table = sensitivity.render(items)
         basis = basis_report(model.spec)
@@ -1446,6 +1812,57 @@ class TradingAgentsGraph:
             # Arithmetic valid, comparison not: publish the number, label it.
             statuses["ev_per_share_status"] = status_module.UNVERIFIED
         self._output_status = statuses
+        assumption = assumptions.controlling(
+            model.spec, statuses["valuation_method_statuses"]
+        )
+        self._assumption_status = assumption.status if assumption else ""
+        self._assumption_detail = json.dumps(assumption.to_dict()) if assumption else ""
+        self._valuation_wording = assumptions.wording(
+            statuses["valuation_status"], assumption
+        )
+        segment = segments.status(
+            model.spec,
+            float((getattr(self, "config", None) or {}).get(
+                "segment_profit_share_threshold", segments.DEFAULT_PROFIT_SHARE_THRESHOLD
+            )),
+        )
+        self._segment_status = segment
+        self._segment_table = segments.table(model.spec)
+        try:
+            from tradingagents.research import resolved_status as status_resolver
+
+            _ev_count, _pe_count, _gap = capital.cross_method_basis(model.spec)
+            _share_mismatch = bool(_gap is not None and _gap > 0.01)
+            _controlling_method, _controlling_conflict = (
+                controlling_valuation_resolution(model.spec)
+            )
+            _resolved = status_resolver.resolve(
+                spec=model.spec,
+                statuses=statuses,
+                assumption=assumptions.for_spec(model.spec, "ev_ebitda"),
+                share_mismatch=_share_mismatch,
+                convertible_unresolved=bool(capital.unsettled_convertibles(model.spec)),
+                dominant_segment_detected=(
+                    bool(segment.segment)
+                    and float(segment.share or 0)
+                    >= float((getattr(self, "config", None) or {}).get(
+                        "segment_profit_share_threshold", segments.DEFAULT_PROFIT_SHARE_THRESHOLD
+                    ))
+                ),
+                segment_status=segment.status,
+                deterministic_checks_executed=True,
+                trigger_taxonomy_version=int(
+                    getattr(model.spec, "trigger_taxonomy_version", 2)
+                ),
+                legacy_rendered=False,
+                sensitivity_conflict=self._sensitivity_conflict,
+                controlling_method=_controlling_method,
+                controlling_conflict=_controlling_conflict,
+            )
+            self._resolved_status = json.dumps(_resolved.to_dict())
+        except Exception as exc:  # noqa: BLE001 - a status is not allowed to break the build
+            logger.info("Resolved status unavailable: %s", exc)
+            self._resolved_status = "{}"
         self._component_status = build_component_status(
             statuses, propagation_ok=propagation_ok, diagnostics=diagnostics,
             controlling={
@@ -1505,6 +1922,20 @@ class TradingAgentsGraph:
             )
             package += basis_note
             artifact += basis_note
+        if segment.status != segments.NOT_REQUIRED:
+            segment_lines = [
+                f"SEGMENT_RECONCILIATION_STATUS = {segment.status}. {segment.detail}."
+            ]
+            if segment.status != segments.VERIFIED:
+                segment_lines.append(segments.TOP_DOWN_SENTENCE)
+                package = segments.neutralise_bottom_up(package)
+                artifact = segments.neutralise_bottom_up(artifact)
+            segment_table = segments.table(model.spec)
+            if segment_table:
+                segment_lines.append(segment_table)
+            addition = "\n\n" + "\n".join(segment_lines)
+            package += addition
+            artifact += addition
         if resolution.value is None:
             resolution = price_authority.PriceResolution(
                 value=float(valuation.price or 0) or None,
@@ -1966,6 +2397,140 @@ class TradingAgentsGraph:
             })
         return records
 
+    def _resolve_model_status(self, state, spec, segment_status: str, dominant: bool) -> str:
+        """The one final EV/multiple/equity/per-share status object."""
+        try:
+            from tradingagents.research import (
+                assumptions as assumptions_module,
+                capital as capital_module,
+                resolved_status as resolved_module,
+            )
+
+            try:
+                methods = json.loads(str(state.get("valuation_method_statuses") or "{}"))
+            except ValueError:
+                methods = {}
+            _ev, _pe, gap = capital_module.cross_method_basis(spec)
+            controlling_method, controlling_conflict = controlling_valuation_resolution(spec)
+            resolved = resolved_module.resolve(
+                spec=spec,
+                statuses={
+                    "valuation_method_statuses": methods,
+                    "ev_per_share_status": state.get("ev_per_share_status", ""),
+                },
+                assumption=assumptions_module.for_spec(spec, "ev_ebitda"),
+                share_mismatch=bool(gap is not None and gap > 0.01),
+                convertible_unresolved=bool(capital_module.unsettled_convertibles(spec)),
+                dominant_segment_detected=dominant,
+                segment_status=segment_status,
+                deterministic_checks_executed=bool(
+                    state.get("deterministic_checks_executed", True)
+                ),
+                trigger_taxonomy_version=int(
+                    getattr(spec, "trigger_taxonomy_version", 2)
+                ),
+                legacy_rendered=False,
+                sensitivity_conflict=bool(state.get("sensitivity_conflict")),
+                controlling_method=controlling_method,
+                controlling_conflict=controlling_conflict,
+            )
+            return json.dumps(resolved.to_dict())
+        except Exception as exc:  # noqa: BLE001 - a status may not break the build
+            logger.info("Resolved status could not be recomputed: %s", exc)
+            return str(state.get("resolved_status") or "{}")
+
+    def _revalidate_current_evidence(self, state, spec, report_text: str):
+        """Deterministic segment and driver checks, before any LLM challenge call.
+
+        The cached spec is provisional until the current Fundamentals output is
+        audited. This runs at the reviewer's entry, after every analyst has filed.
+        """
+        from tradingagents.research import (
+            drivers,
+            issues as issues_module,
+            segment_evidence as segment_module,
+            segments as segments_module,
+        )
+
+        deterministic = issues_module.collect(spec)
+        drivers.normalize(spec)
+        raw = state.get("segment_evidence")
+        if raw:
+            try:
+                evidence = segment_module.SegmentEvidence.from_dict(json.loads(str(raw)))
+            except (TypeError, ValueError):
+                evidence = segment_module.extract(report_text)
+        else:
+            evidence = segment_module.extract(report_text)
+        threshold = float((getattr(self, "config", None) or {}).get(
+            "segment_profit_share_threshold", segment_module.DEFAULT_THRESHOLD
+        ))
+        audit = segment_module.audit(spec, evidence, threshold)
+        limitation = segment_module.limitation(audit)
+        published = segment_module.published_status(audit)
+        classification = segment_module.classify(audit)
+        controlling = segment_module.is_controlling(spec)
+        controlling_method, controlling_conflict = controlling_valuation_resolution(spec)
+        ev_decision_use = (
+            "CONTROLLING"
+            if controlling_method == "ev_ebitda"
+            else "CROSS_CHECK_ONLY"
+        )
+        segment_table = segments_module.table(spec)
+        resolved = self._resolve_model_status(
+            state, spec, published,
+            bool(audit.segment) and float(audit.share or 0) >= threshold,
+        )
+        package = str(state.get("research_package") or "")
+        artifact = str(state.get("research_package_artifact") or "")
+        text_updates: dict = {}
+        if limitation and package.strip():
+            # The package the debate and the PM read must state the same
+            # limitation as the report, or a bottom-up claim survives the
+            # evidence audit in the only copy those agents ever see. Re-entry
+            # replaces the previous limitation instead of stacking another, and
+            # the segment table is re-appended because the cut removes it too.
+            suffix = limitation + (
+                f"\n\n{segment_table}" if segment_table else ""
+            )
+            package = without_existing_segment_limitation(
+                segments_module.neutralise_bottom_up(package)
+            )
+            artifact = without_existing_segment_limitation(
+                segments_module.neutralise_bottom_up(artifact)
+            )
+            package = package.rstrip() + "\n\n" + suffix
+            artifact = artifact.rstrip() + "\n\n" + suffix
+            text_updates = {
+                "research_package": package,
+                "research_package_artifact": artifact,
+            }
+        return {
+            **text_updates,
+            "resolved_status": resolved,
+            "segment_evidence": json.dumps(evidence.to_dict()),
+            "segment_evidence_source": evidence.source,
+            "segment_evidence_schema_missing": evidence.schema_missing,
+            "segment_reconciliation_status": published,
+            "segment_reconciliation_detail": audit.detail,
+            "segment_requirement_provisional": False,
+            "segment_limitation": limitation,
+            "segment_build_type": classification.build_type,
+            "bottom_up_claim_allowed": classification.bottom_up_claim_allowed,
+            "operating_model_confidence": classification.operating_model_confidence,
+            "segment_reconciliation_controlling": controlling,
+            "controlling_valuation_method": controlling_method,
+            "controlling_valuation_conflict": controlling_conflict,
+            "ev_decision_use": ev_decision_use,
+            "dominant_segment": audit.segment,
+            "dominant_segment_share": audit.share,
+            "segment_table": segment_table,
+            "deterministic_issues": json.dumps(
+                [issue.to_dict() for issue in deterministic]
+            ),
+            "deterministic_checks_executed": True,
+        }, deterministic
+
     def run_repair_gate(self, state) -> dict:
         """Repair the model before the debate, inside the reviewer's entry path.
 
@@ -1981,8 +2546,6 @@ class TradingAgentsGraph:
         Reviewer transition, and is idempotent because ``active_model_version``
         is already ``v2`` on a re-entry or a resumed checkpoint.
         """
-        if str(state.get("active_model_version") or "") == "v2":
-            return {}
         company = str(state.get("company_of_interest") or "")
         trade_date = str(state.get("trade_date") or "")
         spec_path = str(state.get("research_model_path") or "")
@@ -1990,52 +2553,88 @@ class TradingAgentsGraph:
         if research_dir_from_env() is None or not spec_path:
             return {"fundamentals_challenge_check": "not_applicable",
                     "model_status": "NOT_APPLICABLE"}
-        if not report_text:
-            # No Fundamentals analyst in this run: the kernel's own checks are the
-            # gate, and the report says there was no challenge pass.
-            try:
-                self._research_model(company, trade_date,
-                                     resolution=state_price_resolution(state),
-                                     allow_build=False, spec_hint=spec_path)
-            except _ModelUnavailable as exc:
-                return self._repair_failed(str(exc), "kernel_only")
-            return {
-                "fundamentals_challenge_check": "kernel_only_pass",
-                "model_status": "VERIFIED",
-            }
-
         from tradingagents.research import (
             repair as repair_mod,
             report as research_report,
             valuation as valuation_mod,
         )
 
+        try:
+            spec = research_report.load_spec(spec_path)
+        except Exception as exc:  # noqa: BLE001 - an unreadable spec is reported, not used
+            return self._repair_failed(
+                f"the model spec could not be read ({exc})", "repair_failed", [],
+                corrections=[],
+            )
+        base_updates, deterministic = self._revalidate_current_evidence(
+            state, spec, report_text
+        )
+        if str(state.get("active_model_version") or "") == "v2":
+            return {
+                **base_updates,
+                "fundamentals_challenge_check": (
+                    str(state.get("fundamentals_challenge_check") or "repaired")
+                ),
+                "model_status": "VERIFIED",
+            }
+        if not report_text:
+            # No Fundamentals analyst in this run: current segment evidence is
+            # unavailable and cannot be retried. The run stays available for
+            # diagnostics, but the missing evidence blocks publication.
+            selected = [str(item) for item in (state.get("analysts") or [])]
+            missing_reason = (
+                "no_fundamentals_analyst"
+                if "fundamentals" not in selected
+                else "fundamentals_report_empty"
+            )
+            try:
+                self._research_model(company, trade_date,
+                                     resolution=state_price_resolution(state),
+                                     allow_build=False, spec_hint=spec_path)
+            except _ModelUnavailable as exc:
+                return {**base_updates, **self._repair_failed(str(exc), "kernel_only")}
+            return {
+                **base_updates,
+                "fundamentals_challenge_check": "kernel_only_pass",
+                "model_status": "VERIFIED",
+                "segment_evidence_retry": json.dumps({
+                    "attempted": False,
+                    "reason": missing_reason,
+                    "valid_after_retry": False,
+                    "findings": [
+                        "SEGMENT_EVIDENCE_SCHEMA_MISSING: no Fundamentals report "
+                        "was produced, so no current segment evidence exists"
+                    ],
+                }),
+            }
+
         llm = getattr(self, "deep_thinking_llm", None) or getattr(self, "quick_thinking_llm", None)
         if llm is None:
-            return {"fundamentals_challenge_check": "not_applicable"}
+            return {**base_updates, "fundamentals_challenge_check": "not_applicable"}
 
         package = str(state.get("research_package") or "")
         status, challenges = self._extract_challenges(llm, report_text, package)
         if status == "failure":
             # An extraction miss is not "no challenges": the review was never
             # confirmed, so no model figure may drive the decision.
-            return self._repair_failed(
-                "Analyst challenge review was not confirmed (structured extraction failed twice)",
-                "extraction_failed", challenges,
-                corrections=self._correction_records(None, challenges, []),
-            )
+            return {
+                **base_updates,
+                **self._repair_failed(
+                    "Analyst challenge review was not confirmed "
+                    "(structured extraction failed twice)",
+                    "extraction_failed", challenges,
+                    corrections=self._correction_records(None, challenges, []),
+                ),
+            }
         if status == "no_challenges_found" or not challenges:
             return {
+                **base_updates,
                 "fundamentals_challenge_check": "no_challenges_found",
                 "model_challenges": repair_mod.to_json(challenges),
+                "unresolved_material": sum(
+                    1 for issue in deterministic if issue.severity == "material"
+                ),
             }
-
-        try:
-            spec = research_report.load_spec(spec_path)
-        except Exception as exc:  # noqa: BLE001 - an unreadable spec is reported, not used
-            return self._repair_failed(f"the model spec could not be read ({exc})",
-                                       "repair_failed", challenges,
-                                       corrections=self._correction_records(None, challenges, []))
 
         from tradingagents.research import (
             issues as issues_module,
@@ -2043,7 +2642,6 @@ class TradingAgentsGraph:
         )
 
         current_price = price_authority_module.PriceResolution.from_state(state)
-        deterministic = issues_module.collect(spec)
         deterministic_counts = issues_module.counts(deterministic)
         verified, unverified, structural = repair_mod.verify_challenges(
             spec, challenges, price_resolution=current_price
@@ -2089,6 +2687,7 @@ class TradingAgentsGraph:
                 "unresolved_material": unresolved_material,
                 "model_corrections": json.dumps(corrections),
                 **authority_extra,
+                **base_updates,
             }
 
         try:
@@ -2099,9 +2698,13 @@ class TradingAgentsGraph:
             blocking = any(c.severity == "blocking" for c in verified)
             logger.warning("Model repair did not apply: %s", exc)
             if blocking:
-                return self._repair_failed(f"a blocking challenge could not be repaired ({exc})",
-                                           "repair_failed", challenges,
-                                           corrections=corrections)
+                return {
+                    **base_updates,
+                    **self._repair_failed(
+                        f"a blocking challenge could not be repaired ({exc})",
+                        "repair_failed", challenges, corrections=corrections,
+                    ),
+                }
             texts = [c.proposed_correction or c.challenge_type for c in unresolved]
             return {
                 "fundamentals_challenge_check": "repair_unresolved",
@@ -2116,6 +2719,7 @@ class TradingAgentsGraph:
                 "unresolved_material": unresolved_material,
                 "model_corrections": json.dumps(corrections),
                 **authority_extra,
+                **base_updates,
             }
 
         valuation = valuation_mod.value(result)
@@ -2144,6 +2748,7 @@ class TradingAgentsGraph:
         # The repaired model gets its own sensitivities: v1's table would price
         # the superseded share count and EPS.
         from tradingagents.research import (
+            assumptions as assumptions_module,
             capital as capital_module,
             sensitivity as sensitivity_module,
         )
@@ -2154,6 +2759,8 @@ class TradingAgentsGraph:
         items, gaps = sensitivity_module.rank(
             repaired, top=3, eps_verified=eps_ok, pe_verified=eps_ok
         )
+        gaps = sensitivity_module.filter_gaps(repaired, items, gaps)
+        mapping = sensitivity_module.mapping_summary(repaired, items, gaps)
         table = sensitivity_module.render(items)
         propagation_ok = all(
             item.verification_status == "VERIFIED" for item in items
@@ -2190,6 +2797,9 @@ class TradingAgentsGraph:
             eps_basis_verified=eps_ok,
             equity_basis_verified=equity_ok,
             share_price_verified=current_price.verified,
+        )
+        assumption = assumptions_module.controlling(
+            repaired, statuses["valuation_method_statuses"]
         )
         if statuses["valuation_method_statuses"].get("ev_ebitda") != status_module.VERIFIED:
             statuses["ev_per_share_status"] = status_module.UNAVAILABLE
@@ -2232,6 +2842,27 @@ class TradingAgentsGraph:
             )
             package_v2 = f"{package_v2}\n\n{table}{gaps_line}"
             artifact_v2 = f"{artifact_v2}\n\n{table}{gaps_line}"
+
+        revalidation_state = {
+            **state,
+            "research_package": package_v2,
+            "research_package_artifact": artifact_v2,
+            "valuation_method_statuses": json.dumps(
+                statuses["valuation_method_statuses"]
+            ),
+            "ev_per_share_status": statuses.get("ev_per_share_status", ""),
+            "deterministic_checks_executed": True,
+            "sensitivity_conflict": any(
+                item.sensitivity_id in " ".join(gaps)
+                or any(alias and alias in " ".join(gaps) for alias in item.aliases)
+                for item in items
+            ),
+        }
+        segment_updates, _segment_issues = self._revalidate_current_evidence(
+            revalidation_state, repaired, report_text
+        )
+        package_v2 = segment_updates.get("research_package", package_v2)
+        artifact_v2 = segment_updates.get("research_package_artifact", artifact_v2)
 
         unresolved_texts = [c.proposed_correction or c.challenge_type for c in unresolved]
         addendum = self._repair_addendum(llm, report_text, changes, result, unresolved_texts)
@@ -2281,8 +2912,44 @@ class TradingAgentsGraph:
             "eps_status": statuses["eps_model_status"],
             "valuation_method_statuses": json.dumps(statuses["valuation_method_statuses"]),
             "valuation_status": statuses["valuation_status"],
+            "calculation_status": statuses["valuation_status"],
+            "assumption_status": assumption.status if assumption else "",
+            "assumption_detail": json.dumps(assumption.to_dict()) if assumption else "",
+            "valuation_wording": assumptions_module.wording(
+                statuses["valuation_status"], assumption
+            ),
+            "segment_reconciliation_status": segment_updates["segment_reconciliation_status"],
+            "segment_reconciliation_detail": segment_updates["segment_reconciliation_detail"],
+            "segment_build_type": segment_updates["segment_build_type"],
+            "bottom_up_claim_allowed": segment_updates["bottom_up_claim_allowed"],
+            "operating_model_confidence": segment_updates["operating_model_confidence"],
+            "segment_reconciliation_controlling": segment_updates[
+                "segment_reconciliation_controlling"
+            ],
+            "controlling_valuation_method": segment_updates[
+                "controlling_valuation_method"
+            ],
+            "controlling_valuation_conflict": segment_updates[
+                "controlling_valuation_conflict"
+            ],
+            "ev_decision_use": segment_updates["ev_decision_use"],
+            "segment_limitation": segment_updates["segment_limitation"],
+            "dominant_segment": segment_updates["dominant_segment"],
+            "dominant_segment_share": segment_updates["dominant_segment_share"],
+            "segment_table": segment_updates["segment_table"],
+            "resolved_status": segment_updates["resolved_status"],
+            "deterministic_issues": segment_updates["deterministic_issues"],
+            "deterministic_checks_executed": True,
             "sensitivity_model_status": statuses["sensitivity_model_status"],
             "sensitivity_status": statuses["sensitivity_model_status"],
+            "model_node_sensitivity_status": statuses["sensitivity_model_status"],
+            "economic_driver_mapping_status": mapping[
+                "economic_driver_mapping_status"
+            ],
+            "failed_driver_mappings": mapping["failed_driver_mappings"],
+            "failed_driver_mapping_ids": json.dumps(
+                mapping["failed_driver_mapping_ids"]
+            ),
             "sensitivity_table": table,
             "sensitivity_ids": json.dumps([
                 item.sensitivity_id for item in items if item.decision_eligible
@@ -2310,6 +2977,7 @@ class TradingAgentsGraph:
             "model_repair_addendum": addendum,
             "model_corrections": json.dumps(corrections),
             **authority_extra,
+            **base_updates,
         }
 
     def _extract_challenges(self, llm, report_text: str, package: str) -> tuple[str, list]:
@@ -2418,6 +3086,7 @@ class TradingAgentsGraph:
             "research_model_source": "unavailable",
             "research_package": "",
             "research_package_artifact": "",
+            "model_derived_facts": "",
             "research_fair_value_low": None,
             "research_fair_value_high": None,
             "spec_compatibility": "unavailable",
@@ -2425,6 +3094,36 @@ class TradingAgentsGraph:
             "model_status": "UNVERIFIED",
             "overall_status": "Not Rated",
             "decision_status": "Provisional",
+            # Current-run propagation: a stale VERIFIED from an earlier model may
+            # not survive a failed gate. Every dependent output is NOT_TESTED.
+            "operating_model_status": "NOT_TESTED",
+            "eps_model_status": "NOT_TESTED",
+            "eps_status": "NOT_TESTED",
+            "valuation_status": "NOT_TESTED",
+            "calculation_status": "NOT_TESTED",
+            "sensitivity_model_status": "NOT_TESTED",
+            "sensitivity_status": "NOT_TESTED",
+            "valuation_method_statuses": "{}",
+            "ev_input_diagnostics": "{}",
+            "market_cap_basis": "",
+            "forecast_eps_basis": "",
+            "dilution_sensitivity_basis": "",
+            "equity_value_share_basis": "",
+            "assumption_status": "",
+            "assumption_detail": "",
+            "valuation_wording": "Not tested in this run: the deterministic model is unavailable.",
+            "segment_reconciliation_status": "NOT_TESTED",
+            "segment_reconciliation_detail": reason,
+            "dominant_segment": "",
+            "dominant_segment_share": None,
+            "segment_table": "",
+            "research_fair_value_verified": False,
+            "controlling_fair_value_low": None,
+            "controlling_fair_value_base": None,
+            "controlling_fair_value_high": None,
+            "fundamental_packet": "",
+            "valuation_packet": "",
+            "benchmark_basis": "Benchmark: not established; the model is unavailable.",
             "repairs_applied": 0,
             "unresolved_blocking": blocking,
             "unresolved_material": material,

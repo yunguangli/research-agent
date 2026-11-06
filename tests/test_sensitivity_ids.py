@@ -28,9 +28,9 @@ def ranked():
 
 def test_the_id_names_the_bridge_and_the_assumption_not_the_display_string():
     items, _gaps = ranked()
-    item = next(entry for entry in items if entry.driver == "Cell 8 loading")
+    item = next(entry for entry in items if entry.driver.startswith("Cell 8 loading"))
 
-    assert item.sensitivity_id == "operating_profit_fy26_cell_8_loading"
+    assert item.sensitivity_id == "operating_profit_fy26_cell_8_loading_op_contribution"
     assert item.bridge_id == "operating_profit_fy26"
     assert item.model_field_id == "cell_8_loading"
     assert "cell_8_loading" in item.aliases
@@ -38,7 +38,7 @@ def test_the_id_names_the_bridge_and_the_assumption_not_the_display_string():
 
 def test_a_legacy_alias_resolves_to_the_canonical_id():
     items, _gaps = ranked()
-    item = next(entry for entry in items if entry.driver == "Cell 8 loading")
+    item = next(entry for entry in items if entry.driver.startswith("Cell 8 loading"))
 
     assert sensitivity.canonical_id("cell_8_loading", items) == item.sensitivity_id
     assert sensitivity.alias_map(items)["cell_8_loading"] == item.sensitivity_id

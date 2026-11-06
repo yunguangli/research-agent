@@ -1,11 +1,11 @@
 """Deterministic model issues, collected before any LLM is asked.
 
 The kernel refuses a model that does not tie, so at this point the identities
-hold. What remains are the checks that are warnings by design — a label that
+hold. What remains are the checks that are warnings by design - a label that
 disagrees with its dates, two share bases that count different things, a segment
-booking revenue before it is commissioned — plus the recorded source variances.
-They are issues, not repairs: nothing here changes a number, and nothing here can
-be downgraded by an LLM.
+booking revenue before it is commissioned, a driver without its contract - plus
+the recorded source variances. They are issues, not repairs: nothing here changes
+a number, and nothing here can be downgraded by an LLM.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from . import kernel, periods, shares
+from . import drivers, kernel, periods, shares
 from .schemas import ModelError, ModelSpec
 
 Severity = Literal["blocking", "material", "scenario_only"]
@@ -35,6 +35,24 @@ class Issue:
         }
 
 
+def _driver_issues(spec: ModelSpec) -> list[Issue]:
+    """Every material bridge line names its driver, stage, segment and evidence."""
+    drivers.normalize(spec)
+    issues: list[Issue] = []
+    for label, missing in drivers.incomplete(spec):
+        issues.append(
+            Issue(
+                "driver_metadata",
+                "material",
+                f"INCOMPLETE_DRIVER: {label} is missing {', '.join(missing)}",
+                [label],
+            )
+        )
+    for detail, labels in drivers.overlaps(spec):
+        issues.append(Issue("driver_overlap", "material", detail, list(labels)))
+    return issues
+
+
 def collect(spec: ModelSpec) -> list[Issue]:
     """Every deterministic issue the *current* spec carries."""
     issues: list[Issue] = []
@@ -42,6 +60,7 @@ def collect(spec: ModelSpec) -> list[Issue]:
         issues.append(Issue("period_label", "material", message, ["period label"]))
     for message in shares.basis_warnings(spec):
         issues.append(Issue("share_basis", "material", message, ["share basis"]))
+    issues.extend(_driver_issues(spec))
     for warning in spec.warnings:
         if "commissioned in" in warning:
             issues.append(Issue("commissioning", "material", warning, ["segment timing"]))

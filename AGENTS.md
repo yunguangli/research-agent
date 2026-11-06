@@ -81,11 +81,92 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
   `price_as_of` and `price_ref` travel on the spec and the run state.
 - Publication gate: `publication_status` is derived (`prepare_final_state`) and is `BLOCKED`
   when a controlling price conflict remains, the decision was written against a different
-  model version, or the decision presents a repaired-away controlling figure as current. A
-  blocked report publishes a header, the reasons and the appendix, but no rating, fair
-  value or target; the decision is Not Rated / PROVISIONAL. Investor-facing sections that
-  cite a superseded controlling figure are replaced by the repair note or withheld
-  (appendix keeps the original), and the header prints the controlling price's source.
+  model version, the decision presents a repaired-away controlling figure as current, or
+  the spec's `controlling_valuation_method` disagrees with the method-level `controlling`
+  flags (`CONTROLLING_VALUATION_METHOD_CONFLICT`). A defect in a non-controlling method
+  whose `decision_use` is `CROSS_CHECK_ONLY` is a qualification, not a blocker:
+  `OK_WITH_QUALIFICATION` publishes the controlling decision and lists the defect in
+  `publication_qualifications`. A blocked report publishes a header, the reasons and the
+  appendix, but no rating, fair value or target; the decision is Not Rated / PROVISIONAL.
+  Investor-facing sections that cite a superseded controlling figure are replaced by the
+  repair note or withheld (appendix keeps the original), and the header prints the
+  controlling price's source.
+- Two valuation statuses (`research/assumptions.py`): `calculation_status` answers whether
+  arithmetic, units, share counts and propagation reconcile; `assumption_status` classifies
+  the weakest controlling input as `COMPANY_REPORTED`, `COMPANY_GUIDANCE`,
+  `EXTERNAL_ESTIMATE`, `DERIVED_FROM_SOURCED_INPUTS`, `ANALYST_ASSUMPTION` or
+  `UNRESOLVED`. A P/E can be `CALCULATION_STATUS=VERIFIED` with
+  `ASSUMPTION_STATUS=ANALYST_ASSUMPTION`, and the publication says "Mechanically verified;
+  valuation multiple is an analyst assumption." An `EXTERNAL_ESTIMATE` multiple needs source,
+  date, metric, forecast period, comparability and refs, or it is downgraded to
+  `UNRESOLVED`. The decision gate still keys off calculation, never assumption.
+- Dominant-segment reconciliation (`research/segments.py`): when one disclosed segment
+  carries at least `segment_profit_share_threshold` (default 0.60) of positive segment
+  profit, the model needs that segment's revenue, operating profit and margin for every
+  annual forecast year, and segment sums plus eliminations must reconcile to the group.
+  Valid evidence with no forecast-year segment rows is `SEGMENT_RECONCILIATION_STATUS =
+  INCOMPLETE`, `FORECAST_BUILD_TYPE = TOP_DOWN`, `BOTTOM_UP_CLAIM_ALLOWED = FALSE` and
+  `OPERATING_MODEL_CONFIDENCE = DEGRADED`; it publishes with a visible qualification. The
+  consolidated forecast is never called "segment-reconciled" or "bottom-up". Publication
+  blocks on incomplete segments only when `segment_reconciliation_controlling` is set on
+  the spec; a missing or malformed evidence block is `SEGMENT_EVIDENCE_SCHEMA_MISSING`
+  and blocks unconditionally. Never fabricate the segment.
+- The Fundamentals Analyst appends a machine-readable `SEGMENT_EVIDENCE` block; the node
+  validates it, retries once for JSON only when absent or malformed, and persists the
+  validated object in `AgentState`. The Fundamentals subgraph must return
+  `segment_evidence`, `segment_evidence_source`, `segment_evidence_schema_missing` and
+  `segment_evidence_retry` alongside `fundamentals_report`; reviewer entry revalidates
+  from that state, never from a legacy Markdown table.
+- Decision publication fields are distinct: `PROVISIONAL_DECISION` is the Portfolio
+  Manager's own rating, and `PUBLISHED_DECISION` is the rating a reader may use
+  (`NOT_RATED` whenever publication is blocked). The appendix may keep the PM's
+  provisional rating, fair value and entry plan, labelled `INTERNAL_DIAGNOSTIC_ONLY`,
+  `NOT_PUBLISHED` and `NOT_DECISION_EVIDENCE`.
+- Bridge drivers (`research/issues.py`): every material line names a segment, basis,
+  capacity source, start period, utilisation, price/mix, incremental cost and depreciation
+  treatment; two lines sharing a revenue base, capacity block or volume increment without an
+  allocation are `POTENTIAL_DOUBLE_COUNT`. A direct operating-profit shock is named as an
+  operating-profit contribution, not capacity utilisation, unless utilisation is modelled.
+- Trigger types (`research/triggers.py`): `FORECAST_REVISION_TRIGGER`,
+  `RATING_REVIEW_TRIGGER` and `THESIS_INVALIDATION_TRIGGER` are separate. Repeating company
+  guidance is a forecast revision; a quarterly threshold is thesis invalidation only when
+  material, unexplained and linked to the structural thesis. A customer-advances decline is
+  a warning only with a documented cancellation, deferral, renegotiation or loss-of-funding
+  cause while committed capex continues. The validator reclassifies or drops events and
+  never changes the rating, correction ledger or scenarios. The Research Manager's plan uses
+  the same three lists; the Trader's deterioration condition is a rating-review trigger.
+- A failed current-run model (`_repair_failed`) is fail-closed: every dependent operating,
+  EPS, valuation, sensitivity, case and metric output becomes `NOT_TESTED` in this run; no
+  VERIFIED label from an earlier model survives. Model-derived packets, cases and fair
+  values are cleared, no case recomputation runs, and `prepare_final_state` forces
+  `final_rating = Not Rated` with no controlling fair value. The report header prints
+  `DECISION_SAFETY_CHECK=PASS`, `DECISION_PROCESS_CHECK=DEGRADED`,
+  `PRODUCTION_DECISION_ALLOWED=FALSE` for that safe fallback (`research/decision_checks.py`).
+- Source facts are separate from model facts (`research/facts.py`): reported results,
+  company guidance, balance-sheet inputs, disclosed segments and projects remain available
+  when the model fails, and every downstream prompt receives `SOURCE_FACTS` plus
+  `MODEL_DERIVED_FACTS: WITHHELD`. The Fundamentals report is withheld from the main report
+  and decision prompts; analyst commentary is passed as `ANALYST_JUDGMENTS` with
+  `[[...]]`-marked model figures removed. The raw report, failed structured attempts and the
+  reviewer's raw first answer are appendix diagnostics only.
+- Cached-spec revalidation (`research/segment_evidence.py`): the Fundamentals Analyst
+  appends a machine-readable `SEGMENT_EVIDENCE` block (segment, period, revenue, operating
+  profit, currency, source ids, evidence status). The block is stripped from the narrative.
+  At reviewer entry the current evidence audits the cached spec before any LLM challenge:
+  `NOT_REQUIRED` only with `NO_SEGMENT_DISCLOSURE`, else the required status is
+  `REQUIRED_AND_PRESENT`, `REQUIRED_BUT_INSUFFICIENT_DATA` or `REQUIRED_BUT_MISSING`. An
+  absent block is `SEGMENT_EVIDENCE_SCHEMA_MISSING` and blocks publication; a legacy
+  Markdown table is diagnostics-only and cannot support publication. The cached
+  `NOT_REQUIRED` is provisional until this audit runs, and the visible limitation is
+  published in the main report.
+- Deterministic checks run unconditionally at reviewer entry, before the challenge
+  extraction: `normalize_spec`, driver registry normalization, `collect_deterministic_issues`,
+  overlap checks, then the LLM challenges. A zero-challenge answer cannot hide
+  `INCOMPLETE_DRIVER` or `POTENTIAL_DOUBLE_COUNT`. Triggers, bridge arithmetic and the final
+  EV/multiple/equity/per-share status are structured objects, never punctuation-parsed prose.
+  `research/resolved_status.py` separates EV calculation, multiple assumption, equity bridge,
+  per-share basis, per-share comparison and decision use; contradictory combinations block
+  publication and are named in the header/appendix.
 - Fidelity checks that outrank prose: `research/periods.py` derives the canonical fiscal
   label from the period's own dates, `research/shares.py` names the share basis behind the
   market cap and the forecast EPS (and warns when they diverge), and
@@ -131,7 +212,12 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
   `alternative` is shocked one at a time and ranked by fair-value impact; a line without
   both is a research gap, never a proxy. The ranked table is part of the research package,
   and the reviewer must cite a `Decisive sensitivity ID` from it (one retry, then
-  "not established").
+  "not established"). Two scopes are reported separately: `MODEL_NODE_SENSITIVITY_STATUS`
+  describes only constructed model-node shocks, while `ECONOMIC_DRIVER_MAPPING_STATUS`
+  (`COMPLETE`/`PARTIAL`) and `FAILED_DRIVER_MAPPINGS` count distinct canonical
+  `economic_driver_id`s with no verified model-node mapping. The same canonical driver may
+  not be both verified and propagation-failed; `filter_gaps` strips qualifiers such as
+  "/ utilisation" and parenthetical suffixes before matching, then drops the stale failure.
 - PM traceability: a published controlling range must match the active model band or a
   reproducible `valuation_override`; a rejected scenario cannot supply a bound. An
   untraceable range is cleared and the decision is provisional, never silently published.
@@ -270,7 +356,13 @@ packaged by `pyproject.toml`, with `tradingagents` and `cli.main:app` as the ent
   the operands the same sentence prints, or an explicit model period label plus a
   stated metric — never a number's provenance. A contradicted claim ("38.6 already
   exceeds 63.7") enters one LLM repair pass before publication; the rewrite must pass
-  the same check or the original text and the finding stand.
+  the same check or the original text and the finding stand. That repair call is bounded
+  (`audit_repair_timeout`, default 180s): on a timeout the original text and its finding
+  stand and the report still saves. Save failures are written to `run.log`, not only the
+  console.
+- `Line.from_dict` keeps a qualitative `price_mix`, `incremental_cost` or `utilisation`
+  answer as the corresponding `*_assumption` string, and reads `"100%"` as 1.0, so a
+  model that writes prose in a legacy numeric field does not fail the whole build.
 - Two more spec rules enter the repair round: a forecast that equals guidance on every
   line needs a warnings entry naming the period that explains the coincidence, and a
   quarterly plan whose company published no H1 guidance row is rebuilt from reported

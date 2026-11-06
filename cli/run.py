@@ -519,6 +519,7 @@ def _offer_reports(final_state, graph, ticker, save=None, show=None, html=None):
             console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
             console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
         except Exception as e:
+            logging.getLogger(__name__).exception("Error saving report: %s", e)
             console.print(f"[red]Error saving report: {e}[/red]")
         if saved and html:
             page = (save_path / "complete_report.html").resolve()

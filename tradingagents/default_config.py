@@ -19,6 +19,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_LLM_BACKEND_URL":      "backend_url",
     "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
     "TRADINGAGENTS_DECISION_HORIZON":     "decision_horizon",
+    "TRADINGAGENTS_SEGMENT_PROFIT_SHARE_THRESHOLD": "segment_profit_share_threshold",
     "TRADINGAGENTS_RUN_PURPOSE":          "run_purpose",
     "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
@@ -170,6 +171,10 @@ def build_default_config() -> dict:
         # TRADINGAGENTS_DECISION_HORIZON instead. Empty keeps the market
         # analyst's own fallback: a daily-chart timing overlay.
         "decision_horizon": "3-6 months",
+        # A segment carrying this share of disclosed segment profit must have its
+        # own forecast revenue, profit and margin for every annual forecast year.
+        # General system rule, not a company threshold.
+        "segment_profit_share_threshold": 0.60,
         # A directional call without a verified valuation needs severe operating
         # deterioration or a cash-flow/balance-sheet/event basis. The thresholds
         # are sector-aware because a 20% OP swing is ordinary for a commodity

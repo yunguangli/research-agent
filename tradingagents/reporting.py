@@ -12,7 +12,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tradingagents.agents.rating import run_rating
+from tradingagents.agents.rating import display_decision, run_rating
 
 
 def analyst_names(keys) -> list[str]:
@@ -49,15 +49,24 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
     if final_state.get("trade_date"):
         lines.append(f"- Analysis date: {final_state['trade_date']}")
     if final_state.get("final_trade_decision"):
-        rating = run_rating(final_state)
-        if str(final_state.get("publication_status") or "").upper() == "BLOCKED":
-            rating = "Not Rated (publication blocked)"
-        elif str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
-            rating = "Not Rated (provisional)"
-        elif str(final_state.get("decision_integrity") or "").startswith("DEGRADED"):
-            # The 5-tier value is unchanged; the qualifier says the decision rests
-            # on partially validated inputs (fallback prose, no audit, no book).
-            rating = f"{rating} (provisional)"
+        published = str(final_state.get("published_decision") or "").strip()
+        status = str(final_state.get("publication_status") or "").upper()
+        if published:
+            rating = display_decision(published)
+            if status == "BLOCKED":
+                rating = f"{rating} (publication blocked)"
+            elif str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
+                rating = f"{rating} (provisional)"
+        else:
+            rating = run_rating(final_state)
+            if status == "BLOCKED":
+                rating = "Not Rated (publication blocked)"
+            elif str(final_state.get("model_status") or "").upper() == "UNVERIFIED":
+                rating = "Not Rated (provisional)"
+            elif str(final_state.get("decision_integrity") or "").startswith("DEGRADED"):
+                # The 5-tier value is unchanged; the qualifier says the decision rests
+                # on partially validated inputs (fallback prose, no audit, no book).
+                rating = f"{rating} (provisional)"
         lines.append(f"- Rating: {rating}")
     lines.append(f"- Generated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC")
     if settings:
@@ -145,11 +154,54 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         ("Operating model", "operating_model_status"),
         ("EPS model", "eps_model_status"),
         ("Valuation", "valuation_status"),
-        ("Sensitivity model", "sensitivity_model_status"),
     ):
+        if key == "valuation_status":
+            continue
         value = str(final_state.get(key) or final_state.get(aliases.get(key, "")) or "").strip()
         if value:
             lines.append(f"- {label}: {value}")
+    # Sensitivity has two scopes: the constructed model-node shocks, and whether
+    # every canonical economic driver maps to one of those nodes.
+    model_node = str(
+        final_state.get("model_node_sensitivity_status")
+        or final_state.get("sensitivity_model_status")
+        or final_state.get("sensitivity_status")
+        or ""
+    ).strip()
+    if model_node:
+        lines.append(f"- MODEL_NODE_SENSITIVITY_STATUS: {model_node}")
+    mapping = str(final_state.get("economic_driver_mapping_status") or "").strip()
+    if mapping:
+        failed_mappings = int(final_state.get("failed_driver_mappings") or 0)
+        lines.append(f"- ECONOMIC_DRIVER_MAPPING_STATUS: {mapping}")
+        lines.append(f"- FAILED_DRIVER_MAPPINGS: {failed_mappings}")
+    calculation = str(
+        final_state.get("calculation_status") or final_state.get("valuation_status") or ""
+    ).strip()
+    if calculation:
+        assumption_value = (
+            final_state.get("assumption_status")
+            or ("NOT_TESTED" if calculation == "NOT_TESTED" else "UNRESOLVED")
+        )
+        lines.append(
+            f"- Valuation: CALCULATION_STATUS={calculation}; "
+            f"ASSUMPTION_STATUS={assumption_value}"
+        )
+    if final_state.get("valuation_wording"):
+        lines.append(f"- Valuation note: {final_state['valuation_wording']}")
+    segment_status = str(final_state.get("segment_reconciliation_status") or "")
+    if segment_status and segment_status != "NOT_REQUIRED":
+        detail = str(final_state.get("segment_reconciliation_detail") or "").strip()
+        lines.append(
+            f"- Segment reconciliation: {segment_status}"
+            + (f" - {detail}" if detail else "")
+        )
+    if final_state.get("segment_build_type"):
+        lines.append(f"- FORECAST_BUILD_TYPE: {final_state['segment_build_type']}")
+        allowed = "TRUE" if final_state.get("bottom_up_claim_allowed") else "FALSE"
+        lines.append(f"- BOTTOM_UP_CLAIM_ALLOWED: {allowed}")
+        confidence = str(final_state.get("operating_model_confidence") or "UNRESOLVED")
+        lines.append(f"- OPERATING_MODEL_CONFIDENCE: {confidence}")
     try:
         methods = json.loads(str(final_state.get("valuation_method_statuses") or "{}"))
     except ValueError:
@@ -196,8 +248,8 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         comparison = component.get("ev_per_share_comparison") or {}
         if method:
             lines.append(f"- EV/EBITDA enterprise-value method: {method}")
-        if comparison.get("status"):
-            reason = f" — {comparison['reason']}" if comparison.get("reason") else ""
+        if comparison.get("status") and not final_state.get("resolved_status"):
+            reason = f" - {comparison['reason']}" if comparison.get("reason") else ""
             lines.append(f"- EV/EBITDA per-share comparison: {comparison['status']}{reason}")
         controlling = component.get("controlling_valuation") or {}
         if method:
@@ -215,6 +267,14 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
             lines.append(
                 f"- Reason: {failed_rows} published row(s) failed downstream "
                 f"propagation{scope}"
+            )
+        elif sensitivity.get("status") and final_state.get("economic_driver_mapping_status"):
+            failed_mappings = int(final_state.get("failed_driver_mappings") or 0)
+            scope = f" ({failed_mappings} failed)" if failed_mappings else ""
+            lines.append(
+                "- Sensitivity scope: failed_rows applies to constructed model-node "
+                "shocks only; economic-driver mapping is "
+                f"{final_state['economic_driver_mapping_status']}{scope}"
             )
         if controlling_sensitivity.get("status"):
             lines.append(
@@ -242,10 +302,57 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         lines.append(f"- Price conflict: {final_state['price_conflict']}")
     if final_state.get("decision_status"):
         lines.append(f"- Decision status: {final_state['decision_status']}")
+    if final_state.get("provisional_decision"):
+        lines.append(f"- PROVISIONAL_DECISION: {final_state['provisional_decision']}")
+    if final_state.get("published_decision"):
+        lines.append(f"- PUBLISHED_DECISION: {final_state['published_decision']}")
     if final_state.get("publication_status"):
         reasons = final_state.get("publication_reasons") or []
         detail = f" - {'; '.join(reasons)}" if reasons else ""
         lines.append(f"- PUBLICATION_STATUS: {final_state['publication_status']}{detail}")
+    qualifications = final_state.get("publication_qualifications") or []
+    if qualifications:
+        lines.append(
+            "- PUBLICATION_QUALIFICATIONS: "
+            + "; ".join(str(item) for item in qualifications)
+        )
+    fair_status = str(final_state.get("publication_fair_value_status") or "").strip()
+    if fair_status:
+        lines.append(f"- FAIR_VALUE: {fair_status}")
+    for label, key in (
+        ("DECISION_SAFETY_CHECK", "decision_safety_check"),
+        ("DECISION_PROCESS_CHECK", "decision_process_check"),
+    ):
+        value = str(final_state.get(key) or "").strip()
+        if value:
+            reasons_key = "safety_reasons" if "SAFETY" in label else "process_reasons"
+            reasons = final_state.get(reasons_key) or []
+            detail = f" - {'; '.join(str(reason) for reason in reasons)}" if reasons else ""
+            lines.append(f"- {label}: {value}{detail}")
+    if "production_decision_allowed" in final_state:
+        allowed = "TRUE" if final_state.get("production_decision_allowed") else "FALSE"
+        lines.append(f"- PRODUCTION_DECISION_ALLOWED: {allowed}")
+    try:
+        resolved = json.loads(str(final_state.get("resolved_status") or "{}"))
+    except ValueError:
+        resolved = {}
+    if isinstance(resolved, dict) and resolved:
+        for key in (
+            "ev_calculation_status",
+            "multiple_assumption_status",
+            "equity_bridge_status",
+            "per_share_basis_status",
+            "per_share_comparison_status",
+            "decision_use",
+            "controlling_method",
+            "ev_decision_use",
+        ):
+            if resolved.get(key):
+                lines.append(f"- {key.upper()}: {resolved[key]}")
+        if resolved.get("contradictions"):
+            lines.append(
+                "- Status contradictions: " + "; ".join(resolved["contradictions"])
+            )
     if status == "UNVERIFIED":
         lines.append(
             "- Model output: suppressed — no unverified model figure may be used for the decision"
@@ -374,12 +481,9 @@ def _header(ticker: str, final_state: dict, settings: dict | None) -> str:
         )
     fallbacks = final_state.get("structured_fallbacks") or {}
     if fallbacks:
-        detail = "; ".join(
-            f"{agent}: {str(reason)[:160]}" for agent, reason in fallbacks.items()
-        )
         lines.append(
-            f"- Structured output: {detail} — these proposals were not produced by "
-            "their full schema"
+            "- Structured output: degraded - failed attempts and their reasons are "
+            "in the appendix retry diagnostics"
         )
     return "\n".join(lines) + "\n\n"
 
@@ -601,7 +705,13 @@ def _component_status_section(final_state: dict) -> str:
         return ""
     if not isinstance(component, dict) or not component:
         return ""
-    lines = ["## Component Status", "", "| Component | Status | Note |", "|---|---|---|"]
+    intro = []
+    if _appendix_banner(final_state):
+        intro = [
+            "INTERNAL_DIAGNOSTIC_ONLY / NOT_PUBLISHED / NOT_DECISION_EVIDENCE",
+            "",
+        ]
+    lines = intro + ["## Component Status", "", "| Component | Status | Note |", "|---|---|---|"]
     for name, entry in component.items():
         if name in {"pre_repair_status", "post_repair_status"}:
             continue          # the audit trail, not a component
@@ -614,7 +724,10 @@ def _component_status_section(final_state: dict) -> str:
                 status = "failed_rows_excluded" if entry.get("failed_rows_excluded") else ""
                 note = ""
             elif name == "sensitivity":
-                note = f"failed_rows={entry.get('failed_rows', 0)}"
+                failed_rows = int(entry.get("failed_rows") or 0)
+                note = f"failed_rows={failed_rows}"
+                if not failed_rows:
+                    note += " (model-node rows only)"
             elif name == "controlling_sensitivity":
                 note = f"{entry.get('verified', 0)} of {entry.get('expected', 0)} verified"
             else:
@@ -625,6 +738,23 @@ def _component_status_section(final_state: dict) -> str:
         else:
             status, note = str(entry), ""
         lines.append(f"| {name} | {status} | {note} |")
+    try:
+        resolved = json.loads(str(final_state.get("resolved_status") or "{}"))
+    except ValueError:
+        resolved = {}
+    if isinstance(resolved, dict):
+        for key in (
+            "ev_calculation_status",
+            "multiple_assumption_status",
+            "equity_bridge_status",
+            "per_share_basis_status",
+            "per_share_comparison_status",
+            "decision_use",
+            "controlling_method",
+            "ev_decision_use",
+        ):
+            if resolved.get(key):
+                lines.append(f"| {key} | {resolved[key]} | resolved |")
     return "\n".join(lines)
 
 
@@ -1019,12 +1149,50 @@ def _pm_components(pm: str) -> list[str]:
     return components
 
 
-def _catalysts_components(pm: str) -> list[str]:
+def _catalysts_components(pm: str, final_state: dict | None = None) -> list[str]:
     components: list[str] = []
-    invalidation = _list_items(_bold_field(pm, "Thesis invalidation"))
-    if invalidation:
-        components.append("**What would invalidate the view**:")
-        components.extend(f"- {item}" for item in invalidation)
+    try:
+        structured = json.loads(str((final_state or {}).get("decision_triggers") or "{}"))
+    except ValueError:
+        structured = {}
+    if isinstance(structured, dict) and any(
+        structured.get(key) for key in ("forecast_revision", "rating_review", "thesis_invalidation")
+    ):
+        for key, label in (
+            ("forecast_revision", "What would revise the forecast"),
+            ("rating_review", "What would trigger a rating review"),
+            ("thesis_invalidation", "What would invalidate the view"),
+        ):
+            items = structured.get(key) or []
+            if not items:
+                continue
+            components.append(f"**{label}**:")
+            for item in items:
+                components.append(f"- {item.get('description') or ''}")
+                for evidence in item.get("evidence") or []:
+                    claim = str(evidence.get("claim") or "").strip()
+                    source_ids = ", ".join(evidence.get("source_ids") or [])
+                    if claim:
+                        components.append(
+                            f"  - {claim}" + (f" ({source_ids})" if source_ids else "")
+                        )
+        further = _list_items(_bold_field(pm, "Evidence that would downgrade further"))
+        if further:
+            components.append("**Evidence that would downgrade further**:")
+            components.extend(f"- {item}" for item in further)
+        applicability = _bold_field(pm, "Downgrade applicability")
+        if applicability:
+            components.append(f"**Downgrade applicability**: {applicability}")
+        return components
+    for field, label in (
+        ("Forecast revision triggers", "What would revise the forecast"),
+        ("Rating review triggers", "What would trigger a rating review"),
+        ("Thesis invalidation", "What would invalidate the view"),
+    ):
+        items = _list_items(_bold_field(pm, field))
+        if items:
+            components.append(f"**{label}**:")
+            components.extend(f"- {item}" for item in items)
     further = _list_items(_bold_field(pm, "Evidence that would downgrade further"))
     if further:
         components.append("**Evidence that would downgrade further**:")
@@ -1039,6 +1207,13 @@ def _catalysts_components(pm: str) -> list[str]:
         if heading and body and re.search(r"risk|invalidat|catalyst", heading, re.I):
             return _blocks(body)
     return ["No catalyst or risk conditions were stated in the decision."]
+
+
+def _without_model_marks(text: str) -> str:
+    """Remove sentences the writer marked as model-derived."""
+    parts = re.split(r"(?<=[.!?])\s+|\n+", text or "")
+    kept = [part for part in parts if "[[" not in part]
+    return "\n".join(part for part in kept if part.strip())
 
 
 def _current_only(final_state: dict, text: str, label: str) -> str:
@@ -1060,7 +1235,21 @@ def _fundamentals_for_publication(final_state: dict) -> str:
     and the PM see a repair notice; the investor report must not reprint the old
     conclusion as current. When the section cites a superseded value, publish the
     repair's own conclusion list instead (and keep the original in the appendix).
+
+    When the deterministic model is unverified, the analyst report is withheld
+    from the main report entirely and replaced by verified source facts. The full
+    report stays in the appendix for audit.
     """
+    from tradingagents.research.packets import filter_decision_inputs
+
+    if (
+        str(final_state.get("model_status") or "").upper() == "UNVERIFIED"
+        or str(final_state.get("research_model_source") or "") == "unavailable"
+    ):
+        packet = filter_decision_inputs(final_state)
+        source = str(final_state.get("source_facts") or "").strip()
+        notice = packet["fundamentals"]
+        return notice + (f"\n\n{source}" if source else "")
     text = str(final_state.get("fundamentals_report") or "")
     from tradingagents.research.superseded import controlling_pairs_from_log, uses_superseded
 
@@ -1079,15 +1268,25 @@ def _fundamentals_for_publication(final_state: dict) -> str:
     )
 
 
-def _valuation_components(package: str) -> list[str]:
+def _valuation_components(package: str, final_state: dict | None = None) -> list[str]:
     if not package.strip():
-        return ["### Verified valuation\nNo verified model in this run."]
+        limitation = str((final_state or {}).get("segment_limitation") or "").strip()
+        items = [f"**Segment limitation**: {limitation}"] if limitation else []
+        items.append("### Valuation\nNo usable model in this run.")
+        return items
+    if str((final_state or {}).get("segment_reconciliation_status") or "") not in {
+        "", "VERIFIED", "NOT_REQUIRED", "REQUIRED_AND_PRESENT"
+    }:
+        from tradingagents.research.segments import neutralise_bottom_up
+
+        package = neutralise_bottom_up(package)
     blocks = _blocks(package)
     plan = (
         (r"^annual figures|^- FY|forecast\):|^forecast", "Forecast"),
+        (r"^SEGMENT_RECONCILIATION", "Segment reconciliation"),
         (r"^management guidance versus", "Guidance versus model"),
         (r"^external consensus", "Consensus versus model"),
-        (r"valuation:|EV/EBITDA:|Scenarios:", "Verified valuation"),
+        (r"valuation:|EV/EBITDA:|Scenarios:", "Valuation"),
     )
     selected: list[str] = []
     for pattern, label in plan:
@@ -1095,6 +1294,12 @@ def _valuation_components(package: str) -> list[str]:
             if re.search(pattern, block, re.IGNORECASE) and f"### {label}\n{block}" not in selected:
                 selected.append(f"### {label}\n{block}")
                 break
+    wording = str((final_state or {}).get("valuation_wording") or "").strip()
+    if wording:
+        selected.insert(0, f"**Valuation status**: {wording}")
+    limitation = str((final_state or {}).get("segment_limitation") or "").strip()
+    if limitation:
+        selected.insert(0, f"**Segment limitation**: {limitation}")
     return selected
 
 
@@ -1124,10 +1329,30 @@ def _publication_sections(final_state: dict, total_budget: int = MAX_MAIN_WORDS 
     package = str(
         final_state.get("research_package_artifact") or final_state.get("research_package") or ""
     )
+    if (
+        str(final_state.get("model_status") or "").upper() == "UNVERIFIED"
+        or str(final_state.get("research_model_source") or "") == "unavailable"
+    ):
+        package = ""
     debate = _current_only(final_state, str(final_state.get("debate_summary") or ""),
                            "Debate summary")
     technical = _current_only(final_state, str(final_state.get("market_report") or ""),
                               "Technical summary")
+    if str(final_state.get("segment_reconciliation_status") or "") not in {
+        "", "VERIFIED", "NOT_REQUIRED", "REQUIRED_AND_PRESENT"
+    }:
+        from tradingagents.research.segments import neutralise_bottom_up
+
+        pm = neutralise_bottom_up(pm)
+        fundamentals = neutralise_bottom_up(fundamentals)
+        debate = neutralise_bottom_up(debate)
+    if (
+        str(final_state.get("model_status") or "").upper() == "UNVERIFIED"
+        or str(final_state.get("research_model_source") or "") == "unavailable"
+    ):
+        pm = _without_model_marks(pm)
+        debate = _without_model_marks(debate)
+        technical = _without_model_marks(technical)
 
     # The PM's own summary repeats the rating line; the section already has one.
     executive = [
@@ -1138,10 +1363,10 @@ def _publication_sections(final_state: dict, total_budget: int = MAX_MAIN_WORDS 
     sections: list[tuple[str, list[str]]] = [
         ("Executive Summary", executive),
         ("Fundamental Summary", _fundamental_components(fundamentals)),
-        ("Forecast and Valuation", _valuation_components(package)),
+        ("Forecast and Valuation", _valuation_components(package, final_state)),
         ("Debate Summary", _debate_components(debate, pm)),
         ("Technical Summary", _technical_components(technical)),
-        ("Catalysts and Risks", _catalysts_components(pm)),
+        ("Catalysts and Risks", _catalysts_components(pm, final_state)),
         ("Portfolio Manager Decision", _pm_components(pm)),
     ]
 
@@ -1165,14 +1390,105 @@ def _publication_sections(final_state: dict, total_budget: int = MAX_MAIN_WORDS 
     return [(heading, _redact_sizing(text)) for heading, text in rendered]
 
 
-def _appendix_sections(parts) -> list[tuple[str, str]]:
-    """Every full section, regardless of whether the main report summarises it."""
+def _appendix_sections(parts, final_state: dict | None = None) -> list[tuple[str, str]]:
+    """Every full section, regardless of whether the main report summarises it.
+
+    On a blocked run the Portfolio Manager's provisional decision is kept for
+    audit only; it is marked so no reader mistakes it for the published call.
+    """
+    blocked = str((final_state or {}).get("publication_status") or "").upper() == "BLOCKED"
     sections = []
     for heading, _folder, written in parts:
         if written:
             content = "\n\n".join(f"### {agent}\n{text}" for agent, _f, text in written)
+            if blocked and heading.startswith("V."):
+                content = (
+                    "> INTERNAL_DIAGNOSTIC_ONLY\n"
+                    "> NOT_PUBLISHED\n"
+                    "> NOT_DECISION_EVIDENCE\n\n"
+                    + content
+                )
             sections.append((heading, content))
     return sections
+
+
+def _appendix_banner(final_state: dict) -> str:
+    """Mark diagnostics from a blocked run so no internal value reads as published."""
+    blocked = str(final_state.get("publication_status") or "").upper() == "BLOCKED"
+    if not blocked and not final_state.get("publication_fair_value_status"):
+        return ""
+    return (
+        "> INTERNAL_DIAGNOSTIC_ONLY\n"
+        "> NOT_PUBLISHED\n"
+        "> NOT_DECISION_EVIDENCE\n\n"
+        "This run was blocked before publication. The figures, decisions and model "
+        "values below are kept for audit only; none of them is a published rating, "
+        "fair value or target, and none may be used as decision evidence."
+    )
+
+
+def _deterministic_issues_section(final_state: dict) -> str:
+    """The itemized deterministic findings, not just their count."""
+    try:
+        issues = json.loads(str(final_state.get("deterministic_issues") or "[]"))
+    except ValueError:
+        return ""
+    if not isinstance(issues, list) or not issues:
+        return ""
+    lines = [
+        "## Deterministic model issues",
+        "",
+        "INTERNAL_DIAGNOSTIC_ONLY / NOT_PUBLISHED / NOT_DECISION_EVIDENCE",
+        "",
+        "These checks run before any LLM challenge, so a zero-challenge answer "
+        "cannot hide them.",
+        "",
+    ]
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        detail = str(issue.get("detail") or "").strip()
+        if not detail:
+            continue
+        severity = str(issue.get("severity") or "material").strip()
+        kind = str(issue.get("kind") or "issue").strip()
+        lines.append(f"- [{severity}] {kind}: {detail}")
+    return "\n".join(lines)
+
+
+def _retry_diagnostics(final_state: dict) -> str:
+    """Failed structured attempts and raw first answers, appendix-only."""
+    fallbacks = final_state.get("structured_fallbacks") or {}
+    debate = final_state.get("investment_debate_state") or {}
+    raw = str(debate.get("first_review_raw") or "").strip()
+    first = str(debate.get("first_review") or "").strip()
+    sections: list[str] = []
+    if fallbacks:
+        sections.append(
+            "### Failed structured attempts\n"
+            + "\n".join(
+                f"- {agent}: {str(reason)}" for agent, reason in fallbacks.items()
+            )
+        )
+    if raw and raw != first:
+        sections.append("### Adversarial review: raw first attempt\n" + raw)
+    segment_retry = final_state.get("segment_evidence_retry")
+    if segment_retry:
+        try:
+            record = json.loads(str(segment_retry))
+        except ValueError:
+            record = {}
+        if isinstance(record, dict) and record.get("attempted") is not None:
+            lines = [
+                f"- Attempted: {'yes' if record.get('attempted') else 'no'}",
+                f"- Reason: {record.get('reason') or 'n/a'}",
+                f"- Valid after retry: {'yes' if record.get('valid_after_retry') else 'no'}",
+            ]
+            lines.extend(f"- {finding}" for finding in record.get("findings") or [])
+            sections.append("### SEGMENT_EVIDENCE retry\n" + "\n".join(lines))
+    if not sections:
+        return ""
+    return "## Retry diagnostics\n\n" + "\n\n".join(sections)
 
 
 def write_report_tree(final_state: dict, ticker: str, save_path, settings: dict | None = None,
@@ -1202,7 +1518,7 @@ def write_report_tree(final_state: dict, ticker: str, save_path, settings: dict 
     # 5,000-word limit, so the sections are given what remains.
     total_budget = MAX_MAIN_WORDS - _words(header) - _words(closing) - 30
     main_sections = _publication_sections(final_state, total_budget)
-    appendix_sections = _appendix_sections(parts)
+    appendix_sections = _appendix_sections(parts, final_state)
 
     body = header
     body += "\n\n".join(f"## {heading}\n\n{text}" for heading, text in main_sections)
@@ -1211,13 +1527,18 @@ def write_report_tree(final_state: dict, ticker: str, save_path, settings: dict 
 
     if appendix_sections:
         note = _redaction_note(final_state)
+        banner = _appendix_banner(final_state)
         (save_path / "appendix.md").write_text(
-            f"# Appendix — {ticker}\n\nFull analyst reports, debate transcript, model "
+            f"# Appendix — {ticker}\n\n"
+            + (f"{banner}\n\n" if banner else "")
+            + "Full analyst reports, debate transcript, model "
             "diagnostics, audit findings, retry logs and source conflicts. Not part of the "
             "investor-facing report.\n\n"
             + "\n\n".join(f"## {heading}\n\n{text}" for heading, text in appendix_sections)
             + (f"\n\n{note}" if note else "")
-            + (f"\n\n{status_section}" if (status_section := _component_status_section(final_state)) else ""),
+            + (f"\n\n{status_section}" if (status_section := _component_status_section(final_state)) else "")
+            + (f"\n\n{issues}" if (issues := _deterministic_issues_section(final_state)) else "")
+            + (f"\n\n{retry}" if (retry := _retry_diagnostics(final_state)) else ""),
             encoding="utf-8",
         )
     if html:

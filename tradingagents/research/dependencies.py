@@ -21,6 +21,7 @@ from typing import Literal
 
 VerificationStatus = Literal[
     "VERIFIED", "UNVERIFIED", "SUPPRESSED", "UNAVAILABLE", "NOT_APPLICABLE", "INVALID",
+    "NOT_TESTED",
 ]
 
 VERIFIED: VerificationStatus = "VERIFIED"
@@ -28,6 +29,7 @@ UNVERIFIED: VerificationStatus = "UNVERIFIED"
 SUPPRESSED: VerificationStatus = "SUPPRESSED"
 UNAVAILABLE: VerificationStatus = "UNAVAILABLE"
 NOT_APPLICABLE: VerificationStatus = "NOT_APPLICABLE"
+NOT_TESTED: VerificationStatus = "NOT_TESTED"
 INVALID: VerificationStatus = "INVALID"
 
 # output -> the inputs it needs. Keep it small: this is the publication contract,
@@ -57,7 +59,7 @@ _ENTERPRISE_FIELDS = ("ebitda", "net debt", "enterprise value", "ev/")
 
 def _normalise(status: str) -> VerificationStatus:
     value = str(status or "").upper()
-    if value in {VERIFIED, UNVERIFIED, SUPPRESSED, UNAVAILABLE, NOT_APPLICABLE}:
+    if value in {VERIFIED, UNVERIFIED, SUPPRESSED, UNAVAILABLE, NOT_APPLICABLE, NOT_TESTED}:
         return value  # type: ignore[return-value]
     return UNAVAILABLE
 

@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from tradingagents.agents.context import (
     EVIDENCE_DISCIPLINE,
+    analyst_judgments_block,
     case_availability,
     case_block,
     get_instrument_context_from_state,
     get_language_instruction,
+    model_facts_block,
     research_package_block,
+    source_facts_block,
 )
 from tradingagents.agents.schemas import ResearchPlan, ResearchPlanMinimal, render_research_plan
 from tradingagents.agents.sizing import gate_sizing, has_exact_size, scrub_sizing
@@ -21,6 +25,8 @@ from tradingagents.agents.structured import (
     invoke_structured,
 )
 from tradingagents.dataflows.config import get_config
+
+logger = logging.getLogger(__name__)
 
 
 def create_research_manager(llm):
@@ -53,8 +59,16 @@ def create_research_manager(llm):
 
         prompt = f"""As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader.
 
-{instrument_context}
+{instrument_context}{source_facts_block(state)}{analyst_judgments_block(state)}{model_facts_block(state)}
 {model_block}{case_line}
+
+Classify every event that would change the plan into exactly one list:
+forecast_revision_triggers (a forecast assumption), rating_review_triggers (expected
+return may change) or thesis_invalidation_triggers (the structural thesis is
+contradicted). Repeating company guidance is a forecast revision, not a thesis
+invalidation. A thesis invalidation needs materiality, no documented temporary
+explanation and an explicit thesis_link. For customer advances, state the cause and
+whether committed capex continues; a decline with no cause is not a negative trigger.
 
 ---
 
@@ -111,8 +125,38 @@ Write these sections, in this order, starting with the recommendation on its own
                 status = {"reason": "full schema failed; minimal schema used"}
             else:
                 status = minimal_status or status
+        trigger_note = ""
+        if plan is not None:
+            try:
+                from tradingagents.research import (
+                    report as research_report,
+                    triggers as triggers_module,
+                )
+
+                spec = (
+                    research_report.load_spec(state.get("research_model_path"))
+                    if state.get("research_model_path") else None
+                )
+                (
+                    plan.forecast_revision_triggers,
+                    plan.rating_review_triggers,
+                    plan.thesis_invalidation_triggers,
+                    findings,
+                ) = triggers_module.normalise(
+                    plan.forecast_revision_triggers,
+                    plan.rating_review_triggers,
+                    plan.thesis_invalidation_triggers,
+                    spec,
+                )
+                if findings:
+                    trigger_note = (
+                        "\n\n**Trigger classification**: " + "; ".join(findings)
+                    )
+            except Exception as exc:  # noqa: BLE001 - never lose the plan over a check
+                logger.info("Research Manager trigger classification skipped: %s", exc)
         investment_plan = (
-            render_research_plan(plan) if plan is not None else llm.invoke(prompt).content
+            render_research_plan(plan) + trigger_note
+            if plan is not None else llm.invoke(prompt).content
         )
 
         if not str(state.get("portfolio_context") or "").strip():

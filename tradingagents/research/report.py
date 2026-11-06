@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import kernel, render, valuation as valuation_module
+from . import assumptions, kernel, render, valuation as valuation_module
 from .schemas import ModelError, ModelSpec
 
 NARRATIVE_MARKER = "<!-- NARRATIVE PENDING: {section} -->"
@@ -424,6 +424,14 @@ def compact_summary(
             f"{render.fmt(valuation.fair_value_low, 0)}-{render.fmt(valuation.fair_value_high, 0)} "
             f"{spec.currency}."
         )
+        profile = assumptions.for_spec(spec, "pe")
+        lines.append(
+            f"CALCULATION_STATUS = VERIFIED; ASSUMPTION_STATUS = {profile.status}. "
+            f"{assumptions.wording('VERIFIED', profile)}"
+        )
+        lines.append(
+            f"Earnings: {profile.earnings_label}. Multiple: {profile.multiple_label}."
+        )
         if valuation.scenarios:
             lines.append(
                 "Scenarios: "
@@ -432,6 +440,22 @@ def compact_summary(
                     for s in valuation.scenarios
                 )
             )
+            lines.append(
+                "Scenario multiples are analyst assumptions unless the scenario names "
+                "an external source; no scenario is a verified valuation input."
+            )
+            scenario_bases = []
+            for scenario in spec.scenarios:
+                source = (
+                    assumptions.classify(scenario.provenance)
+                    if str(scenario.provenance or "").strip()
+                    else assumptions.ANALYST_ASSUMPTION
+                )
+                scenario_bases.append(
+                    f"{scenario.name}: {assumptions.label(source, multiple=True)}"
+                )
+            if scenario_bases:
+                lines.append("Scenario multiple basis: " + "; ".join(scenario_bases) + ".")
     else:
         lines.append("")
         lines.append(
@@ -454,6 +478,11 @@ def compact_summary(
         if include_ev_per_share and valuation.ev_per_share is not None:
             line += f"; per share {render.fmt(valuation.ev_per_share, 0)} {spec.currency}"
         lines.append(line)
+        ev_profile = assumptions.for_spec(spec, "ev_ebitda")
+        lines.append(
+            f"EV/EBITDA ASSUMPTION_STATUS = {ev_profile.status}. "
+            f"{assumptions.wording('VERIFIED', ev_profile)}"
+        )
         lines.extend(_net_debt_lines(spec))
     if ev_note:
         lines.append(ev_note)
@@ -481,7 +510,19 @@ def valuation_packet(
     """
     spec = model.spec
     methods = statuses.get("valuation_method_statuses") or {}
-    lines = ["VALUATION PACKET (verified outputs only)"]
+    lines = ["VALUATION PACKET (calculation-verified outputs only)"]
+    method = (
+        "pe" if methods.get("pe") == "VERIFIED"
+        else "ev_ebitda" if methods.get("ev_ebitda") == "VERIFIED"
+        else ""
+    )
+    profile = assumptions.for_spec(spec, method) if method else None
+    if profile is not None:
+        lines.append(
+            f"CALCULATION_STATUS = {statuses.get('valuation_status', 'VERIFIED')}; "
+            f"ASSUMPTION_STATUS = {profile.status}. "
+            f"{assumptions.wording(statuses.get('valuation_status', 'VERIFIED'), profile)}"
+        )
     if methods.get("pe") == "VERIFIED":
         price_source = ""
         if str(getattr(spec.valuation, "price_source", "") or "").strip():
